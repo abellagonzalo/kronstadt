@@ -25,7 +25,11 @@ public object StructureRenderer {
         append('\n')
         // Members of functions (local variables, lambdas) are implementation detail: skip them.
         if (symbol.kind.isContainer) {
-            symbol.children.sortedBy { it.range.start }.forEach { appendSymbol(document, it, depth + 1) }
+            symbol.children
+                // A primary constructor, and properties declared on the same line, would repeat the header just printed.
+                .filter { it.selectionRange.start.line != symbol.selectionRange.start.line }
+                .sortedBy { it.range.start }
+                .forEach { appendSymbol(document, it, depth + 1) }
         }
     }
 

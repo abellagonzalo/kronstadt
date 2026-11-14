@@ -40,6 +40,24 @@ class StructureRendererTest {
     }
 
     @Test
+    fun `does not repeat the header for primary constructors and same-line properties`() {
+        // Shape reported by kotlin-lsp: the primary constructor and its properties are children of the class.
+        val doc = TextDocument("class Repo(\n    val db: Db,\n) {\n    fun all() = db.all()\n}")
+        val header = range(0, 6, 0, 10)
+        val constructor = CodeSymbol("Repo", SymbolKind.CONSTRUCTOR, range(0, 10, 2, 1), header)
+        val ownLine = CodeSymbol("db", SymbolKind.PROPERTY, range(1, 4, 1, 14), range(1, 8, 1, 10))
+        val all = CodeSymbol("all", SymbolKind.FUNCTION, range(3, 4, 3, 24), range(3, 8, 3, 11))
+        val clazz = CodeSymbol("Repo", SymbolKind.CLASS, range(0, 0, 4, 1), header, listOf(constructor, ownLine, all))
+
+        val expected = """
+            class Repo(  // L1-5
+              val db: Db,  // L2-2
+              fun all() = db.all()  // L4-4
+        """.trimIndent()
+        assertEquals(expected, StructureRenderer.render("Repo.kt", doc, listOf(clazz), xml = false))
+    }
+
+    @Test
     fun `plain output omits the wrapper`() {
         val out = StructureRenderer.render("x.kt", doc, listOf(count), xml = false)
         assertEquals("fun count(): Int = repo.count()  // L10-10", out)
