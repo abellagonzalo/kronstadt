@@ -11,6 +11,8 @@ import kronstadt.core.application.EditedSymbol
 import kronstadt.core.application.FileMatches
 import kronstadt.core.application.FindSymbol
 import kronstadt.core.application.FindSymbolResult
+import kronstadt.core.application.FindUsages
+import kronstadt.core.application.FindUsagesResult
 import kronstadt.core.application.FoundSymbol
 import kronstadt.core.application.Problem
 import kronstadt.core.application.ReadSymbol
@@ -367,5 +369,57 @@ class KotlinLspContractTest {
         )
         // Still there for the next search, before kotlin-lsp's file watcher could have caught up.
         assertIs<FindSymbolResult.Found>(FindSymbol(files, lsp)("Polygon"), "second search")
+    }
+
+    // kt_find_usages: textDocument/references without the declaration, attributed through each file's own tree.
+
+    @Test
+    @Order(16)
+    fun `kt_find_usages lists Usages by containing Symbol, main before test, imports only counted`() = runBlocking<Unit> {
+        val find = FindUsages(files, lsp)
+        suspend fun usages(path: String) = assertIs<FindUsagesResult.Found>(find(path), path).text
+
+        // Main before test; the delegating constructor call `this(name)` refers to the class too.
+        assertEquals(
+            """
+            |2 usages in 2 files
+            |src/main/kotlin/fixture/Shapes.kt
+            |  constructor(String, Int)
+            |    L7: constructor(name: String, scale: Int) : this(name) {
+            |src/test/kotlin/fixture/ShapesCheck.kt
+            |  checkShapes
+            |    L8: return Calculator("c").parse("2") == 2 && triangle.sides == 3 && Operation.PLUS.apply(1, 2) == 3
+            """.trimMargin(),
+            usages("Calculator"),
+        )
+        // Grouped by each overload's canonical path; the declaration itself and the accessors' `field` aren't Usages.
+        assertEquals(
+            """
+            |4 usages in 1 file
+            |src/main/kotlin/fixture/Shapes.kt
+            |  constructor(String, Int)
+            |    L8: this.scale = scale
+            |  total()
+            |    L19: fun total(): Int = total * scale
+            |  parse(String)
+            |    L21: fun parse(text: String): Int = text.toInt() * scale
+            |  parse(String, Int)
+            |    L23: fun parse(text: String, radix: Int): Int = text.toInt(radix) * scale
+            """.trimMargin(),
+            usages("Calculator/scale"),
+        )
+        // Two references on one line: counted twice, shown once.
+        assertEquals("2 usages in 1 file\nsrc/main/kotlin/fixture/Shapes.kt\n  create\n    L48: fun create(): Outer = Outer()", usages("Outer"))
+        assertEquals(
+            "1 usage in 1 file (+1 import)\nsrc/test/kotlin/fixture/ShapesCheck.kt\n  checkShapes\n    L7: val triangle = Shape(3)",
+            usages("fixture.beta/Shape"),
+        )
+        // The call is a Usage; the overrides in PLUS and TIMES aren't.
+        assertEquals(
+            "1 usage in 1 file\nsrc/test/kotlin/fixture/ShapesCheck.kt\n  checkShapes\n" +
+                "    L8: return Calculator(\"c\").parse(\"2\") == 2 && triangle.sides == 3 && Operation.PLUS.apply(1, 2) == 3",
+            usages("Operation/apply"),
+        )
+        assertEquals(FindUsagesResult.NoUsages("describe", searchedFiles = 1), find("Outer/Nested/describe", file = "src/main/kotlin/fixture/Shapes.kt"))
     }
 }

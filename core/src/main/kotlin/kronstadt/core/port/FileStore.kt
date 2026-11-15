@@ -23,6 +23,9 @@ public interface FileStore {
 
     /** Path as it should be shown to the agent: relative to the project root. */
     public fun display(file: Path): String
+
+    /** Every `.kt` and `.kts` file in the project, skipping build output and hidden directories. */
+    public suspend fun kotlinFiles(): List<Path>
 }
 
 /** Identifies a file's exact bytes; equal hashes mean the file didn't change in between. */

@@ -4,12 +4,14 @@ import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Severity
+import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextRange
 import org.eclipse.lsp4j.DiagnosticSeverity
 import org.eclipse.lsp4j.DocumentDiagnosticReport
 import org.eclipse.lsp4j.DocumentSymbol
+import org.eclipse.lsp4j.Location
 import org.eclipse.lsp4j.SymbolInformation
 import org.eclipse.lsp4j.WorkspaceSymbol
 import org.eclipse.lsp4j.jsonrpc.messages.Either
@@ -111,6 +113,12 @@ internal object LspMapping {
     fun localPath(uri: String): Path? = runCatching {
         URI(uri).takeIf { it.scheme == "file" }?.let(Path::of)
     }.getOrNull()
+
+    /** Locations in local files; ones in dependencies (jar: and other non-file URIs) are dropped. */
+    fun locations(result: List<Location?>?): List<SourceLocation> =
+        result.orEmpty().filterNotNull().mapNotNull { location ->
+            localPath(location.uri)?.let { SourceLocation(it, range(location.range)) }
+        }
 
     fun uri(file: Path): String = file.toUri().toString()
 }

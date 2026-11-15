@@ -2,7 +2,9 @@ package kronstadt.core.port
 
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Diagnostic
+import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
+import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextDocument
 import java.nio.file.Path
@@ -40,6 +42,13 @@ public interface CodeIntelligence {
 
     /** Project-wide symbol search by (partial) name. Results outside the project, e.g. in dependencies, are excluded. */
     public suspend fun workspaceSymbols(query: String): List<SymbolLocation>
+
+    /**
+     * Every reference in project files to the Symbol whose name is at [position] in [document] (the content of [file]),
+     * excluding its declaration. References outside the project, e.g. in dependencies, are excluded. Like
+     * [documentSymbols] it opens the document, so each call is paired with a [closeDocument].
+     */
+    public suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation>
 
     /**
      * Waits up to [timeout] until the project index is complete. Readiness is live: it can be lost again later,

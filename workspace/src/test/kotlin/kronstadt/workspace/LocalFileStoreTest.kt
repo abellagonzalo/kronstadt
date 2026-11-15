@@ -97,4 +97,19 @@ class LocalFileStoreTest {
         assertEquals(WriteResult.ChangedOnDisk, store.writeIfUnchanged(file, read.hash, TextDocument("class Mine")))
         assertEquals(emptyList(), project.listDirectoryEntries())
     }
+
+    @Test
+    fun `lists the project's Kotlin files, skipping hidden directories and build output`() = runBlocking {
+        listOf("build.gradle.kts", "src/main/kotlin/A.kt", "app/src/test/kotlin/BTest.kt", "README.md", "src/main/java/C.java",
+            "build/generated/D.kt", "app/build/E.kt", ".gradle/F.kts", ".git/G.kt").forEach { path ->
+            project.resolve(path).also { it.parent.createDirectories() }.writeText("")
+        }
+        outside.resolve("H.kt").writeText("")
+        project.resolve("src/linked").createSymbolicLinkPointingTo(outside)
+
+        assertEquals(
+            listOf("app/src/test/kotlin/BTest.kt", "build.gradle.kts", "src/main/kotlin/A.kt"),
+            store.kotlinFiles().map(store::display),
+        )
+    }
 }

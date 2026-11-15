@@ -7,7 +7,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Diagnostic
+import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
+import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.port.CodeIntelligence
@@ -26,6 +28,8 @@ import org.eclipse.lsp4j.InitializedParams
 import org.eclipse.lsp4j.MessageActionItem
 import org.eclipse.lsp4j.MessageParams
 import org.eclipse.lsp4j.ProgressParams
+import org.eclipse.lsp4j.ReferenceContext
+import org.eclipse.lsp4j.ReferenceParams
 import org.eclipse.lsp4j.PublishDiagnosticsParams
 import org.eclipse.lsp4j.RegistrationParams
 import org.eclipse.lsp4j.ShowMessageRequestParams
@@ -138,6 +142,17 @@ public class LspCodeIntelligence private constructor(
     override suspend fun workspaceSymbols(query: String): List<SymbolLocation> {
         val result = request { server.workspaceService.symbol(WorkspaceSymbolParams(query)) }
         return LspMapping.workspaceSymbols(result)
+    }
+
+    override suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation> {
+        val uri = LspMapping.uri(file)
+        sync(uri, document)
+        val params = ReferenceParams(
+            TextDocumentIdentifier(uri),
+            org.eclipse.lsp4j.Position(position.line, position.character),
+            ReferenceContext(false),
+        )
+        return LspMapping.locations(request { server.textDocumentService.references(params) })
     }
 
     override suspend fun awaitReady(timeout: Duration): Readiness = readiness.awaitReady(timeout)

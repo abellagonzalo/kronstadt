@@ -21,6 +21,8 @@ import kronstadt.core.application.EditResult
 import kronstadt.core.application.EditedFile
 import kronstadt.core.application.FindSymbol
 import kronstadt.core.application.FindSymbolResult
+import kronstadt.core.application.FindUsages
+import kronstadt.core.application.FindUsagesResult
 import kronstadt.core.application.OperationFailure
 import kronstadt.core.application.Problem
 import kronstadt.core.application.ReadStructure
@@ -40,6 +42,7 @@ internal class KronstadtTools(
     private val readStructure: ReadStructure,
     private val findSymbol: FindSymbol,
     private val readSymbol: ReadSymbol,
+    private val findUsages: FindUsages,
     private val edit: Edit,
 ) {
     fun registerOn(server: Server) {
@@ -110,6 +113,30 @@ internal class KronstadtTools(
                 required = listOf("symbol"),
             ),
         ) { request -> handle(request) { readSymbol(it) } }
+
+        server.addTool(
+            name = "kt_find_usages",
+            description = "Lists every Usage of one Kotlin Symbol in the project's main and test source (not overrides or " +
+                "implementations), using the language server's index. A summary line comes first; then each file (main " +
+                "before test), the canonical Symbol Path containing its Usages (pass it with the file to kt_read_symbol " +
+                "or kt_edit; '(file level)' outside any Symbol) and one line per Usage. Imports are only counted. At most " +
+                "${FindUsages.MAX_USAGES} Usages, whole files only; the files left out are named, pass one as 'file' to see it. Prefer " +
+                "this over grep: it finds real Usages only, not same-named text.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    stringProperty(
+                        "symbol",
+                        "Symbol Path of the Symbol, as kt_read_symbol takes it, resolved across the project, e.g. " +
+                            "'OrderController/create' or 'com.example.a/Config'.",
+                    )
+                    stringProperty(
+                        "file",
+                        "Optional .kt/.kts file, absolute or relative to the project root: list only the Usages in it.",
+                    )
+                },
+                required = listOf("symbol"),
+            ),
+        ) { request -> handle(request) { findUsages(it) } }
 
         server.addTool(
             name = "kt_edit",
@@ -300,6 +327,33 @@ internal class KronstadtTools(
             is ReadSymbolResult.FileNotFound -> error("File not found: ${result.path}")
             is ReadSymbolResult.NotKotlin -> error("Not a Kotlin file: ${result.path}. kt_read_symbol only supports .kt and .kts files.")
             is ReadSymbolResult.OutsideProject -> error("Path is outside the project root: ${result.path}")
+        }
+    }
+
+    private suspend fun findUsages(args: JsonObject): CallToolResult {
+        val symbol = args.string("symbol") ?: return error("Missing required argument: symbol")
+        val file = args.string("file")?.takeIf { it.isNotBlank() }
+        return when (val result = findUsages(symbol, file)) {
+            is FindUsagesResult.Found -> text(result.text)
+            is FindUsagesResult.NoUsages -> text(
+                "No usages of ${result.symbol}" +
+                    (if (result.imports > 0) " other than ${result.imports} import${if (result.imports == 1) "" else "s"}" else "") +
+                    " (searched ${result.searchedFiles} file${if (result.searchedFiles == 1) "" else "s"})",
+            )
+            is FindUsagesResult.InvalidPath -> error("Invalid Symbol Path '${result.symbol}': ${result.reason}")
+            is FindUsagesResult.Ambiguous -> error(
+                "'${result.symbol}' matches ${result.candidates.size} symbols; tell them apart with a package prefix or a " +
+                    "signature, e.g. 'com.example/Greeter/greet(String)':\n" + candidates(result.candidates, withFiles = true),
+            )
+            is FindUsagesResult.NotFound -> error(
+                "No symbol '${result.symbol}'." +
+                    if (result.suggestions.isNotEmpty()) " Close names:\n" + candidates(result.suggestions, withFiles = true)
+                    else " Use kt_find_symbol to search by partial name.",
+            )
+            is FindUsagesResult.NotReady -> notReady(result.phase, result.elapsed)
+            is FindUsagesResult.FileNotFound -> error("File not found: ${result.path}")
+            is FindUsagesResult.NotKotlin -> error("Not a Kotlin file: ${result.path}. kt_find_usages only supports .kt and .kts files.")
+            is FindUsagesResult.OutsideProject -> error("Path is outside the project root: ${result.path}")
         }
     }
 

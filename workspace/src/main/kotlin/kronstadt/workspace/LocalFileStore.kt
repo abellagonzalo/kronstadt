@@ -7,10 +7,14 @@ import kronstadt.core.port.ContentHash
 import kronstadt.core.port.FileStore
 import kronstadt.core.port.HashedDocument
 import kronstadt.core.port.WriteResult
+import java.io.IOException
+import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
+import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.PosixFileAttributeView
 import java.security.MessageDigest
 
@@ -62,6 +66,30 @@ public class LocalFileStore(projectRoot: Path) : FileStore {
         }
 
     override fun display(file: Path): String = root.relativize(file).toString()
+
+    /** Walks the project without following symlinks, skipping hidden directories (`.git`, `.gradle`) and `build` output. */
+    override suspend fun kotlinFiles(): List<Path> = withContext(Dispatchers.IO) {
+        val found = mutableListOf<Path>()
+        Files.walkFileTree(
+            root,
+            object : SimpleFileVisitor<Path>() {
+                override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                    val name = dir.fileName.toString()
+                    val skipped = dir != root && (name.startsWith(".") || name == "build")
+                    return if (skipped) FileVisitResult.SKIP_SUBTREE else FileVisitResult.CONTINUE
+                }
+
+                override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                    val name = file.fileName.toString()
+                    if (attrs.isRegularFile && (name.endsWith(".kt") || name.endsWith(".kts"))) found.add(file)
+                    return FileVisitResult.CONTINUE
+                }
+
+                override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult = FileVisitResult.CONTINUE
+            },
+        )
+        found.sorted()
+    }
 
     private fun readBytes(file: Path): ByteArray? = try {
         if (Files.isRegularFile(file)) Files.readAllBytes(file) else null

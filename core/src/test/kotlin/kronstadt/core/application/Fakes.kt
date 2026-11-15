@@ -6,7 +6,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Diagnostic
+import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
+import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.port.CodeIntelligence
@@ -46,6 +48,9 @@ class FakeFileStore(private val root: Path, files: Map<String, String>) : FileSt
 
     override fun display(file: Path): String = key(file)
 
+    override suspend fun kotlinFiles(): List<Path> =
+        files.keys.filter { it.endsWith(".kt") || it.endsWith(".kts") }.sorted().map { root.resolve(it) }
+
     private fun key(file: Path) = root.relativize(file).toString()
 }
 
@@ -55,7 +60,7 @@ class FakeFileStore(private val root: Path, files: Map<String, String>) : FileSt
  * Workspace search returns [workspaceSymbols] whatever the query, unless an [index] is given: then it returns the
  * index entries whose name contains the query, ignoring case: kotlin-lsp 271.2085.0 matches substrings, not typos.
  * Diagnostics are [diagnosticsByText] for the exact text, else none; each pull takes [diagnosticsDelay] and first runs
- * [beforeDiagnostics].
+ * [beforeDiagnostics]. References are [references] for the file and the exact position asked about, else none.
  *
  * Documents are modelled like the language server sees them: the first analysis opens a document at version 1, an
  * analysis of different text changes it to the next version, and each analysis must be paired with a close.
@@ -70,6 +75,7 @@ class FakeCodeIntelligence(
     private val diagnosticsByText: Map<String, List<Diagnostic>> = emptyMap(),
     private val diagnosticsDelay: Duration = Duration.ZERO,
     private val beforeDiagnostics: suspend () -> Unit = {},
+    private val references: Map<Pair<Path, Position>, List<SourceLocation>> = emptyMap(),
 ) : CodeIntelligence {
     val analysed = mutableListOf<Pair<Path, TextDocument>>()
     val searched = mutableListOf<String>()
@@ -125,6 +131,11 @@ class FakeCodeIntelligence(
     override suspend fun workspaceSymbols(query: String): List<SymbolLocation> {
         searched += query
         return index?.filter { it.name.contains(query, ignoreCase = true) } ?: workspaceSymbols
+    }
+
+    override suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation> {
+        sync(file, document)
+        return references[file to position].orEmpty()
     }
 
     private fun sync(file: Path, document: TextDocument) {

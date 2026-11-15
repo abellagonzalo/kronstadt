@@ -47,3 +47,6 @@ public data class SymbolLocation(
     /** Enclosing declaration, e.g. the class a method belongs to, if the language server reports it. */
     val containerName: String? = null,
 )
+
+/** A range in a project file, e.g. where a Usage of a Symbol is. */
+public data class SourceLocation(val file: Path, val range: TextRange)
