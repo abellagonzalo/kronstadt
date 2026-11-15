@@ -17,10 +17,11 @@ public class SymbolTree(roots: List<CodeSymbol>) {
     }
 
     /**
-     * Every addressable Symbol. What sits inside a function, constructor or property (accessors, local declarations,
-     * lambdas) isn't: edits target the enclosing declaration (ADR 0002).
+     * Every addressable Symbol, in source order with each container before its members. What sits inside a function,
+     * constructor or property (accessors, local declarations, lambdas) isn't: edits target the enclosing declaration
+     * (ADR 0002).
      */
-    private val nodes: List<Node> = buildList {
+    public val nodes: List<Node> = buildList {
         fun visit(symbol: CodeSymbol, ancestors: List<CodeSymbol>) {
             add(Node(symbol, ancestors))
             if (isFunction(symbol) || symbol.kind == SymbolKind.PROPERTY || symbol.kind == SymbolKind.VARIABLE) return
@@ -60,6 +61,15 @@ public class SymbolTree(roots: List<CodeSymbol>) {
         }
         // Nothing addresses this Symbol alone (two declarations a path can't tell apart): show the fullest form.
         return SymbolPath(chain.map { segment(it, withSignature = true) }, anchored = true)
+    }
+
+    /**
+     * The Symbol's `detail` without an extension receiver, which its path already shows: `(String): Int` for a
+     * function, `: Char` for a property. Null when the language server gives no detail.
+     */
+    public fun signature(node: Node): String? {
+        val detail = node.symbol.detail ?: return null
+        return receiverEnd(node.symbol)?.let { detail.substring(it).trimStart() } ?: detail
     }
 
     private fun matching(path: SymbolPath): List<Node> {
@@ -118,13 +128,18 @@ public class SymbolTree(roots: List<CodeSymbol>) {
          * (`String.(): String`) and before the type of a property's (`String.: Char`). Null for other Symbols.
          */
         fun receiver(symbol: CodeSymbol): String? {
+            val end = receiverEnd(symbol) ?: return null
+            return symbol.detail!!.substring(0, end - 1).trim().ifEmpty { null }
+        }
+
+        /** Index in `detail` just past the `.` that ends an extension's receiver; null for other Symbols. */
+        fun receiverEnd(symbol: CodeSymbol): Int? {
             val detail = symbol.detail ?: return null
-            val end = when (symbol.kind) {
+            return when (symbol.kind) {
                 SymbolKind.FUNCTION -> parameterGroup(symbol)?.first?.takeIf { it > 0 && detail[it - 1] == '.' }
                 SymbolKind.PROPERTY, SymbolKind.VARIABLE -> detail.indexOf(".:").takeIf { it > 0 }?.plus(1)
                 else -> null
-            } ?: return null
-            return detail.substring(0, end - 1).trim().ifEmpty { null }
+            }
         }
 
         /** Indices of the parentheses around [parameterList]'s text inside `detail`. */

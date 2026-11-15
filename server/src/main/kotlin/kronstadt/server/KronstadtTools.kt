@@ -38,9 +38,10 @@ internal class KronstadtTools(
     fun registerOn(server: Server) {
         server.addTool(
             name = "kt_read_structure",
-            description = "Returns the skeleton of a Kotlin file: classes, objects, interfaces and their member " +
-                "declarations, without function bodies, each with its line span. Use this instead of reading a " +
-                "whole file when you need an overview, then read only the lines you need.",
+            description = "Returns the skeleton of a Kotlin file: every declaration, nested under its container, " +
+                "without bodies. Each line shows the kind, the canonical Symbol Path (pass it as-is to kt_read_symbol " +
+                "and the other tools), the signature (so overloads look different) and the line span. Use this " +
+                "instead of reading a whole file when you need an overview, then kt_read_symbol what you need.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
                     stringProperty("filePath", "Path to a .kt/.kts file, absolute or relative to the project root.")
@@ -100,7 +101,8 @@ internal class KronstadtTools(
         val path = args.string("filePath") ?: return error("Missing required argument: filePath")
         val xml = args.boolean("formatOutputAsXml") ?: true
         return when (val result = readStructure(path, xml)) {
-            is ReadStructureResult.Structure -> text(result.text.ifBlank { "No declarations found in $path." })
+            is ReadStructureResult.Structure -> text(result.text)
+            is ReadStructureResult.NoDeclarations -> text("No declarations found in ${result.path}.")
             is ReadStructureResult.FileNotFound -> error("File not found: ${result.path}")
             is ReadStructureResult.NotKotlin -> error("Not a Kotlin file: ${result.path}. kt_read_structure only supports .kt and .kts files.")
             is ReadStructureResult.OutsideProject -> error("Path is outside the project root: ${result.path}")

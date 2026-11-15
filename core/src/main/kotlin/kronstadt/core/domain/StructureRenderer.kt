@@ -1,44 +1,45 @@
 package kronstadt.core.domain
 
 /**
- * Renders a token-cheap skeleton of a file: containers and their member declarations,
- * without function bodies.
+ * Renders a token-cheap skeleton of a file: every addressable Symbol, without bodies, nested under its container.
  *
- * Each entry shows the declaration's header line taken verbatim from the source (so it reflects real
- * modifiers and signatures, independent of how a given language server formats symbol details),
- * followed by its 1-based line span so the agent can read just that slice if needed.
+ * Each entry shows the Symbol's canonical Symbol Path (exactly what the tools accept), its signature from the
+ * language server's `detail` (so overloads look different), and its 1-based line span, as `kt_read_symbol` reports it.
  */
 public object StructureRenderer {
     public fun render(path: String, document: TextDocument, symbols: List<CodeSymbol>, xml: Boolean): String {
-        val body = buildString {
-            symbols.sortedBy { it.range.start }.forEach { appendSymbol(document, it, depth = 0) }
-        }.trimEnd()
+        val tree = SymbolTree(symbols)
+        val body = tree.nodes.joinToString("\n") { entry(document, tree, it) }
+        if (body.isEmpty()) return ""
         // The tags are delimiters for the model, not a document to be parsed: the body stays unescaped so
         // signatures like `List<User>` read naturally.
         return if (xml) "<file_structure path=\"${escapeAttribute(path)}\">\n$body\n</file_structure>" else body
     }
 
-    private fun StringBuilder.appendSymbol(document: TextDocument, symbol: CodeSymbol, depth: Int) {
-        append("  ".repeat(depth))
-        append(header(document, symbol))
-        append("  // L").append(symbol.range.start.line + 1).append('-').append(symbol.range.end.line + 1)
-        append('\n')
-        // Members of functions (local variables, lambdas) are implementation detail: skip them.
-        if (symbol.kind.isContainer) {
-            symbol.children
-                // A primary constructor, and properties declared on the same line, would repeat the header just printed.
-                .filter { it.selectionRange.start.line != symbol.selectionRange.start.line }
-                .sortedBy { it.range.start }
-                .forEach { appendSymbol(document, it, depth + 1) }
-        }
+    private fun entry(document: TextDocument, tree: SymbolTree, node: SymbolTree.Node): String = buildString {
+        val symbol = node.symbol
+        append("  ".repeat(node.ancestors.size))
+        // A constructor's path already says `constructor`.
+        if (symbol.kind != SymbolKind.CONSTRUCTOR) append(symbol.kind.keyword).append(' ')
+        val path = tree.canonicalPath(node)
+        append(path)
+        // A constructor's signature is only its parameter list, which a path that needs it already shows.
+        tree.signature(node)
+            ?.takeUnless { it == path.segments.last().signature?.let { params -> "($params)" } }
+            ?.let { append("  ").append(it) }
+        val (first, last) = lines(document, symbol)
+        append("  // L").append(first + 1).append('-').append(last + 1)
     }
 
-    /** The source line holding the symbol's name, with any trailing body opener stripped. */
-    private fun header(document: TextDocument, symbol: CodeSymbol): String {
-        val line = document.line(symbol.selectionRange.start.line).trim()
-        if (line.isEmpty()) return "${symbol.kind.keyword} ${symbol.name}"
-        return line.removeSuffix("{").trimEnd()
-    }
+    /**
+     * The Symbol Span's lines, as `kt_read_symbol` reports them. A Symbol without a whole-line span (it shares a line
+     * with other code) reports its declaration's lines.
+     */
+    private fun lines(document: TextDocument, symbol: CodeSymbol): Pair<Int, Int> =
+        when (val computation = SymbolSpan.of(document, symbol)) {
+            is SymbolSpan.Computation.Computed -> computation.span.firstLine to computation.span.lastLine
+            else -> symbol.range.start.line to symbol.range.end.line
+        }
 
     private fun escapeAttribute(s: String): String =
         s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
