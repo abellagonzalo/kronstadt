@@ -12,7 +12,6 @@ backed by a Kotlin language server. Inspired by [Serena](https://github.com/orai
 | `kt_find_usages` | planned | |
 | `kt_replace_symbol` | planned | Replace a declaration by name; validate with diagnostics before writing to disk |
 | `kt_insert_after` | planned | |
-| `run_gradle_task` / `run_specific_test` | planned | |
 
 ## Architecture
 
