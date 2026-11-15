@@ -8,6 +8,10 @@ An MCP server that gives coding agents symbol-level read and write access to a K
 A Kotlin declaration (class, interface, object, function, property, constructor) addressable by name.
 _Avoid_: AST node, element
 
+**Symbol Path**:
+The address that names exactly one Symbol: its chain of enclosing declaration names, optionally scoped to a file, with a signature only where a name alone is ambiguous.
+_Avoid_: name path, FQN, selector, locator
+
 **Shadow Workspace**:
 Kronstadt's in-memory view of the project's files, which the language server sees and edits are applied to before Write-back to disk.
 _Avoid_: shadow file system, in-memory buffer, working memory copy
