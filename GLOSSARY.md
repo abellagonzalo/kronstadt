@@ -16,6 +16,10 @@ _Avoid_: name path, FQN, selector, locator
 The full source text of a Symbol, as whole lines: its KDoc or the comments directly above it, its annotations, modifiers and declaration, and any comment at the end of its last line. It is what an agent reads and what replace and delete act on.
 _Avoid_: range, body, extent
 
+**Usage**:
+A place in project source that refers to a Symbol by name, other than its own declaration. An import of the Symbol is a Usage too, but is counted apart from the others.
+_Avoid_: reference, call site, occurrence
+
 **Edit**:
 One write request: an ordered batch of Operations that is validated and written back as a whole, or rejected as a whole.
 _Avoid_: change, transaction, patch
