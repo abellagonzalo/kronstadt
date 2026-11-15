@@ -20,6 +20,11 @@ internal class DeferredCodeIntelligence(private val delegate: Deferred<Result<Co
     override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> =
         delegate.await().getOrThrow().documentSymbols(file, document)
 
+    /** Nothing can be open before startup finished, so there's nothing to close. */
+    override suspend fun closeDocument(file: Path) {
+        if (delegate.isCompleted) delegate.await().getOrNull()?.closeDocument(file)
+    }
+
     override suspend fun workspaceSymbols(query: String): List<SymbolLocation> =
         delegate.await().getOrThrow().workspaceSymbols(query)
 

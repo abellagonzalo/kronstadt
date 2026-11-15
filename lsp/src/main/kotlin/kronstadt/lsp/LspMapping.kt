@@ -42,6 +42,7 @@ internal object LspMapping {
         range = range(s.range),
         selectionRange = range(s.selectionRange),
         children = s.children.orEmpty().map(::documentSymbol),
+        detail = s.detail,
     )
 
     /**

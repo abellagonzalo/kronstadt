@@ -5,8 +5,13 @@ package kronstadt.lsp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kronstadt.core.application.ReadSymbol
+import kronstadt.core.application.ReadSymbolResult
+import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolKind
+import kronstadt.core.domain.TextDocument
+import kronstadt.core.port.FileStore
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.MethodOrderer
@@ -92,5 +97,95 @@ class KotlinLspContractTest {
     @Order(4)
     fun `stays ready while idle`() = runBlocking {
         assertEquals(Readiness.Ready, lsp.awaitReady(Duration.ZERO))
+    }
+
+    // documentSymbol facts behind Symbol Paths (ADR 0002) and Symbol Spans (ADR 0004), on fixture/Spans.kt.
+
+    private fun spans(): Pair<TextDocument, List<CodeSymbol>> = runBlocking {
+        val file = project.resolve("src/main/kotlin/fixture/Spans.kt")
+        val document = TextDocument(Files.readString(file))
+        try {
+            document to lsp.documentSymbols(file, document)
+        } finally {
+            lsp.closeDocument(file)
+        }
+    }
+
+    private fun List<CodeSymbol>.find(vararg names: String): CodeSymbol =
+        names.drop(1).fold(single { it.name == names.first() }) { parent, name -> parent.children.single { it.name == name } }
+
+    @Test
+    @Order(5)
+    fun `range starts at the KDoc or comments above and covers annotations and the end-of-line comment`() {
+        val (document, symbols) = spans()
+        assertEquals(
+            "/**\n * KDoc above an annotated class.\n */\n@Suppress(\"unused\")\n@Deprecated(\"probe\")\ninternal class Documented {",
+            document.slice(symbols.find("Documented").range).lines().take(6).joinToString("\n"),
+        )
+        assertEquals(
+            "// A line comment directly above.\n    // Two of them.\n    @JvmField\n    val annotated: Int = 1 // trailing comment",
+            document.slice(symbols.find("Documented", "annotated").range),
+        )
+        assertEquals(
+            "/* A block comment above. */\n    fun blocky(): Int = 2 /* trailing block */",
+            document.slice(symbols.find("Documented", "blocky").range),
+        )
+    }
+
+    @Test
+    @Order(6)
+    fun `an enum entry's range includes its separator and its KDoc`() {
+        val (document, symbols) = spans()
+        assertEquals("/** Entry KDoc. */\n    RED(\"f00\"),", document.slice(symbols.find("Color", "RED").range))
+        assertEquals("BLUE(\"00f\");", document.slice(symbols.find("Color", "BLUE").range))
+        assertEquals("},", document.slice(symbols.find("Color", "GREEN").range).lines().last().trim())
+    }
+
+    @Test
+    @Order(7)
+    fun `selectionRange is the name, backticks included, except for constructors which get the whole declaration`() {
+        val (document, symbols) = spans()
+        assertEquals("Documented", document.slice(symbols.find("Documented").selectionRange))
+        assertEquals("`backticked name`", document.slice(symbols.find("backticked name").selectionRange))
+        val constructor = symbols.find("Color").children.single { it.kind == SymbolKind.CONSTRUCTOR }
+        assertEquals("Color", constructor.name)
+        assertEquals(constructor.range, constructor.selectionRange)
+    }
+
+    @Test
+    @Order(8)
+    fun `detail renders parameter types without names, then the return type`() {
+        val (_, symbols) = spans()
+        assertEquals("(): Int", symbols.find("Documented", "blocky").detail)
+        assertEquals("(List<Map<String, Int>>, vararg String): Unit", symbols.find("Documented", "generic").detail)
+        assertEquals("(T, (T) -> String): String", symbols.find("Documented", "wrap").detail)
+        assertEquals(": Int", symbols.find("Documented", "annotated").detail)
+        assertEquals("(String)", symbols.find("Color").children.single { it.kind == SymbolKind.CONSTRUCTOR }.detail)
+        assertNull(symbols.find("Documented").detail)
+    }
+
+    @Test
+    @Order(9)
+    fun `kt_read_symbol reads overloads, classes and enum entries from the real tree`() = runBlocking {
+        val files = object : FileStore {
+            override fun resolve(path: String): Path = project.resolve(path)
+            override suspend fun read(file: Path): TextDocument = TextDocument(Files.readString(file))
+            override fun display(file: Path): String = project.relativize(file).toString()
+        }
+        val read = ReadSymbol(files, lsp)
+        val shapes = "src/main/kotlin/fixture/Shapes.kt"
+
+        assertEquals(
+            "// parse(String, Int) in $shapes, L23-23\n    fun parse(text: String, radix: Int): Int = text.toInt(radix) * scale",
+            assertIs<ReadSymbolResult.Found>(read(shapes, "Calculator/parse(String,Int)")).text,
+        )
+        val calculator = assertIs<ReadSymbolResult.Found>(read(shapes, "Calculator")).text.lines()
+        assertEquals("// Calculator in $shapes, L5-33", calculator.first())
+        assertEquals("/** Overloads, a property and a function sharing a name, accessors, constructors and local functions. */", calculator[1])
+        assertEquals(
+            listOf("PLUS/apply", "TIMES/apply", "Operation/apply"),
+            assertIs<ReadSymbolResult.Ambiguous>(read(shapes, "apply")).candidates,
+        )
+        assertEquals("// TIMES in $shapes, L57-59", assertIs<ReadSymbolResult.Found>(read(shapes, "TIMES")).text.lines().first())
     }
 }

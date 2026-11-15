@@ -19,7 +19,7 @@ class LspMappingTest {
 
     @Test
     fun `maps hierarchical document symbols with children`() {
-        val method = DocumentSymbol("find", LspSymbolKind.Method, range(2, 4), range(2, 2))
+        val method = DocumentSymbol("find", LspSymbolKind.Method, range(2, 4), range(2, 2), "(String): Repo?")
         val clazz = DocumentSymbol("Repo", LspSymbolKind.Class, range(0, 5), range(0, 0), null, listOf(method))
         val result = LspMapping.documentSymbols(listOf(Either.forRight(clazz)))
 
@@ -27,6 +27,7 @@ class LspMappingTest {
         assertEquals(SymbolKind.CLASS, mapped.kind)
         assertEquals(SymbolKind.FUNCTION, mapped.children.single().kind)
         assertEquals(2, mapped.children.single().range.start.line)
+        assertEquals("(String): Repo?", mapped.children.single().detail)
     }
 
     @Test

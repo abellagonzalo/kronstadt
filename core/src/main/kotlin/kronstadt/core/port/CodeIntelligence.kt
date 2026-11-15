@@ -18,6 +18,12 @@ public interface CodeIntelligence {
      */
     public suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol>
 
+    /**
+     * Hands [file] back to the language server's view of the disk (ADR 0003): every tool closes each document it
+     * analysed before it returns, so no document state survives a tool call. Closing a file that isn't open is a no-op.
+     */
+    public suspend fun closeDocument(file: Path)
+
     /** Project-wide symbol search by (partial) name. Results outside the project, e.g. in dependencies, are excluded. */
     public suspend fun workspaceSymbols(query: String): List<SymbolLocation>
 

@@ -26,6 +26,9 @@ class FakeCodeIntelligence(
 ) : CodeIntelligence {
     val analysed = mutableListOf<Pair<Path, TextDocument>>()
     val searched = mutableListOf<String>()
+
+    /** Documents analysed and not closed since. */
+    val openDocuments = mutableSetOf<Path>()
     private val phase = MutableStateFlow(notReadyPhase)
 
     fun becomeReady() {
@@ -39,7 +42,12 @@ class FakeCodeIntelligence(
 
     override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> {
         analysed += file to document
+        openDocuments.add(file)
         return documentSymbols
+    }
+
+    override suspend fun closeDocument(file: Path) {
+        openDocuments.remove(file)
     }
 
     override suspend fun workspaceSymbols(query: String): List<SymbolLocation> {

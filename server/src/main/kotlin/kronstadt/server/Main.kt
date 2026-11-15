@@ -16,6 +16,7 @@ import kotlinx.io.asSource
 import kotlinx.io.buffered
 import kronstadt.core.application.FindSymbol
 import kronstadt.core.application.ReadStructure
+import kronstadt.core.application.ReadSymbol
 import kronstadt.lsp.LspCodeIntelligence
 import kronstadt.workspace.LocalFileStore
 import java.io.PrintStream
@@ -65,10 +66,16 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
         Implementation(name = "kronstadt", version = VERSION),
         ServerOptions(capabilities = ServerCapabilities(tools = ServerCapabilities.Tools(listChanged = false))),
         instructions = "Kronstadt gives symbol-level access to the Kotlin project at ${files.root}. " +
-            "Prefer kt_find_symbol over grep to locate declarations, and kt_read_structure over reading whole files.",
+            "Prefer kt_find_symbol over grep to locate declarations, and kt_read_structure and kt_read_symbol over " +
+            "reading whole files.",
     )
     val intelligence = DeferredCodeIntelligence(languageServer)
-    KronstadtTools(ReadStructure(files, intelligence), FindSymbol(intelligence, config.readinessTimeout), files).registerOn(server)
+    KronstadtTools(
+        ReadStructure(files, intelligence),
+        FindSymbol(intelligence, config.readinessTimeout),
+        ReadSymbol(files, intelligence),
+        files,
+    ).registerOn(server)
 
     val transport = StdioServerTransport(System.`in`.asSource().buffered(), protocolOut.asSink().buffered())
     val session = server.createSession(transport)

@@ -20,7 +20,7 @@ public class TextDocument(public val text: String) {
     public fun offsetOf(position: Position): Int {
         require(position.line < lineCount) { "line ${position.line} out of bounds (document has $lineCount lines)" }
         val start = lineStarts[position.line]
-        return minOf(start + position.character, lineContentEnd(position.line))
+        return start + minOf(position.character, lineContentEnd(position.line) - start)
     }
 
     public fun positionOf(offset: Int): Position {
@@ -35,6 +35,12 @@ public class TextDocument(public val text: String) {
     public fun line(line: Int): String {
         require(line in 0 until lineCount) { "line $line out of bounds (document has $lineCount lines)" }
         return text.substring(lineStarts[line], lineContentEnd(line))
+    }
+
+    /** Lines [first] to [last] (inclusive) as they are in the text, terminators between them included. */
+    public fun lines(first: Int, last: Int): String {
+        require(first in 0..last && last < lineCount) { "lines $first-$last out of bounds (document has $lineCount lines)" }
+        return text.substring(lineStarts[first], lineContentEnd(last))
     }
 
     public fun slice(range: TextRange): String = text.substring(offsetOf(range.start), offsetOf(range.end))

@@ -13,6 +13,7 @@ import kronstadt.core.port.CodeIntelligence
 import org.eclipse.lsp4j.ClientCapabilities
 import org.eclipse.lsp4j.ConfigurationParams
 import org.eclipse.lsp4j.DidChangeTextDocumentParams
+import org.eclipse.lsp4j.DidCloseTextDocumentParams
 import org.eclipse.lsp4j.DidOpenTextDocumentParams
 import org.eclipse.lsp4j.DocumentSymbolCapabilities
 import org.eclipse.lsp4j.DocumentSymbolParams
@@ -63,7 +64,8 @@ public class LspCodeIntelligence private constructor(
     public val serverVersion: String?,
 ) : CodeIntelligence, AutoCloseable {
 
-    private data class OpenDocument(val version: Int, val text: String)
+    /** [users] counts the calls that analysed this document and haven't closed it yet; read tools run concurrently. */
+    private data class OpenDocument(val version: Int, val text: String, val users: Int)
 
     private val syncLock = Mutex()
     private val openDocuments = mutableMapOf<String, OpenDocument>()
@@ -73,6 +75,19 @@ public class LspCodeIntelligence private constructor(
         sync(uri, document)
         val result = request { server.textDocumentService.documentSymbol(DocumentSymbolParams(TextDocumentIdentifier(uri))) }
         return LspMapping.documentSymbols(result)
+    }
+
+    override suspend fun closeDocument(file: Path) {
+        val uri = LspMapping.uri(file)
+        syncLock.withLock {
+            val open = openDocuments[uri] ?: return@withLock
+            if (open.users > 1) {
+                openDocuments[uri] = open.copy(users = open.users - 1)
+            } else {
+                openDocuments.remove(uri)
+                server.textDocumentService.didClose(DidCloseTextDocumentParams(TextDocumentIdentifier(uri)))
+            }
+        }
     }
 
     override suspend fun workspaceSymbols(query: String): List<SymbolLocation> {
@@ -87,7 +102,7 @@ public class LspCodeIntelligence private constructor(
         when {
             open == null -> {
                 server.textDocumentService.didOpen(DidOpenTextDocumentParams(TextDocumentItem(uri, "kotlin", 1, document.text)))
-                openDocuments[uri] = OpenDocument(1, document.text)
+                openDocuments[uri] = OpenDocument(1, document.text, users = 1)
             }
             open.text != document.text -> {
                 val version = open.version + 1
@@ -97,8 +112,9 @@ public class LspCodeIntelligence private constructor(
                         listOf(TextDocumentContentChangeEvent(document.text)),
                     ),
                 )
-                openDocuments[uri] = OpenDocument(version, document.text)
+                openDocuments[uri] = OpenDocument(version, document.text, open.users + 1)
             }
+            else -> openDocuments[uri] = open.copy(users = open.users + 1)
         }
     }
 

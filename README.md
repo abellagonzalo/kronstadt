@@ -9,6 +9,7 @@ backed by JetBrains' [kotlin-lsp](https://github.com/Kotlin/kotlin-lsp) (see ADR
 |---|---|---|
 | `kt_read_structure` | ✅ | Skeleton of a file: declarations with their source header line and line span, no bodies |
 | `kt_find_symbol` | ✅ | Project-wide declaration search by (partial) name, optional kind filter |
+| `kt_read_symbol` | ✅ | One declaration's exact source (KDoc, annotations, body), addressed by file and Symbol Path, e.g. `Calculator/parse(String)` |
 | `kt_find_usages` | planned | |
 | `kt_replace_symbol` | planned | Replace a declaration by name; validate with diagnostics before writing to disk |
 | `kt_insert_after` | planned | |
@@ -19,9 +20,10 @@ Ports and adapters. Gradle modules make the build enforce the boundary: `core` c
 
 ```
 core/        pure Kotlin, no I/O
-  domain/      Position, TextRange, TextDocument (offset math), CodeSymbol, StructureRenderer
+  domain/      Position, TextRange, TextDocument (offset math), CodeSymbol, StructureRenderer,
+               SymbolPath, SymbolTree (resolution, canonical paths), SymbolSpan
   port/        CodeIntelligence, FileStore
-  application/ ReadStructure, FindSymbol — one use case per MCP tool, returning sealed results
+  application/ ReadStructure, FindSymbol, ReadSymbol — one use case per MCP tool, returning sealed results
 lsp/         CodeIntelligence over kotlin-lsp (lsp4j), incl. readiness tracking
 workspace/   FileStore over the local disk, confined to the project root
 server/      MCP stdio server: tool schemas -> use cases; composition root (Main.kt)

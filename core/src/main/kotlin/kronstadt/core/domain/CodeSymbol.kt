@@ -31,6 +31,11 @@ public data class CodeSymbol(
     /** The range of the symbol's name (identifier) only. */
     val selectionRange: TextRange,
     val children: List<CodeSymbol> = emptyList(),
+    /**
+     * Extra text the language server shows next to the name. For kotlin-lsp functions and constructors this is the
+     * parameter-type signature that Symbol Paths match against (ADR 0002).
+     */
+    val detail: String? = null,
 )
 
 /** A symbol found by a workspace-wide search. */
