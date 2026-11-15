@@ -88,14 +88,14 @@ class ReadSymbolTest {
     fun `a name shared by several Symbols fails and lists every candidate's canonical path`() = runTest {
         val result = assertIs<ReadSymbolResult.Ambiguous>(read("run"))
         assertEquals("src/A.kt", result.file)
-        assertEquals(listOf("Runner/run", "Nested/run", "/run"), result.candidates)
+        assertEquals(listOf("Runner/run", "Nested/run", "/run"), result.candidates.map { it.path })
     }
 
     @Test
     fun `matching is exact and case-sensitive, and a miss suggests close names`() = runTest {
-        assertEquals(listOf("Runner"), assertIs<ReadSymbolResult.NotFound>(read("runner")).suggestions)
-        assertEquals(listOf("Runner"), assertIs<ReadSymbolResult.NotFound>(read("Runer")).suggestions)
-        assertEquals(emptyList(), assertIs<ReadSymbolResult.NotFound>(read("Completely/Different")).suggestions)
+        assertEquals(listOf("Runner"), assertIs<ReadSymbolResult.NotFound>(read("runner")).suggestions.map { it.path })
+        assertEquals(listOf("Runner"), assertIs<ReadSymbolResult.NotFound>(read("Runer")).suggestions.map { it.path })
+        assertEquals(emptyList(), assertIs<ReadSymbolResult.NotFound>(read("Completely/Different")).suggestions.map { it.path })
     }
 
     private val overloads = """
@@ -119,7 +119,7 @@ class ReadSymbolTest {
         val result = assertIs<ReadSymbolResult.Found>(readOverload("parse( String,Int )"))
         assertEquals("// parse(String, Int) in src/A.kt, L4-4\n    fun parse(text: String, radix: Int): Int = text.toInt(radix)", result.text)
         assertIs<ReadSymbolResult.Found>(readOverload("Parser/merge(Map<String,Int>, List<Int>)"))
-        assertEquals(listOf("parse(String)", "parse(String, Int)"), assertIs<ReadSymbolResult.Ambiguous>(readOverload("parse")).candidates)
+        assertEquals(listOf("parse(String)", "parse(String, Int)"), assertIs<ReadSymbolResult.Ambiguous>(readOverload("parse")).candidates.map { it.path })
     }
 
     @Test
@@ -254,7 +254,7 @@ class ReadSymbolTest {
 
     @Test
     fun `the receiver is part of the name, so leaving it out misses and suggests the extension`() = runTest {
-        assertEquals(listOf("String.shout"), assertIs<ReadSymbolResult.NotFound>(readExtension("shout")).suggestions)
+        assertEquals(listOf("String.shout"), assertIs<ReadSymbolResult.NotFound>(readExtension("shout")).suggestions.map { it.path })
         assertIs<ReadSymbolResult.NotFound>(readExtension("Int.shout"))
         assertIs<ReadSymbolResult.NotFound>(readExtension("CharSequence.firstChar"))
     }
@@ -288,7 +288,7 @@ class ReadSymbolTest {
 
     @Test
     fun `the preference only settles a tie inside one declaration, never between unrelated ones`() = runTest {
-        assertEquals(listOf("Sized/size", "size()"), assertIs<ReadSymbolResult.Ambiguous>(readSized("size")).candidates)
+        assertEquals(listOf("Sized/size", "size()"), assertIs<ReadSymbolResult.Ambiguous>(readSized("size")).candidates.map { it.path })
     }
 
     @Test
@@ -318,7 +318,7 @@ class ReadSymbolTest {
         val read = readSymbol(source, hidden)
 
         listOf("counter/get", "get", "set", "Hidden/counter/set", "outer/local", "local").forEach { path ->
-            assertEquals(emptyList(), assertIs<ReadSymbolResult.NotFound>(read("src/A.kt", path), path).suggestions, path)
+            assertEquals(emptyList(), assertIs<ReadSymbolResult.NotFound>(read("src/A.kt", path), path).suggestions.map { it.path }, path)
         }
         assertEquals("// counter in src/A.kt, L2-6", assertIs<ReadSymbolResult.Found>(read("src/A.kt", "counter")).text.lines().first())
     }
@@ -383,7 +383,7 @@ class ReadSymbolTest {
         assertEquals("// Box/constructor(Int) in src/A.kt, L5-5", headerOf("Box/constructor(Int)"))
         // The primary constructor starts on the class's line, so it can be named but not read on its own.
         assertIs<ReadSymbolResult.SharedLine>(readForm("Box/constructor(Int, Int)"))
-        assertEquals(listOf("constructor(Int, Int)", "Box/constructor(Int)", "Tint/constructor"), assertIs<ReadSymbolResult.Ambiguous>(readForm("constructor")).candidates)
+        assertEquals(listOf("constructor(Int, Int)", "Box/constructor(Int)", "Tint/constructor"), assertIs<ReadSymbolResult.Ambiguous>(readForm("constructor")).candidates.map { it.path })
         // Resolved as a property; its range stops before the comma, so the span guard refuses to read it alone.
         assertEquals(ReadSymbolResult.SharedLine("width", "src/A.kt", 2), readForm("Box/width"))
         assertIs<ReadSymbolResult.NotFound>(readForm("Box/height"))

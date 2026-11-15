@@ -18,11 +18,18 @@ class FakeFileStore(private val root: Path, private val files: Map<String, Strin
     override fun display(file: Path): String = root.relativize(file).toString()
 }
 
-/** Ready unless [notReadyPhase] is given; then it stays in that phase until [becomeReady]. */
+/**
+ * Ready unless [notReadyPhase] is given; then it stays in that phase until [becomeReady].
+ * Every file has [documentSymbols], unless [symbolsByFile] gives it its own.
+ * Workspace search returns [workspaceSymbols] whatever the query, unless an [index] is given: then it returns the
+ * index entries whose name contains the query, ignoring case: kotlin-lsp 271.2085.0 matches substrings, not typos.
+ */
 class FakeCodeIntelligence(
     private val documentSymbols: List<CodeSymbol> = emptyList(),
     private val workspaceSymbols: List<SymbolLocation> = emptyList(),
     notReadyPhase: String? = null,
+    private val symbolsByFile: Map<Path, List<CodeSymbol>> = emptyMap(),
+    private val index: List<SymbolLocation>? = null,
 ) : CodeIntelligence {
     val analysed = mutableListOf<Pair<Path, TextDocument>>()
     val searched = mutableListOf<String>()
@@ -43,7 +50,7 @@ class FakeCodeIntelligence(
     override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> {
         analysed += file to document
         openDocuments.add(file)
-        return documentSymbols
+        return symbolsByFile[file] ?: documentSymbols
     }
 
     override suspend fun closeDocument(file: Path) {
@@ -52,6 +59,6 @@ class FakeCodeIntelligence(
 
     override suspend fun workspaceSymbols(query: String): List<SymbolLocation> {
         searched += query
-        return workspaceSymbols
+        return index?.filter { it.name.contains(query, ignoreCase = true) } ?: workspaceSymbols
     }
 }

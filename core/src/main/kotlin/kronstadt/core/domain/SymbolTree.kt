@@ -109,31 +109,31 @@ public class SymbolTree(roots: List<CodeSymbol>) {
             .map { (node, _) -> node }
     }
 
-    private companion object {
-        const val MAX_SUGGESTIONS = 5
+    internal companion object {
+        private const val MAX_SUGGESTIONS = 5
 
         /** The name a Symbol has in a path. Constructors are `constructor`, not their class's name (ADR 0002). */
-        fun pathName(symbol: CodeSymbol): String = if (symbol.kind == SymbolKind.CONSTRUCTOR) "constructor" else symbol.name
+        private fun pathName(symbol: CodeSymbol): String = if (symbol.kind == SymbolKind.CONSTRUCTOR) "constructor" else symbol.name
 
         /**
          * The parameter types inside a function's or constructor's `detail`, e.g. `String, Int` from
          * `(String, Int): Int` or `String.(Int): Unit`: the last top-level parenthesised group that is followed by
          * the return type or nothing. Null for Symbols that take no parameter list.
          */
-        fun parameterList(symbol: CodeSymbol): String? =
+        private fun parameterList(symbol: CodeSymbol): String? =
             parameterGroup(symbol)?.let { symbol.detail!!.substring(it.first + 1, it.last) }
 
         /**
          * An extension's receiver type, which kotlin-lsp puts before the parameter list of a function's `detail`
          * (`String.(): String`) and before the type of a property's (`String.: Char`). Null for other Symbols.
          */
-        fun receiver(symbol: CodeSymbol): String? {
+        private fun receiver(symbol: CodeSymbol): String? {
             val end = receiverEnd(symbol) ?: return null
             return symbol.detail!!.substring(0, end - 1).trim().ifEmpty { null }
         }
 
         /** Index in `detail` just past the `.` that ends an extension's receiver; null for other Symbols. */
-        fun receiverEnd(symbol: CodeSymbol): Int? {
+        private fun receiverEnd(symbol: CodeSymbol): Int? {
             val detail = symbol.detail ?: return null
             return when (symbol.kind) {
                 SymbolKind.FUNCTION -> parameterGroup(symbol)?.first?.takeIf { it > 0 && detail[it - 1] == '.' }
@@ -164,12 +164,12 @@ public class SymbolTree(roots: List<CodeSymbol>) {
             return found
         }
 
-        fun isFunction(symbol: CodeSymbol) = symbol.kind == SymbolKind.FUNCTION || symbol.kind == SymbolKind.CONSTRUCTOR
+        private fun isFunction(symbol: CodeSymbol) = symbol.kind == SymbolKind.FUNCTION || symbol.kind == SymbolKind.CONSTRUCTOR
 
-        fun normalise(signature: String): String = signature.filterNot(Char::isWhitespace)
+        private fun normalise(signature: String): String = signature.filterNot(Char::isWhitespace)
 
         /** Levenshtein distance. */
-        fun distance(a: String, b: String): Int {
+        internal fun distance(a: String, b: String): Int {
             var previous = IntArray(b.length + 1) { it }
             for (i in 1..a.length) {
                 val current = IntArray(b.length + 1)

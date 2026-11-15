@@ -21,6 +21,7 @@ import kronstadt.core.application.ReadStructure
 import kronstadt.core.application.ReadStructureResult
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.ReadSymbolResult
+import kronstadt.core.application.SymbolCandidate
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.port.FileStore
 import kotlin.time.Duration
@@ -84,15 +85,20 @@ internal class KronstadtTools(
                 "without line numbers, so it can be copied verbatim. Use this instead of reading a whole file.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
-                    stringProperty("file", "Path to the .kt/.kts file, absolute or relative to the project root.")
+                    stringProperty(
+                        "file",
+                        "Optional path to the .kt/.kts file, absolute or relative to the project root. Without it the " +
+                            "Symbol Path is resolved across the project (waits for indexing).",
+                    )
                     stringProperty(
                         "symbol",
                         "Symbol Path: enclosing declaration names separated by '/', e.g. 'OrderController/create'. " +
                             "Trailing segments are enough when unambiguous ('run', 'Nested/run'); a leading '/' " +
-                            "anchors at the top level; add parameter types to pick an overload: 'parse(String, Int)'.",
+                            "anchors at the top level; add parameter types to pick an overload: 'parse(String, Int)'. " +
+                            "Without a file, a dotted package may come first: 'com.example.a/Config'.",
                     )
                 },
-                required = listOf("file", "symbol"),
+                required = listOf("symbol"),
             ),
         ) { request -> handle(request) { readSymbol(it) } }
     }
@@ -136,22 +142,25 @@ internal class KronstadtTools(
     }
 
     private suspend fun readSymbol(args: JsonObject): CallToolResult {
-        val path = args.string("file") ?: return error("Missing required argument: file")
+        val path = args.string("file")?.takeIf { it.isNotBlank() }
         val symbol = args.string("symbol") ?: return error("Missing required argument: symbol")
         return when (val result = readSymbol(path, symbol)) {
             is ReadSymbolResult.Found -> text(result.text)
             is ReadSymbolResult.InvalidPath -> error("Invalid Symbol Path '${result.symbol}': ${result.reason}")
             is ReadSymbolResult.Ambiguous -> error(
-                "'${result.symbol}' matches ${result.candidates.size} symbols in ${result.file}; pass one of:\n" +
-                    result.candidates.joinToString("\n") { "  $it" },
+                "'${result.symbol}' matches ${result.candidates.size} symbols${result.file.inFile()}; pass one of" +
+                    (if (result.file == null) " these paths with its file" else "") + ":\n" +
+                    candidates(result.candidates, withFiles = result.file == null),
             )
             is ReadSymbolResult.NotFound -> error(
-                "No symbol '${result.symbol}' in ${result.file}." + if (result.suggestions.isEmpty()) {
-                    " Use kt_read_structure to list its declarations."
-                } else {
-                    " Close names:\n" + result.suggestions.joinToString("\n") { "  $it" }
+                "No symbol '${result.symbol}'${result.file.inFile()}." + when {
+                    result.suggestions.isNotEmpty() ->
+                        " Close names:\n" + candidates(result.suggestions, withFiles = result.file == null)
+                    result.file != null -> " Use kt_read_structure to list its declarations."
+                    else -> " Use kt_find_symbol to search by partial name."
                 },
             )
+            is ReadSymbolResult.NotReady -> notReady(result.phase, result.elapsed)
             is ReadSymbolResult.OutOfSync -> error(
                 "index out of sync for ${result.symbol} in ${result.file}: its name is not where kotlin-lsp says; nothing returned, retry",
             )
@@ -164,6 +173,12 @@ internal class KronstadtTools(
             is ReadSymbolResult.OutsideProject -> error("Path is outside the project root: ${result.path}")
         }
     }
+
+    private fun String?.inFile() = this?.let { " in $it" } ?: ""
+
+    /** One candidate per line; resolved project-wide, each with the file to pass along with its path. */
+    private fun candidates(candidates: List<SymbolCandidate>, withFiles: Boolean) =
+        candidates.joinToString("\n") { if (withFiles) "  ${it.path} — ${it.file}" else "  ${it.path}" }
 
     /** Infrastructure failures (language server down, timeouts) become tool errors instead of protocol errors. */
     private suspend fun handle(request: CallToolRequest, block: suspend (JsonObject) -> CallToolResult): CallToolResult =

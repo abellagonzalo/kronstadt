@@ -7,6 +7,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.ReadSymbolResult
+import kronstadt.core.application.SymbolCandidate
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolKind
@@ -185,7 +186,7 @@ class KotlinLspContractTest {
         assertEquals("/** Overloads, a property and a function sharing a name, accessors, constructors and local functions. */", calculator[1])
         assertEquals(
             listOf("PLUS/apply", "TIMES/apply", "Operation/apply"),
-            assertIs<ReadSymbolResult.Ambiguous>(read(shapes, "apply")).candidates,
+            assertIs<ReadSymbolResult.Ambiguous>(read(shapes, "apply")).candidates.map { it.path },
         )
         assertEquals("// TIMES in $shapes, L57-59", assertIs<ReadSymbolResult.Found>(read(shapes, "TIMES")).text.lines().first())
     }
@@ -206,7 +207,7 @@ class KotlinLspContractTest {
         assertEquals("// Int.decorate in $spansKt, L39-39", header(spansKt, "Int.decorate"))
         assertEquals("// List<T>.second in $spansKt, L91-91", header(spansKt, "List<T>.second"))
         assertEquals("// String.firstChar in $spansKt, L93-94", header(spansKt, "String.firstChar"))
-        assertEquals(listOf("String.shout"), assertIs<ReadSymbolResult.NotFound>(read(shapes, "shout")).suggestions)
+        assertEquals(listOf("String.shout"), assertIs<ReadSymbolResult.NotFound>(read(shapes, "shout")).suggestions.map { it.path })
 
         // A bare name prefers the property; parentheses select the function.
         assertEquals("// size in $spansKt, L46-46", header(spansKt, "Sized/size"))
@@ -232,5 +233,38 @@ class KotlinLspContractTest {
             assertIs<ReadSymbolResult.NotFound>(read(spansKt, path), path)
         }
         assertIs<ReadSymbolResult.NotFound>(read(shapes, "sumOfSquares/square"))
+    }
+
+    @Test
+    @Order(11)
+    fun `kt_read_symbol resolves Symbol Paths without a file, through each candidate's own tree`() = runBlocking<Unit> {
+        val read = ReadSymbol(files, lsp)
+        val shapes = "src/main/kotlin/fixture/Shapes.kt"
+        val spansKt = "src/main/kotlin/fixture/Spans.kt"
+        val alpha = "src/main/kotlin/fixture/alpha/Shape.kt"
+        val beta = "src/main/kotlin/fixture/beta/Shape.kt"
+        suspend fun header(path: String) = assertIs<ReadSymbolResult.Found>(read(null, path), path).text.lines().first()
+
+        assertEquals("// parse(String, Int) in $shapes, L23-23", header("Calculator/parse(String,Int)"))
+        // Same-named classes in two packages: ambiguous, until a package prefix narrows them.
+        assertEquals(
+            listOf(SymbolCandidate("Shape", alpha), SymbolCandidate("Shape", beta)),
+            assertIs<ReadSymbolResult.Ambiguous>(read(null, "Shape")).candidates,
+        )
+        assertEquals("// Shape in $alpha, L3-3", header("fixture.alpha/Shape"))
+        assertEquals("// Shape in $beta, L3-3", header("fixture.beta/Shape"))
+        // The index drops receivers and names constructors after their class; the trees decide.
+        assertEquals("// String.shout in $shapes, L64-65", header("String.shout"))
+        assertEquals("// Box/constructor(Int) in $spansKt, L55-55", header("Box/constructor(Int)"))
+        assertEquals("// create in $spansKt, L61-61", header("Widget/Companion/create"))
+        assertEquals("Companion", header("Widget/Companion").substringAfter("// ").substringBefore(" in "))
+        // The index matches substrings, not typos, so a miss looks up a prefix of the name too.
+        assertEquals(emptyList(), lsp.workspaceSymbols("Calculatr"))
+        // A miss suggests close names with their files; local declarations stay unaddressable.
+        assertEquals(
+            listOf(SymbolCandidate("Calculator", shapes)),
+            assertIs<ReadSymbolResult.NotFound>(read(null, "Calculatr")).suggestions,
+        )
+        assertIs<ReadSymbolResult.NotFound>(read(null, "sumOfSquares/square"))
     }
 }

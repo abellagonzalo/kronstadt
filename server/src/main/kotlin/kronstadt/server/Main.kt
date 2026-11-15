@@ -73,7 +73,7 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
     KronstadtTools(
         ReadStructure(files, intelligence),
         FindSymbol(intelligence, config.readinessTimeout),
-        ReadSymbol(files, intelligence),
+        ReadSymbol(files, intelligence, config.readinessTimeout),
         files,
     ).registerOn(server)
 

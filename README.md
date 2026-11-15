@@ -9,7 +9,7 @@ backed by JetBrains' [kotlin-lsp](https://github.com/Kotlin/kotlin-lsp) (see ADR
 |---|---|---|
 | `kt_read_structure` | ✅ | Skeleton of a file: declarations with their canonical Symbol Path, signature and line span, no bodies |
 | `kt_find_symbol` | ✅ | Project-wide declaration search by (partial) name, optional kind filter |
-| `kt_read_symbol` | ✅ | One declaration's exact source (KDoc, annotations, body), addressed by file and Symbol Path, e.g. `Calculator/parse(String)` |
+| `kt_read_symbol` | ✅ | One declaration's exact source (KDoc, annotations, body), addressed by Symbol Path, e.g. `Calculator/parse(String)`; the file is optional (`com.example.a/Config` narrows by package) |
 | `kt_find_usages` | planned | |
 | `kt_replace_symbol` | planned | Replace a declaration by name; validate with diagnostics before writing to disk |
 | `kt_insert_after` | planned | |

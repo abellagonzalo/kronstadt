@@ -7,10 +7,14 @@ package kronstadt.core.domain
  * A segment may carry a parameter-type signature, `parse(String)`, compared to the language server's `detail`
  * after whitespace is removed: no type resolution, no positional index. An extension's receiver is written before the
  * name, Kotlin-style (`String.shout`), and is compared the same way.
+ *
+ * A dotted [packageName] may come first (`com.example.a/Config`): it narrows a file-less lookup to that package and
+ * anchors the path at the top level, like a fully qualified name.
  */
-public data class SymbolPath(val segments: List<Segment>, val anchored: Boolean = false) {
+public data class SymbolPath(val segments: List<Segment>, val anchored: Boolean = false, val packageName: String? = null) {
     init {
         require(segments.isNotEmpty()) { "a Symbol Path has at least one segment" }
+        require(packageName == null || anchored) { "a package prefix anchors the path at the top level" }
     }
 
     public data class Segment(val name: String, val signature: String? = null, val receiver: String? = null) {
@@ -19,10 +23,15 @@ public data class SymbolPath(val segments: List<Segment>, val anchored: Boolean 
     }
 
     /** The path in exactly the syntax [parse] accepts. */
-    override fun toString(): String = (if (anchored) "/" else "") + segments.joinToString("/")
+    override fun toString(): String = when {
+        packageName != null -> "$packageName/"
+        anchored -> "/"
+        else -> ""
+    } + segments.joinToString("/")
 
     public companion object {
         private val plainName = Regex("[\\p{L}_][\\p{L}\\p{N}_]*")
+        private val dottedPackage = Regex("[\\p{L}_][\\p{L}\\p{N}_]*(\\.[\\p{L}_][\\p{L}\\p{N}_]*)+")
 
         /** Names that aren't plain identifiers are written in backticks, as in Kotlin source. */
         private fun quote(name: String) = if (plainName.matches(name)) name else "`$name`"
@@ -31,9 +40,12 @@ public data class SymbolPath(val segments: List<Segment>, val anchored: Boolean 
         public fun parse(text: String): Result<SymbolPath> = runCatching {
             val trimmed = text.trim()
             require(trimmed.isNotEmpty()) { "Symbol Path is empty" }
-            val anchored = trimmed.startsWith("/")
-            val segments = splitSegments(trimmed.removePrefix("/")).map(::parseSegment)
-            SymbolPath(segments, anchored)
+            val parts = splitSegments(trimmed.removePrefix("/"))
+            // A dotted first segment followed by others is a package: an extension (the other reading of a dot)
+            // contains no addressable Symbols.
+            val packageName = parts.first().trim().takeIf { parts.size > 1 && dottedPackage.matches(it) }
+            val segments = (if (packageName == null) parts else parts.drop(1)).map(::parseSegment)
+            SymbolPath(segments, anchored = trimmed.startsWith("/") || packageName != null, packageName = packageName)
         }
 
         /** Splits at `/` outside parentheses and backticks. */
