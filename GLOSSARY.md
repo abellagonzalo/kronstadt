@@ -39,3 +39,7 @@ _Avoid_: check, lint, verify
 **Write-back**:
 Writing a validated edit from the Shadow Workspace to the file on disk.
 _Avoid_: commit (clashes with git), flush, save, persist
+
+**Index Seed**:
+A repo's snapshot of a language-server index, taken when an instance shuts down cleanly, from which a new worktree starts instead of indexing from scratch.
+_Avoid_: template, cache, warm index
