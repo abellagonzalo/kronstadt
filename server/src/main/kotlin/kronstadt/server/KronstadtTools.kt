@@ -23,7 +23,6 @@ import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.ReadSymbolResult
 import kronstadt.core.application.SymbolCandidate
 import kronstadt.core.domain.SymbolKind
-import kronstadt.core.port.FileStore
 import kotlin.time.Duration
 
 /**
@@ -34,7 +33,6 @@ internal class KronstadtTools(
     private val readStructure: ReadStructure,
     private val findSymbol: FindSymbol,
     private val readSymbol: ReadSymbol,
-    private val files: FileStore,
 ) {
     fun registerOn(server: Server) {
         server.addTool(
@@ -58,8 +56,10 @@ internal class KronstadtTools(
         server.addTool(
             name = "kt_find_symbol",
             description = "Finds Kotlin declarations (classes, interfaces, functions, properties...) by exact or " +
-                "partial name across the project using the language server's index. Returns kind, file and line. " +
-                "Prefer this over grep: it matches declarations only, not comments or call sites.",
+                "partial name (case-insensitive) in the project's own source, using the language server's index. Results " +
+                "are grouped by file; each line shows the kind, the canonical Symbol Path (pass it with its file to " +
+                "kt_read_symbol and the other tools) and the line span. Prefer this over grep: it matches " +
+                "declarations only, not comments or call sites.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
                     stringProperty("query", "Exact or partial symbol name, e.g. 'UserRepository' or 'calculateTax'.")
@@ -125,10 +125,15 @@ internal class KronstadtTools(
         return when (val result = findSymbol(query, kind, limit)) {
             is FindSymbolResult.Found -> text(
                 buildString {
-                    result.symbols.forEach { s ->
-                        append(s.kind.name).append(' ').append(s.name)
-                        s.containerName?.let { append(" in ").append(it) }
-                        append(" — ").append(files.display(s.file)).append(':').append(s.range.start.line + 1).append('\n')
+                    // One header per file, so a broad query doesn't repeat the package and path on every line.
+                    result.files.forEach { group ->
+                        append(group.file).append('\n')
+                        group.symbols.forEach { s ->
+                            append("  ")
+                            // A constructor's path already says `constructor`.
+                            if (s.kind != SymbolKind.CONSTRUCTOR) append(s.kind.keyword).append(' ')
+                            append(s.path).append("  // L").append(s.firstLine).append('-').append(s.lastLine).append('\n')
+                        }
                     }
                     if (result.truncated) append("(more results omitted; refine the query or raise limit)\n")
                 }.trimEnd(),

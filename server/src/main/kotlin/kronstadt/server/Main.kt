@@ -72,9 +72,8 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
     val intelligence = DeferredCodeIntelligence(languageServer)
     KronstadtTools(
         ReadStructure(files, intelligence),
-        FindSymbol(intelligence, config.readinessTimeout),
+        FindSymbol(files, intelligence, config.readinessTimeout),
         ReadSymbol(files, intelligence, config.readinessTimeout),
-        files,
     ).registerOn(server)
 
     val transport = StdioServerTransport(System.`in`.asSource().buffered(), protocolOut.asSink().buffered())

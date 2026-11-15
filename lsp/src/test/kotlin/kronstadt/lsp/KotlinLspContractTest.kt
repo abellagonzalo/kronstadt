@@ -5,6 +5,10 @@ package kronstadt.lsp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kronstadt.core.application.FileMatches
+import kronstadt.core.application.FindSymbol
+import kronstadt.core.application.FindSymbolResult
+import kronstadt.core.application.FoundSymbol
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.ReadSymbolResult
 import kronstadt.core.application.SymbolCandidate
@@ -266,5 +270,43 @@ class KotlinLspContractTest {
             assertIs<ReadSymbolResult.NotFound>(read(null, "Calculatr")).suggestions,
         )
         assertIs<ReadSymbolResult.NotFound>(read(null, "sumOfSquares/square"))
+    }
+
+    @Test
+    @Order(12)
+    fun `kt_find_symbol prints canonical Symbol Paths of addressable declarations in project source`() = runBlocking<Unit> {
+        val find = FindSymbol(files, lsp)
+        val shapes = "src/main/kotlin/fixture/Shapes.kt"
+        suspend fun found(query: String, kind: SymbolKind? = null) = assertIs<FindSymbolResult.Found>(find(query, kind), query).files
+
+        assertEquals(
+            listOf(
+                FileMatches(
+                    shapes,
+                    listOf(
+                        FoundSymbol(SymbolKind.FUNCTION, "parse(String)", 21, 21),
+                        FoundSymbol(SymbolKind.FUNCTION, "parse(String, Int)", 23, 23),
+                    ),
+                ),
+            ),
+            found("parse").map { group -> group.copy(symbols = group.symbols.sortedBy { it.firstLine }) },
+        )
+        // The index drops receivers; the tree puts them back.
+        assertEquals(listOf(FileMatches(shapes, listOf(FoundSymbol(SymbolKind.FUNCTION, "String.shout", 64, 65)))), found("shout"))
+        assertEquals(
+            setOf(
+                FileMatches("src/main/kotlin/fixture/alpha/Shape.kt", listOf(FoundSymbol(SymbolKind.CLASS, "Shape", 3, 3))),
+                FileMatches("src/main/kotlin/fixture/beta/Shape.kt", listOf(FoundSymbol(SymbolKind.CLASS, "Shape", 3, 3))),
+            ),
+            found("Shape", SymbolKind.CLASS).toSet(),
+        )
+        // The index has no constructors or unnamed companions, so a class name finds the class alone.
+        assertEquals(listOf("Calculator"), found("Calculator").flatMap { it.symbols }.map { it.path })
+        assertIs<FindSymbolResult.NoMatches>(find("Companion"))
+        assertEquals(listOf("Factory"), found("Factory").flatMap { it.symbols }.map { it.path })
+        // The index lists a backticked name twice, without backticks; it is found once, quoted as a path.
+        assertEquals(listOf("`backticked name`"), found("backticked").flatMap { it.symbols }.map { it.path })
+        // The local `square` isn't addressable; the index's substring match finds `sumOfSquares` too.
+        assertEquals(listOf("sumOfSquares"), found("square").flatMap { it.symbols }.map { it.path })
     }
 }

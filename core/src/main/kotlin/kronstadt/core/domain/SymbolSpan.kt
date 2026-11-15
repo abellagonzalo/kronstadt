@@ -17,6 +17,16 @@ public data class SymbolSpan(val firstLine: Int, val lastLine: Int, val text: St
 
     public companion object {
         /**
+         * The 0-based first and last lines a listing shows for [symbol]: its Symbol Span's, as `kt_read_symbol` reports
+         * them, or its declaration's when it has no whole-line span (it shares a line with other code).
+         */
+        public fun lines(document: TextDocument, symbol: CodeSymbol): Pair<Int, Int> =
+            when (val computation = of(document, symbol)) {
+                is Computation.Computed -> computation.span.firstLine to computation.span.lastLine
+                else -> symbol.range.start.line to symbol.range.end.line
+            }
+
+        /**
          * Trusts the language server's `range` as the span, with guards: the name must be where `selectionRange`
          * says, and only whitespace (or an end-of-line comment) may share the first and last lines.
          */

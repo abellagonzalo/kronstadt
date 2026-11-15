@@ -27,19 +27,9 @@ public object StructureRenderer {
         tree.signature(node)
             ?.takeUnless { it == path.segments.last().signature?.let { params -> "($params)" } }
             ?.let { append("  ").append(it) }
-        val (first, last) = lines(document, symbol)
+        val (first, last) = SymbolSpan.lines(document, symbol)
         append("  // L").append(first + 1).append('-').append(last + 1)
     }
-
-    /**
-     * The Symbol Span's lines, as `kt_read_symbol` reports them. A Symbol without a whole-line span (it shares a line
-     * with other code) reports its declaration's lines.
-     */
-    private fun lines(document: TextDocument, symbol: CodeSymbol): Pair<Int, Int> =
-        when (val computation = SymbolSpan.of(document, symbol)) {
-            is SymbolSpan.Computation.Computed -> computation.span.firstLine to computation.span.lastLine
-            else -> symbol.range.start.line to symbol.range.end.line
-        }
 
     private fun escapeAttribute(s: String): String =
         s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")

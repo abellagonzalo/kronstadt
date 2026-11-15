@@ -32,8 +32,6 @@ internal class SymbolResolver(
         data class OutsideProject(val path: String) : Resolution
     }
 
-    private class Analysed(val file: Path, val document: TextDocument, val tree: SymbolTree)
-
     /** Resolves [symbol] in [path]; without a [path], project-wide, narrowed to its package if it has one. */
     suspend fun resolve(path: String?, symbol: SymbolPath): Resolution =
         if (path == null) resolveProjectWide(symbol) else resolveInFile(path, symbol)
@@ -41,8 +39,8 @@ internal class SymbolResolver(
     /** Syntax-only: answers from the file's `documentSymbol` tree without waiting for the project index. */
     private suspend fun resolveInFile(path: String, symbol: SymbolPath): Resolution {
         val file = files.resolve(path) ?: return Resolution.OutsideProject(path)
-        if (!isKotlin(file)) return Resolution.NotKotlin(path)
-        val analysed = analyse(file) ?: return Resolution.FileNotFound(path)
+        if (!AnalysedFile.isKotlin(file)) return Resolution.NotKotlin(path)
+        val analysed = AnalysedFile.of(files, intelligence, file) ?: return Resolution.FileNotFound(path)
         return when (val resolution = analysed.tree.resolve(symbol)) {
             is SymbolTree.Resolution.Found -> found(analysed, resolution.node)
             is SymbolTree.Resolution.Ambiguous -> Resolution.Ambiguous(resolution.candidates.map { candidate(analysed, it) })
@@ -60,9 +58,9 @@ internal class SymbolResolver(
         if (readiness is Readiness.NotReady) return Resolution.NotReady(readiness.phase, readiness.elapsed)
         // Constructors and unnamed companions aren't indexed under those names; the class before them is.
         val query = symbol.segments.lastOrNull { it.name !in UNINDEXED_NAMES }?.name ?: return Resolution.NotFound(emptyList())
-        val hits = intelligence.workspaceSymbols(query).filter { isKotlin(it.file) }
-        val analysed = mutableMapOf<Path, Analysed?>()
-        suspend fun analysedOrNull(file: Path) = analysed.getOrPut(file) { analyse(file) }
+        val hits = intelligence.workspaceSymbols(query).filter { AnalysedFile.isKotlin(it.file) }
+        val analysed = mutableMapOf<Path, AnalysedFile?>()
+        suspend fun analysedOrNull(file: Path) = analysed.getOrPut(file) { AnalysedFile.of(files, intelligence, file) }
 
         val matches = hits.filter { it.name == query }.map { it.file }.distinct().sorted().flatMap { file ->
             val candidate = analysedOrNull(file)?.takeIf { inPackage(it, symbol) } ?: return@flatMap emptyList()
@@ -78,7 +76,7 @@ internal class SymbolResolver(
         // Close names live in the files the index found for names like the wanted one, closest first. The index
         // matches substrings, not typos, so a prefix of the name is looked up too.
         val prefix = query.take(maxOf(MIN_PREFIX, query.length / 2))
-        val similar = hits + if (prefix != query) intelligence.workspaceSymbols(prefix).filter { isKotlin(it.file) } else emptyList()
+        val similar = hits + if (prefix != query) intelligence.workspaceSymbols(prefix).filter { AnalysedFile.isKotlin(it.file) } else emptyList()
         val suggestionFiles = similar.sortedBy { SymbolTree.distance(it.name.lowercase(), query.lowercase()) }
             .map { it.file }.distinct().take(MAX_SUGGESTIONS)
         val wanted = symbol.segments.last().name.lowercase()
@@ -96,24 +94,13 @@ internal class SymbolResolver(
         return Resolution.NotFound(suggestions.take(MAX_SUGGESTIONS))
     }
 
-    /** Reads and analyses [file], closing it right away; null if it doesn't exist. */
-    private suspend fun analyse(file: Path): Analysed? {
-        val document = files.read(file) ?: return null
-        val tree = try {
-            SymbolTree(intelligence.documentSymbols(file, document))
-        } finally {
-            intelligence.closeDocument(file)
-        }
-        return Analysed(file, document, tree)
-    }
-
-    private fun found(analysed: Analysed, node: SymbolTree.Node) =
+    private fun found(analysed: AnalysedFile, node: SymbolTree.Node) =
         Resolution.Found(analysed.file, analysed.document, analysed.tree, node)
 
-    private fun candidate(analysed: Analysed, node: SymbolTree.Node) =
+    private fun candidate(analysed: AnalysedFile, node: SymbolTree.Node) =
         SymbolCandidate(analysed.tree.canonicalPath(node).toString(), files.display(analysed.file))
 
-    private fun inPackage(analysed: Analysed, symbol: SymbolPath) =
+    private fun inPackage(analysed: AnalysedFile, symbol: SymbolPath) =
         symbol.packageName == null || packageOf(analysed.document) == symbol.packageName
 
     private companion object {
@@ -127,6 +114,5 @@ internal class SymbolResolver(
         fun packageOf(document: TextDocument): String =
             packageHeader.find(document.text)?.groupValues?.get(1)?.replace("`", "").orEmpty()
 
-        fun isKotlin(file: Path) = file.fileName.toString().let { it.endsWith(".kt") || it.endsWith(".kts") }
     }
 }
