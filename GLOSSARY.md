@@ -16,6 +16,10 @@ _Avoid_: name path, FQN, selector, locator
 Kronstadt's in-memory copy of the files one edit touches, which the language server sees and validates before Write-back. It lasts only as long as that edit.
 _Avoid_: shadow file system, in-memory buffer, working memory copy
 
+**Validation**:
+Checking the Shadow Workspace for errors the edit introduced, before Write-back. A failed Validation rejects the whole edit.
+_Avoid_: check, lint, verify
+
 **Write-back**:
 Writing a validated edit from the Shadow Workspace to the file on disk.
 _Avoid_: commit (clashes with git), flush, save, persist
