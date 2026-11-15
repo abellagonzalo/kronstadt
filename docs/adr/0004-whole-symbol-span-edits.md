@@ -1,0 +1,20 @@
+# Edit whole Symbol Spans through one batched kt_edit tool
+
+Agents change code with a single `kt_edit` tool that takes an ordered list of Operations: `replace`, `insert_before`, `insert_after`, `delete` and `edit_in`. Each Operation names a Symbol Path. `replace` and `delete` act on the whole Symbol Span: KDoc or the comments directly above, annotations, modifiers, the declaration, and a comment at the end of its last line. The agent sends the complete new text, and Kronstadt keeps nothing from the old span implicitly. `kt_read_symbol` returns exactly that span, so the agent always sees what it will replace. A small change inside a large Symbol uses `edit_in`: an exact string that must occur once inside the span, replaced literally.
+
+Operations run in order against the Shadow Workspace, and each resolves its Symbol Path against the state the previous Operation left. They may span several files. The Edit gets one Validation and one all-or-nothing Write-back. Rename is a separate tool, `kt_rename_symbol`, because kotlin-lsp computes it across files and it can't be batched.
+
+## Considered options
+
+- **Body-only replace (Serena's `replace_symbol_body`)**: rejected. Serena's most common bug is a replace that reports `OK` but silently corrupts the file, because the server's range doesn't match what the agent thinks the "body" is. A span the agent reads verbatim removes that guess.
+- **One tool per Operation**: rejected. ADR 0003 forces multi-step edits that pass through broken states into one call, and per-Operation tools can't mix Operation types in a batch. Per-Operation tools plus a separate batch tool would offer two ways to do the same thing.
+- **Keeping the old KDoc or annotations when the new text omits them**: rejected as implicit magic. Omitting them deletes them.
+- **Whitespace-tolerant or regex matching in `edit_in`**: rejected because a fuzzy match produces a confident wrong edit.
+
+## Consequences
+
+- Rewriting one line of a large function costs either a full-span `replace` or an `edit_in` with exact text. Agents must copy that text from `kt_read_symbol` output, which is why that output has no line-number gutter.
+- Kronstadt trusts kotlin-lsp's `range` as the span, with three guards: the text at `selectionRange` must equal the name, the span extends to whole lines only when nothing else shares those lines, and Validation catches the rest. A change in how kotlin-lsp attaches comments changes the Symbol Span, which is another reason for the tested-version warning in ADR 0001.
+- Imports are explicit: each Operation may list imports to add. Kronstadt never runs organize-imports.
+
+Sources: [#9 What are the v1 write tools and their semantics?](https://github.com/abellagonzalo/kronstadt/issues/9), [#3 Prior art: Serena](https://github.com/abellagonzalo/kronstadt/issues/3), [ADR 0003](0003-disk-is-source-of-truth.md).

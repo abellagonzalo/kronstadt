@@ -12,6 +12,18 @@ _Avoid_: AST node, element
 The address that names exactly one Symbol: its chain of enclosing declaration names, optionally scoped to a file, with a signature only where a name alone is ambiguous.
 _Avoid_: name path, FQN, selector, locator
 
+**Symbol Span**:
+The full source text of a Symbol, as whole lines: its KDoc or the comments directly above it, its annotations, modifiers and declaration, and any comment at the end of its last line. It is what an agent reads and what replace and delete act on.
+_Avoid_: range, body, extent
+
+**Edit**:
+One write request: an ordered batch of Operations that is validated and written back as a whole, or rejected as a whole.
+_Avoid_: change, transaction, patch
+
+**Operation**:
+A single step inside an Edit (replace, insert before or after, delete, or a text replace inside a Symbol Span), aimed at one Symbol Path.
+_Avoid_: action, command, step
+
 **Shadow Workspace**:
 Kronstadt's in-memory copy of the files one edit touches, which the language server sees and validates before Write-back. It lasts only as long as that edit.
 _Avoid_: shadow file system, in-memory buffer, working memory copy
