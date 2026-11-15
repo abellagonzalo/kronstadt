@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "kronstadt": {
+      "type": "stdio",
+      "command": "server/build/install/kronstadt/bin/kronstadt",
+      "args": [],
+      "env": {}
+    }
+  }
+}
