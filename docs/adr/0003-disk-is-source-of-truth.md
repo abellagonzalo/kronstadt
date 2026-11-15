@@ -13,7 +13,7 @@ Write-back is guarded:
 
 - An edit made outside Kronstadt can be missing from `workspace/symbol` (`kt_find_symbol`) for a few seconds, until kotlin-lsp's watcher re-indexes it. A live test measured about 5 s for one file. We accept this lag. A watcher or check-on-use can be added later if evaluation shows the lag hurts.
 - No pending or validated edit survives a tool call. A multi-step edit that passes through broken intermediate states must be sent as one batch in a single call. A begin/commit flow across calls is not possible in v1.
-- We don't know whether kotlin-lsp rereads the disk as soon as it gets `didSave`/`didClose`. An acceptance test must show that `kt_find_symbol` sees an edit immediately after Write-back. If it doesn't, the fallback is to keep the written file open until the next call touches it.
+- We don't know whether kotlin-lsp rereads the disk as soon as it gets `didSave`/`didClose`. An acceptance test must show that `kt_find_symbol` sees an edit immediately after Write-back. If it doesn't, the fallback is to keep the written file open until the next call touches it. Settled in [#25](https://github.com/abellagonzalo/kronstadt/issues/25): kotlin-lsp 271.2085.0 doesn't (neither does `workspace/didChangeWatchedFiles`), so `LspCodeIntelligence` keeps a written document open after `didSave` for as long as later calls read that same text from disk. The first call that reads different text (an outside change) syncs it and closes the document, handing the file back to the watcher. Until a call touches it, an outside change to that one file is invisible to kotlin-lsp.
 
 ## Considered options
 

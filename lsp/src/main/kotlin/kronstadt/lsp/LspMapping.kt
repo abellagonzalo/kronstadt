@@ -1,16 +1,21 @@
 package kronstadt.lsp
 
 import kronstadt.core.domain.CodeSymbol
+import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Position
+import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextRange
+import org.eclipse.lsp4j.DiagnosticSeverity
+import org.eclipse.lsp4j.DocumentDiagnosticReport
 import org.eclipse.lsp4j.DocumentSymbol
 import org.eclipse.lsp4j.SymbolInformation
 import org.eclipse.lsp4j.WorkspaceSymbol
 import org.eclipse.lsp4j.jsonrpc.messages.Either
 import java.net.URI
 import java.nio.file.Path
+import org.eclipse.lsp4j.Diagnostic as LspDiagnostic
 import org.eclipse.lsp4j.Position as LspPosition
 import org.eclipse.lsp4j.Range as LspRange
 import org.eclipse.lsp4j.SymbolKind as LspSymbolKind
@@ -79,6 +84,29 @@ internal object LspMapping {
             }
         }
     }
+
+    /**
+     * A full report's diagnostics. An "unchanged" report can only answer a request that sent a previous result id,
+     * which we never do, so it is treated as a protocol error rather than as "no diagnostics".
+     */
+    fun diagnostics(report: DocumentDiagnosticReport?): List<Diagnostic> {
+        requireNotNull(report) { "language server returned no diagnostic report" }
+        check(report.isRelatedFullDocumentDiagnosticReport) { "language server returned an 'unchanged' diagnostic report unasked" }
+        return report.relatedFullDocumentDiagnosticReport.items.orEmpty().map(::diagnostic)
+    }
+
+    fun diagnostic(d: LspDiagnostic): Diagnostic = Diagnostic(
+        range = range(d.range),
+        // The spec says a missing severity is up to the client; an unknown finding is safest treated as an error.
+        severity = when (d.severity) {
+            DiagnosticSeverity.Warning -> Severity.WARNING
+            DiagnosticSeverity.Information -> Severity.INFORMATION
+            DiagnosticSeverity.Hint -> Severity.HINT
+            DiagnosticSeverity.Error, null -> Severity.ERROR
+        },
+        message = d.message?.map({ it }, { it.value }).orEmpty(),
+        code = d.code?.map({ it }, { it.toString() }),
+    )
 
     fun localPath(uri: String): Path? = runCatching {
         URI(uri).takeIf { it.scheme == "file" }?.let(Path::of)

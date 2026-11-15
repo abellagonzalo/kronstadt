@@ -1,6 +1,7 @@
 package kronstadt.core.port
 
 import kronstadt.core.domain.CodeSymbol
+import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextDocument
@@ -23,6 +24,19 @@ public interface CodeIntelligence {
      * analysed before it returns, so no document state survives a tool call. Closing a file that isn't open is a no-op.
      */
     public suspend fun closeDocument(file: Path)
+
+    /**
+     * Diagnostics for exactly [document] as the content of [file], pulled on demand. Like [documentSymbols] it opens
+     * the document, or changes its text, in the language server's view; each call is paired with a [closeDocument].
+     */
+    public suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic>
+
+    /**
+     * Tells the code intelligence that [document] is now [file]'s content on disk (Write-back). Callers still close
+     * the document as usual; an implementation may keep it open past that close, for as long as the disk still holds
+     * [document], if that is what makes project-wide search see the new text right away.
+     */
+    public suspend fun saveDocument(file: Path, document: TextDocument)
 
     /** Project-wide symbol search by (partial) name. Results outside the project, e.g. in dependencies, are excluded. */
     public suspend fun workspaceSymbols(query: String): List<SymbolLocation>

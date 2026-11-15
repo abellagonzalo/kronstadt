@@ -38,6 +38,17 @@ class ConfigTest {
     }
 
     @Test
+    fun `validation timeout defaults to 15 seconds, overridable by environment and argument, and must be positive`() {
+        assertEquals(15.seconds, Config.parse(emptyArray(), env = emptyMap()).validationTimeout)
+        assertEquals(30.seconds, Config.parse(emptyArray(), env = mapOf("KRONSTADT_VALIDATION_TIMEOUT" to "30")).validationTimeout)
+        assertEquals(
+            45.seconds,
+            Config.parse(arrayOf("--validation-timeout", "45"), env = mapOf("KRONSTADT_VALIDATION_TIMEOUT" to "30")).validationTimeout,
+        )
+        assertFailsWith<IllegalArgumentException> { Config.parse(arrayOf("--validation-timeout", "0"), env = emptyMap()) }
+    }
+
+    @Test
     fun `rejects unknown arguments`() {
         assertFailsWith<IllegalArgumentException> { Config.parse(arrayOf("--nope"), env = emptyMap()) }
     }

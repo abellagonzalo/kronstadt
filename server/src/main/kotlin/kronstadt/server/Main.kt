@@ -14,9 +14,11 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.io.asSink
 import kotlinx.io.asSource
 import kotlinx.io.buffered
+import kronstadt.core.application.Edit
 import kronstadt.core.application.FindSymbol
 import kronstadt.core.application.ReadStructure
 import kronstadt.core.application.ReadSymbol
+import kronstadt.core.application.WriteLock
 import kronstadt.lsp.LspCodeIntelligence
 import kronstadt.workspace.LocalFileStore
 import java.io.PrintStream
@@ -74,6 +76,7 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
         ReadStructure(files, intelligence),
         FindSymbol(files, intelligence, config.readinessTimeout),
         ReadSymbol(files, intelligence, config.readinessTimeout),
+        Edit(files, intelligence, config.readinessTimeout, config.validationTimeout, WriteLock()),
     ).registerOn(server)
 
     val transport = StdioServerTransport(System.`in`.asSource().buffered(), protocolOut.asSink().buffered())

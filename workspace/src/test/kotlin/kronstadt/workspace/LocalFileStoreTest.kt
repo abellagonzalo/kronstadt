@@ -1,14 +1,23 @@
 package kronstadt.workspace
 
 import kotlinx.coroutines.runBlocking
+import kronstadt.core.domain.TextDocument
+import kronstadt.core.port.WriteResult
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.PosixFilePermissions
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createSymbolicLinkPointingTo
+import kotlin.io.path.deleteExisting
+import kotlin.io.path.listDirectoryEntries
+import kotlin.io.path.name
+import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 class LocalFileStoreTest {
@@ -48,5 +57,44 @@ class LocalFileStoreTest {
         project.resolve("A.kt").writeText("class A")
         assertEquals("class A", store.read(project.resolve("A.kt"))?.text)
         assertNull(store.read(project.resolve("Missing.kt")))
+    }
+
+    @Test
+    fun `a hashed read's hash changes exactly when the file's bytes change`() = runBlocking {
+        val file = project.resolve("A.kt").apply { writeText("class A") }
+        val first = assertNotNull(store.readHashed(file))
+        assertEquals("class A", first.document.text)
+        assertEquals(first.hash, store.readHashed(file)?.hash)
+        file.writeText("class A ")
+        assertNotEquals(first.hash, store.readHashed(file)?.hash)
+        assertNull(store.readHashed(project.resolve("Missing.kt")))
+    }
+
+    @Test
+    fun `writes the new content when the file is unchanged since the read, keeping its permissions`() = runBlocking {
+        val file = project.resolve("A.kt").apply { writeText("class A\r\n") }
+        val permissions = PosixFilePermissions.fromString("rwxr-x---")
+        Files.setPosixFilePermissions(file, permissions)
+        val read = assertNotNull(store.readHashed(file))
+
+        assertEquals(WriteResult.Written, store.writeIfUnchanged(file, read.hash, TextDocument("class B\r\n")))
+
+        assertEquals("class B\r\n", file.readText())
+        assertEquals(permissions, Files.getPosixFilePermissions(file))
+        assertEquals(listOf("A.kt"), project.listDirectoryEntries().map { it.name }, "no temp file is left behind")
+    }
+
+    @Test
+    fun `refuses to write when the file changed or vanished since the read`() = runBlocking {
+        val file = project.resolve("A.kt").apply { writeText("class A") }
+        val read = assertNotNull(store.readHashed(file))
+        file.writeText("class Theirs")
+
+        assertEquals(WriteResult.ChangedOnDisk, store.writeIfUnchanged(file, read.hash, TextDocument("class Mine")))
+        assertEquals("class Theirs", file.readText())
+
+        file.deleteExisting()
+        assertEquals(WriteResult.ChangedOnDisk, store.writeIfUnchanged(file, read.hash, TextDocument("class Mine")))
+        assertEquals(emptyList(), project.listDirectoryEntries())
     }
 }

@@ -6,6 +6,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kronstadt.core.domain.CodeSymbol
+import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextDocument
@@ -15,6 +16,9 @@ import org.eclipse.lsp4j.ConfigurationParams
 import org.eclipse.lsp4j.DidChangeTextDocumentParams
 import org.eclipse.lsp4j.DidCloseTextDocumentParams
 import org.eclipse.lsp4j.DidOpenTextDocumentParams
+import org.eclipse.lsp4j.DidSaveTextDocumentParams
+import org.eclipse.lsp4j.DiagnosticCapabilities
+import org.eclipse.lsp4j.DocumentDiagnosticParams
 import org.eclipse.lsp4j.DocumentSymbolCapabilities
 import org.eclipse.lsp4j.DocumentSymbolParams
 import org.eclipse.lsp4j.InitializeParams
@@ -64,8 +68,12 @@ public class LspCodeIntelligence private constructor(
     public val serverVersion: String?,
 ) : CodeIntelligence, AutoCloseable {
 
-    /** [users] counts the calls that analysed this document and haven't closed it yet; read tools run concurrently. */
-    private data class OpenDocument(val version: Int, val text: String, val users: Int)
+    /**
+     * [users] counts the calls that analysed this document and haven't closed it yet; read tools run concurrently.
+     * A [retained] document stays open after its last close, for as long as calls find the disk unchanged since
+     * Kronstadt wrote it (see [saveDocument]).
+     */
+    private data class OpenDocument(val version: Int, val text: String, val users: Int, val retained: Boolean = false)
 
     private val syncLock = Mutex()
     private val openDocuments = mutableMapOf<String, OpenDocument>()
@@ -81,12 +89,49 @@ public class LspCodeIntelligence private constructor(
         val uri = LspMapping.uri(file)
         syncLock.withLock {
             val open = openDocuments[uri] ?: return@withLock
-            if (open.users > 1) {
-                openDocuments[uri] = open.copy(users = open.users - 1)
+            if (open.users > 1 || open.retained) {
+                openDocuments[uri] = open.copy(users = maxOf(open.users - 1, 0))
             } else {
                 openDocuments.remove(uri)
                 server.textDocumentService.didClose(DidCloseTextDocumentParams(TextDocumentIdentifier(uri)))
             }
+        }
+    }
+
+    /**
+     * Pulls `textDocument/diagnostic` for [document]. Read tools may sync the same file meanwhile (they don't take the
+     * write lock), so if its text changed while the request ran, the answer may describe other text: pull again.
+     */
+    override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> {
+        val uri = LspMapping.uri(file)
+        sync(uri, document)
+        repeat(MAX_DIAGNOSTIC_PULLS) {
+            val version = syncLock.withLock { openDocuments[uri]?.version }
+            val report = request { server.textDocumentService.diagnostic(DocumentDiagnosticParams(TextDocumentIdentifier(uri))) }
+            val unchanged = syncLock.withLock {
+                val open = openDocuments[uri]
+                open != null && open.version == version && open.text == document.text
+            }
+            if (unchanged) return LspMapping.diagnostics(report)
+            syncAgain(uri, document)
+        }
+        throw IllegalStateException("${file.fileName} kept changing while its diagnostics were pulled")
+    }
+
+    /**
+     * Sends `didSave` and retains the document: kotlin-lsp 271.2085.0 doesn't reread a file on `didSave`/`didClose`,
+     * so closing it would leave `workspace/symbol` on the old text until its file watcher catches up (ADR 0003). Open,
+     * the written text is what the index answers from. It stays open while calls read that same text from disk; the
+     * first call that reads other text (an outside change) syncs it and its close hands the file back to the watcher.
+     * A read tool may have synced the file meanwhile (it doesn't take the write lock), so [document] is put back first.
+     */
+    override suspend fun saveDocument(file: Path, document: TextDocument) {
+        val uri = LspMapping.uri(file)
+        syncAgain(uri, document)
+        syncLock.withLock {
+            val open = openDocuments[uri] ?: return@withLock
+            server.textDocumentService.didSave(DidSaveTextDocumentParams(TextDocumentIdentifier(uri)))
+            openDocuments[uri] = open.copy(retained = true)
         }
     }
 
@@ -118,6 +163,20 @@ public class LspCodeIntelligence private constructor(
         }
     }
 
+    /** Puts [document]'s text back without counting another user: the caller already holds the document open. */
+    private suspend fun syncAgain(uri: String, document: TextDocument) = syncLock.withLock {
+        val open = openDocuments[uri] ?: return@withLock
+        if (open.text == document.text) return@withLock
+        val version = open.version + 1
+        server.textDocumentService.didChange(
+            DidChangeTextDocumentParams(
+                VersionedTextDocumentIdentifier(uri, version),
+                listOf(TextDocumentContentChangeEvent(document.text)),
+            ),
+        )
+        openDocuments[uri] = open.copy(version = version, text = document.text)
+    }
+
     private suspend fun <T> request(call: () -> CompletableFuture<T>): T = awaitAlive(process, requestTimeout, call())
 
     override fun close() {
@@ -129,6 +188,8 @@ public class LspCodeIntelligence private constructor(
     }
 
     public companion object {
+        private const val MAX_DIAGNOSTIC_PULLS = 3
+
         /**
          * Spawns [command] (e.g. `kotlin-lsp --stdio`) in [projectRoot] and completes the LSP handshake.
          * The server's stderr is inherited, which is safe: MCP only uses our stdout.
@@ -191,6 +252,8 @@ public class LspCodeIntelligence private constructor(
                 textDocument = TextDocumentClientCapabilities().apply {
                     // Without this, servers return a flat list and we lose class -> member nesting.
                     documentSymbol = DocumentSymbolCapabilities().apply { hierarchicalDocumentSymbolSupport = true }
+                    // Validation pulls diagnostics for exactly the text it sent, instead of waiting for a push.
+                    diagnostic = DiagnosticCapabilities()
                 }
             }
         }

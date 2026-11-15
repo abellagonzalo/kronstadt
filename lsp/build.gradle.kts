@@ -8,6 +8,8 @@ dependencies {
     implementation(libs.lsp4j)
     implementation(libs.coroutines.core)
     testImplementation(libs.coroutines.test)
+    // The Write-back acceptance test writes through the real FileStore.
+    testImplementation(project(":workspace"))
 }
 
 // Seam 2: contract tests against a real kotlin-lsp (must be on PATH, or set KRONSTADT_LANGUAGE_SERVER).

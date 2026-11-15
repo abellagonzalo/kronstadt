@@ -6,6 +6,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.coroutines.CancellationException
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
@@ -15,12 +16,18 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+import kronstadt.core.application.Edit
+import kronstadt.core.application.EditResult
+import kronstadt.core.application.EditedFile
 import kronstadt.core.application.FindSymbol
 import kronstadt.core.application.FindSymbolResult
+import kronstadt.core.application.OperationFailure
+import kronstadt.core.application.Problem
 import kronstadt.core.application.ReadStructure
 import kronstadt.core.application.ReadStructureResult
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.ReadSymbolResult
+import kronstadt.core.application.Replace
 import kronstadt.core.application.SymbolCandidate
 import kronstadt.core.domain.SymbolKind
 import kotlin.time.Duration
@@ -33,6 +40,7 @@ internal class KronstadtTools(
     private val readStructure: ReadStructure,
     private val findSymbol: FindSymbol,
     private val readSymbol: ReadSymbol,
+    private val edit: Edit,
 ) {
     fun registerOn(server: Server) {
         server.addTool(
@@ -101,6 +109,121 @@ internal class KronstadtTools(
                 required = listOf("symbol"),
             ),
         ) { request -> handle(request) { readSymbol(it) } }
+
+        server.addTool(
+            name = "kt_edit",
+            description = "Changes Kotlin code by Symbol, validated against the compiler before anything is written. " +
+                "A 'replace' Operation swaps a Symbol's whole span (exactly what kt_read_symbol returns: KDoc or " +
+                "comments above, annotations, modifiers, declaration, end-of-line comment) for your code; omitted " +
+                "KDoc or annotations are deleted. The code may rename the declaration or hold several. It is " +
+                "re-indented to the target's column, so indentation needn't match. The file is written only if the " +
+                "edit adds no compiler errors to it; otherwise nothing is written and the new errors are listed. " +
+                "Currently takes exactly one replace Operation.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("operations") {
+                        put("type", "array")
+                        put("description", "The Operations of this Edit, in order. Currently exactly one.")
+                        putJsonObject("items") {
+                            put("type", "object")
+                            putJsonObject("properties") {
+                                putJsonObject("type") {
+                                    put("type", "string")
+                                    putJsonArray("enum") { add("replace") }
+                                    put("description", "The Operation.")
+                                }
+                                stringProperty(
+                                    "symbol",
+                                    "Symbol Path of the target, as kt_read_symbol takes it, e.g. 'OrderController/create'.",
+                                )
+                                stringProperty(
+                                    "file",
+                                    "Optional path to the target's .kt/.kts file, absolute or relative to the project " +
+                                        "root. Without it the Symbol Path is resolved across the project.",
+                                )
+                                stringProperty("code", "The complete new source for the Symbol's whole span.")
+                            }
+                            putJsonArray("required") {
+                                add("type")
+                                add("symbol")
+                                add("code")
+                            }
+                        }
+                    }
+                },
+                required = listOf("operations"),
+            ),
+        ) { request -> handle(request) { edit(it) } }
+    }
+
+    private suspend fun edit(args: JsonObject): CallToolResult {
+        val operations = args["operations"] as? JsonArray ?: return error("Missing required argument: operations (an array)")
+        if (operations.size != 1) return error("kt_edit currently takes exactly one Operation; got ${operations.size}.")
+        val operation = operations.single() as? JsonObject ?: return error("Operation 0 must be an object.")
+        val type = operation.string("type") ?: return error("Operation 0: missing 'type'.")
+        if (type != "replace") return error("Operation 0: unsupported type '$type'; kt_edit currently supports 'replace'.")
+        val symbol = operation.string("symbol") ?: return error("Operation 0: missing 'symbol'.")
+        val code = operation.string("code") ?: return error("Operation 0: missing 'code'.")
+        val file = operation.string("file")?.takeIf { it.isNotBlank() }
+        return when (val result = edit(Replace(file, symbol, code))) {
+            is EditResult.Written -> text(result.files.joinToString("\n") { written(it) })
+            is EditResult.Rejected -> error(
+                buildString {
+                    val count = result.newErrors.size
+                    append("Edit rejected: $count new error${if (count == 1) "" else "s"}; nothing written.\n")
+                    result.newErrors.forEach { append(problem(it, withFile = true)) }
+                    append("fix and resend the whole batch")
+                },
+            )
+            is EditResult.ChangedOnDisk -> error("${result.file} changed on disk since read; re-read and retry")
+            EditResult.ValidationTimedOut -> error("validation timed out; nothing written")
+            is EditResult.NotReady -> notReady(result.phase, result.elapsed)
+            is EditResult.OperationFailed -> error("Operation ${result.index}: ${failure(result.failure)} Nothing written.")
+        }
+    }
+
+    /** One file's outcome: the Symbols the edit left, then new warnings and the errors it already had. */
+    private fun written(file: EditedFile) = buildString {
+        append("Edited ").append(file.file).append('\n')
+        file.symbols.forEach { append("  ").append(it.path).append("  // L").append(it.firstLine).append('-').append(it.lastLine).append('\n') }
+        if (file.newWarnings.isNotEmpty()) {
+            append("New warnings:\n")
+            file.newWarnings.forEach { append(problem(it, withFile = false)) }
+            if (file.moreWarnings > 0) append("  (${file.moreWarnings} more)\n")
+        }
+        if (file.preexistingErrors > 0) {
+            append("${file.preexistingErrors} error${if (file.preexistingErrors == 1) " was" else "s were"} already in the file.\n")
+        }
+    }.trimEnd()
+
+    private fun problem(problem: Problem, withFile: Boolean) = buildString {
+        append("  ")
+        if (withFile) append(problem.file).append(':')
+        append('L').append(problem.line)
+        append(" in ").append(problem.symbol ?: "(file level)")
+        append(": ").append(problem.message).append('\n')
+        append("      ").append(problem.source).append('\n')
+    }
+
+    private fun failure(failure: OperationFailure): String = when (failure) {
+        is OperationFailure.InvalidPath -> "invalid Symbol Path '${failure.symbol}': ${failure.reason}."
+        is OperationFailure.Ambiguous ->
+            "'${failure.symbol}' matches ${failure.candidates.size} symbols${failure.file.inFile()}; pass one of" +
+                (if (failure.file == null) " these paths with its file" else "") + ":\n" +
+                candidates(failure.candidates, withFiles = failure.file == null) + "\n"
+        is OperationFailure.NotFound -> "no symbol '${failure.symbol}'${failure.file.inFile()}." + when {
+            failure.suggestions.isNotEmpty() -> " Close names:\n" + candidates(failure.suggestions, withFiles = failure.file == null) + "\n"
+            failure.file != null -> " Use kt_read_structure to list its declarations."
+            else -> " Use kt_find_symbol to search by partial name."
+        }
+        is OperationFailure.OutOfSync ->
+            "index out of sync for ${failure.symbol} in ${failure.file}: its name is not where kotlin-lsp says; retry."
+        is OperationFailure.SharedLine ->
+            "${failure.symbol} shares line ${failure.line} of ${failure.file} with other code, so it has no whole-line " +
+                "span; replace the enclosing symbol instead."
+        is OperationFailure.FileNotFound -> "file not found: ${failure.path}."
+        is OperationFailure.NotKotlin -> "not a Kotlin file: ${failure.path}. kt_edit only supports .kt and .kts files."
+        is OperationFailure.OutsideProject -> "path is outside the project root: ${failure.path}."
     }
 
     private suspend fun readStructure(args: JsonObject): CallToolResult {

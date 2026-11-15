@@ -3,6 +3,7 @@ package kronstadt.server
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.withTimeoutOrNull
 import kronstadt.core.domain.CodeSymbol
+import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextDocument
@@ -23,6 +24,14 @@ internal class DeferredCodeIntelligence(private val delegate: Deferred<Result<Co
     /** Nothing can be open before startup finished, so there's nothing to close. */
     override suspend fun closeDocument(file: Path) {
         if (delegate.isCompleted) delegate.await().getOrNull()?.closeDocument(file)
+    }
+
+    override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> =
+        delegate.await().getOrThrow().diagnostics(file, document)
+
+    /** Like [closeDocument]: only a started language server can have the document open. */
+    override suspend fun saveDocument(file: Path, document: TextDocument) {
+        if (delegate.isCompleted) delegate.await().getOrNull()?.saveDocument(file, document)
     }
 
     override suspend fun workspaceSymbols(query: String): List<SymbolLocation> =

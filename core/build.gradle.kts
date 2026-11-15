@@ -4,5 +4,7 @@ plugins {
 }
 
 dependencies {
+    // Coroutines aren't I/O: the write lock and the Validation timeout need them.
+    implementation(libs.coroutines.core)
     testImplementation(libs.coroutines.test)
 }

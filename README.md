@@ -11,8 +11,7 @@ backed by JetBrains' [kotlin-lsp](https://github.com/Kotlin/kotlin-lsp) (see ADR
 | `kt_find_symbol` | ✅ | Declaration search by (partial) name in project source, optional kind filter; results grouped by file with their canonical Symbol Path and line span |
 | `kt_read_symbol` | ✅ | One declaration's exact source (KDoc, annotations, body), addressed by Symbol Path, e.g. `Calculator/parse(String)`; the file is optional (`com.example.a/Config` narrows by package) |
 | `kt_find_usages` | planned | |
-| `kt_replace_symbol` | planned | Replace a declaration by name; validate with diagnostics before writing to disk |
-| `kt_insert_after` | planned | |
+| `kt_edit` | 🚧 | Replace a declaration's whole Symbol Span, re-indented to fit; written only if it adds no compiler errors (one `replace` per call so far; batches and the other Operations are planned) |
 
 ## Architecture
 
@@ -21,9 +20,11 @@ Ports and adapters. Gradle modules make the build enforce the boundary: `core` c
 ```
 core/        pure Kotlin, no I/O
   domain/      Position, TextRange, TextDocument (offset math), CodeSymbol, StructureRenderer,
-               SymbolPath, SymbolTree (resolution, canonical paths), SymbolSpan
+               SymbolPath, SymbolTree (resolution, canonical paths), SymbolSpan, FileLayout (re-indent),
+               Diagnostic, Validation (new-error diff)
   port/        CodeIntelligence, FileStore
-  application/ ReadStructure, FindSymbol, ReadSymbol — one use case per MCP tool, returning sealed results
+  application/ ReadStructure, FindSymbol, ReadSymbol, Edit — one use case per MCP tool, returning sealed results;
+               ShadowWorkspace (documents one Edit opens), WriteLock
 lsp/         CodeIntelligence over kotlin-lsp (lsp4j), incl. readiness tracking
 workspace/   FileStore over the local disk, confined to the project root
 server/      MCP stdio server: tool schemas -> use cases; composition root (Main.kt)

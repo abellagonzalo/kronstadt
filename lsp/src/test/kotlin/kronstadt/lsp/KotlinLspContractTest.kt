@@ -5,18 +5,25 @@ package kronstadt.lsp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kronstadt.core.application.Edit
+import kronstadt.core.application.EditResult
+import kronstadt.core.application.EditedSymbol
 import kronstadt.core.application.FileMatches
 import kronstadt.core.application.FindSymbol
 import kronstadt.core.application.FindSymbolResult
 import kronstadt.core.application.FoundSymbol
+import kronstadt.core.application.Problem
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.ReadSymbolResult
+import kronstadt.core.application.Replace
 import kronstadt.core.application.SymbolCandidate
 import kronstadt.core.domain.CodeSymbol
+import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
+import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.TextDocument
-import kronstadt.core.port.FileStore
+import kronstadt.workspace.LocalFileStore
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.MethodOrderer
@@ -32,6 +39,7 @@ import kotlin.io.path.deleteRecursively
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -169,11 +177,7 @@ class KotlinLspContractTest {
         assertNull(symbols.find("Documented").detail)
     }
 
-    private val files = object : FileStore {
-        override fun resolve(path: String): Path = project.resolve(path)
-        override suspend fun read(file: Path): TextDocument = TextDocument(Files.readString(file))
-        override fun display(file: Path): String = project.relativize(file).toString()
-    }
+    private val files by lazy { LocalFileStore(project) }
 
     @Test
     @Order(9)
@@ -308,5 +312,60 @@ class KotlinLspContractTest {
         assertEquals(listOf("`backticked name`"), found("backticked").flatMap { it.symbols }.map { it.path })
         // The local `square` isn't addressable; the index's substring match finds `sumOfSquares` too.
         assertEquals(listOf("sumOfSquares"), found("square").flatMap { it.symbols }.map { it.path })
+    }
+
+    // Validation (ADR 0003): diagnostics are pulled for the exact text the Shadow Workspace sent.
+
+    @Test
+    @Order(13)
+    fun `pulled diagnostics describe exactly the document text sent, whatever is on disk`() = runBlocking<Unit> {
+        val file = project.resolve("src/main/kotlin/fixture/alpha/Shape.kt")
+        val disk = TextDocument(Files.readString(file))
+        val broken = TextDocument(disk.text.replace("class Shape(val sides: Int)", "class Shape(val sides: Int) {\n    fun name(): Int = \"x\"\n}"))
+        try {
+            assertEquals(emptyList(), lsp.diagnostics(file, disk).filter { it.severity == Severity.ERROR })
+
+            val errors = lsp.diagnostics(file, broken).filter { it.severity == Severity.ERROR }
+            assertEquals(1, errors.size, "diagnostics: $errors")
+            assertEquals(Position(3, 22), errors.single().range.start, "diagnostics: $errors")
+            assertNotNull(errors.single().code, "diagnostics: $errors")
+
+            assertEquals(emptyList(), lsp.diagnostics(file, disk).filter { it.severity == Severity.ERROR })
+        } finally {
+            repeat(3) { lsp.closeDocument(file) }
+        }
+    }
+
+    // kt_edit end to end (ADR 0003): Shadow Workspace, Validation and Write-back against the real server and disk.
+
+    @Test
+    @Order(14)
+    fun `kt_edit rejects a replace that adds a compiler error, writing nothing`() = runBlocking<Unit> {
+        val path = "src/main/kotlin/fixture/alpha/Shape.kt"
+        val before = Files.readString(project.resolve(path))
+
+        val result = Edit(files, lsp)(Replace(path, "Shape", "class Shape(val sides: Int) {\n    fun name(): Int = \"x\"\n}"))
+
+        val problem = assertIs<EditResult.Rejected>(result, "$result").newErrors.single()
+        assertEquals(Problem(path, "name", 4, problem.message, "fun name(): Int = \"x\""), problem)
+        assertEquals(before, Files.readString(project.resolve(path)))
+    }
+
+    @Test
+    @Order(15)
+    fun `kt_edit writes a valid replace back, and kt_find_symbol sees it right away`() = runBlocking<Unit> {
+        val path = "src/main/kotlin/fixture/alpha/Shape.kt"
+
+        val result = Edit(files, lsp)(Replace(path, "Shape", "/** Renamed. */\nclass Polygon(val sides: Int)"))
+
+        val written = assertIs<EditResult.Written>(result, "$result").files.single()
+        assertEquals(listOf(EditedSymbol("Polygon", 3, 4)), written.symbols)
+        assertEquals("package fixture.alpha\n\n/** Renamed. */\nclass Polygon(val sides: Int)\n", Files.readString(project.resolve(path)))
+        assertEquals(
+            listOf(FileMatches(path, listOf(FoundSymbol(SymbolKind.CLASS, "Polygon", 3, 4)))),
+            assertIs<FindSymbolResult.Found>(FindSymbol(files, lsp)("Polygon")).files,
+        )
+        // Still there for the next search, before kotlin-lsp's file watcher could have caught up.
+        assertIs<FindSymbolResult.Found>(FindSymbol(files, lsp)("Polygon"), "second search")
     }
 }
