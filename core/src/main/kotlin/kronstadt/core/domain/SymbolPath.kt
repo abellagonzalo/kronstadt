@@ -5,15 +5,17 @@ package kronstadt.core.domain
  *
  * A path may give only the trailing segments of a Symbol's chain; [anchored] (a leading `/`) pins it to the top level.
  * A segment may carry a parameter-type signature, `parse(String)`, compared to the language server's `detail`
- * after whitespace is removed: no type resolution, no positional index.
+ * after whitespace is removed: no type resolution, no positional index. An extension's receiver is written before the
+ * name, Kotlin-style (`String.shout`), and is compared the same way.
  */
 public data class SymbolPath(val segments: List<Segment>, val anchored: Boolean = false) {
     init {
         require(segments.isNotEmpty()) { "a Symbol Path has at least one segment" }
     }
 
-    public data class Segment(val name: String, val signature: String? = null) {
-        override fun toString(): String = quote(name) + (signature?.let { "($it)" } ?: "")
+    public data class Segment(val name: String, val signature: String? = null, val receiver: String? = null) {
+        override fun toString(): String =
+            (receiver?.let { "$it." } ?: "") + quote(name) + (signature?.let { "($it)" } ?: "")
     }
 
     /** The path in exactly the syntax [parse] accepts. */
@@ -68,27 +70,65 @@ public data class SymbolPath(val segments: List<Segment>, val anchored: Boolean 
             require(segment.isNotEmpty()) { "empty segment in Symbol Path (two '/' in a row, or a trailing '/')" }
             val open = indexOfSignature(segment)
             val rawName = if (open < 0) segment else segment.substring(0, open).trimEnd()
-            val signature = if (open < 0) null else {
-                require(segment.endsWith(")")) { "nothing may follow the signature in '$segment'" }
-                segment.substring(open + 1, segment.length - 1)
-            }
-            val name = if (rawName.length >= 2 && rawName.startsWith("`") && rawName.endsWith("`")) {
-                rawName.substring(1, rawName.length - 1)
+            val signature = if (open < 0) null else segment.substring(open + 1, segment.length - 1)
+            val dot = indexOfReceiverDot(rawName)
+            val receiver = if (dot < 0) null else rawName.substring(0, dot).trim()
+            val quotedName = if (dot < 0) rawName else rawName.substring(dot + 1).trim()
+            val name = if (quotedName.length >= 2 && quotedName.startsWith("`") && quotedName.endsWith("`")) {
+                quotedName.substring(1, quotedName.length - 1)
             } else {
-                rawName
+                quotedName
             }
+            require(receiver == null || receiver.isNotEmpty()) { "segment '$segment' has an empty receiver" }
             require(name.isNotBlank()) { "segment '$segment' has no name" }
-            return Segment(name, signature)
+            return Segment(name, signature, receiver)
         }
 
-        /** Index of the `(` that opens the signature, ignoring anything inside backticks. */
+        /**
+         * Index of the `(` that opens the signature: the top-level parenthesised group that ends the segment. Other
+         * top-level groups must be followed by `.` or `?.`, as in a function-type receiver `((Int) -> Unit).twice`.
+         * -1 when there is no signature. Anything inside backticks is ignored.
+         */
         private fun indexOfSignature(segment: String): Int {
             var inBackticks = false
+            var depth = 0
+            var open = -1
             segment.forEachIndexed { i, c ->
-                if (c == '`') inBackticks = !inBackticks
-                if (c == '(' && !inBackticks) return i
+                when {
+                    c == '`' -> inBackticks = !inBackticks
+                    inBackticks -> {}
+                    c == '(' -> { if (depth == 0) open = i; depth++ }
+                    c == ')' -> {
+                        depth--
+                        if (depth == 0) {
+                            val rest = segment.substring(i + 1).trimStart()
+                            if (rest.isEmpty()) return open
+                            require(rest.startsWith(".") || rest.startsWith("?.")) { "nothing may follow the signature in '$segment'" }
+                        }
+                    }
+                }
             }
             return -1
+        }
+
+        /**
+         * Index of the `.` between an extension's receiver and its name: the last one outside backticks, type
+         * arguments and parentheses, so `Map.Entry<K, V>.key` splits before `key`. -1 when there is no receiver.
+         */
+        private fun indexOfReceiverDot(name: String): Int {
+            var inBackticks = false
+            var depth = 0
+            var dot = -1
+            name.forEachIndexed { i, c ->
+                when {
+                    c == '`' -> inBackticks = !inBackticks
+                    inBackticks -> {}
+                    c == '<' || c == '(' -> depth++
+                    c == ')' || (c == '>' && name.getOrNull(i - 1) != '-') -> depth--
+                    c == '.' && depth == 0 -> dot = i
+                }
+            }
+            return dot
         }
     }
 }

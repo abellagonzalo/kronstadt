@@ -16,9 +16,14 @@ public class SymbolTree(roots: List<CodeSymbol>) {
         public data class NotFound(val suggestions: List<Node>) : Resolution
     }
 
+    /**
+     * Every addressable Symbol. What sits inside a function, constructor or property (accessors, local declarations,
+     * lambdas) isn't: edits target the enclosing declaration (ADR 0002).
+     */
     private val nodes: List<Node> = buildList {
         fun visit(symbol: CodeSymbol, ancestors: List<CodeSymbol>) {
             add(Node(symbol, ancestors))
+            if (isFunction(symbol) || symbol.kind == SymbolKind.PROPERTY || symbol.kind == SymbolKind.VARIABLE) return
             symbol.children.sortedBy { it.range.start }.forEach { visit(it, ancestors + symbol) }
         }
         roots.sortedBy { it.range.start }.forEach { visit(it, emptyList()) }
@@ -57,22 +62,31 @@ public class SymbolTree(roots: List<CodeSymbol>) {
         return SymbolPath(chain.map { segment(it, withSignature = true) }, anchored = true)
     }
 
-    private fun matching(path: SymbolPath): List<Node> = nodes.filter { node ->
-        val chain = node.chain
-        val segments = path.segments
-        if (segments.size > chain.size || (path.anchored && segments.size != chain.size)) return@filter false
-        segments.indices.all { i -> matches(segments[i], chain[chain.size - segments.size + i]) }
+    private fun matching(path: SymbolPath): List<Node> {
+        val candidates = nodes.filter { node ->
+            val chain = node.chain
+            val segments = path.segments
+            if (segments.size > chain.size || (path.anchored && segments.size != chain.size)) return@filter false
+            segments.indices.all { i -> matches(segments[i], chain[chain.size - segments.size + i]) }
+        }
+        if (path.segments.last().signature != null) return candidates
+        // A bare name prefers a non-function to a function beside it (`size` the property, `size(Int)` the function).
+        val nonFunctionParents = candidates.filterNot { isFunction(it.symbol) }.map { it.ancestors.lastOrNull() }
+        return candidates.filterNot { node ->
+            isFunction(node.symbol) && nonFunctionParents.any { it === node.ancestors.lastOrNull() }
+        }
     }
 
     private fun matches(segment: SymbolPath.Segment, symbol: CodeSymbol): Boolean {
         if (segment.name != pathName(symbol)) return false
+        if (segment.receiver?.let(::normalise) != receiver(symbol)?.let(::normalise)) return false
         val wanted = segment.signature ?: return true
         val actual = parameterList(symbol) ?: return false
         return normalise(wanted) == normalise(actual)
     }
 
     private fun segment(symbol: CodeSymbol, withSignature: Boolean) =
-        SymbolPath.Segment(pathName(symbol), if (withSignature) parameterList(symbol) else null)
+        SymbolPath.Segment(pathName(symbol), if (withSignature) parameterList(symbol) else null, receiver(symbol))
 
     /** Suggestions for a path that matched nothing: Symbols whose name is close to the last segment's. */
     private fun suggestionsFor(path: SymbolPath): List<Node> {
@@ -96,12 +110,30 @@ public class SymbolTree(roots: List<CodeSymbol>) {
          * `(String, Int): Int` or `String.(Int): Unit`: the last top-level parenthesised group that is followed by
          * the return type or nothing. Null for Symbols that take no parameter list.
          */
-        fun parameterList(symbol: CodeSymbol): String? {
-            if (symbol.kind != SymbolKind.FUNCTION && symbol.kind != SymbolKind.CONSTRUCTOR) return null
+        fun parameterList(symbol: CodeSymbol): String? =
+            parameterGroup(symbol)?.let { symbol.detail!!.substring(it.first + 1, it.last) }
+
+        /**
+         * An extension's receiver type, which kotlin-lsp puts before the parameter list of a function's `detail`
+         * (`String.(): String`) and before the type of a property's (`String.: Char`). Null for other Symbols.
+         */
+        fun receiver(symbol: CodeSymbol): String? {
+            val detail = symbol.detail ?: return null
+            val end = when (symbol.kind) {
+                SymbolKind.FUNCTION -> parameterGroup(symbol)?.first?.takeIf { it > 0 && detail[it - 1] == '.' }
+                SymbolKind.PROPERTY, SymbolKind.VARIABLE -> detail.indexOf(".:").takeIf { it > 0 }?.plus(1)
+                else -> null
+            } ?: return null
+            return detail.substring(0, end - 1).trim().ifEmpty { null }
+        }
+
+        /** Indices of the parentheses around [parameterList]'s text inside `detail`. */
+        private fun parameterGroup(symbol: CodeSymbol): IntRange? {
+            if (!isFunction(symbol)) return null
             val detail = symbol.detail ?: return null
             var depth = 0
             var open = -1
-            var found: String? = null
+            var found: IntRange? = null
             detail.forEachIndexed { i, c ->
                 when (c) {
                     '(' -> { if (depth == 0) open = i; depth++ }
@@ -109,13 +141,15 @@ public class SymbolTree(roots: List<CodeSymbol>) {
                         depth--
                         if (depth == 0 && open >= 0) {
                             val rest = detail.substring(i + 1).trimStart()
-                            if (rest.isEmpty() || rest.startsWith(":")) found = detail.substring(open + 1, i)
+                            if (rest.isEmpty() || rest.startsWith(":")) found = open..i
                         }
                     }
                 }
             }
             return found
         }
+
+        fun isFunction(symbol: CodeSymbol) = symbol.kind == SymbolKind.FUNCTION || symbol.kind == SymbolKind.CONSTRUCTOR
 
         fun normalise(signature: String): String = signature.filterNot(Char::isWhitespace)
 

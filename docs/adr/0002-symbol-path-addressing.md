@@ -10,6 +10,9 @@ Resolution always goes through `documentSymbol`, even when no file is given: `wo
 
 - Symbols that can't be addressed: accessors (edits target the whole property), local declarations and lambdas (edits target the enclosing function), and library or JDK symbols.
 - Special forms: constructors are `Box/constructor(Int)`. Companions are `X/Companion/…`, or the companion's own name if it has one. Enum entries are `Color/BLUE`.
+- The receiver is part of an extension's name: `shout` does not match `String.shout` (the miss suggests it), so the two never compete.
+- The non-function preference settles a tie only between declarations in the same container. A property in one class and a function in another stay ambiguous, so Kronstadt still never picks between unrelated Symbols.
+- Receivers come from the start of kotlin-lsp's `detail` (`String.(): String`, `String.: Char`), so they share the signature's dependence on its format.
 - Signature matching depends on the format of kotlin-lsp's `detail` string, which is another reason for the tested-version warning in ADR 0001.
 
 ## Considered options

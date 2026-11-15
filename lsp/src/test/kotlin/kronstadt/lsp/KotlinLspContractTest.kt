@@ -164,14 +164,15 @@ class KotlinLspContractTest {
         assertNull(symbols.find("Documented").detail)
     }
 
+    private val files = object : FileStore {
+        override fun resolve(path: String): Path = project.resolve(path)
+        override suspend fun read(file: Path): TextDocument = TextDocument(Files.readString(file))
+        override fun display(file: Path): String = project.relativize(file).toString()
+    }
+
     @Test
     @Order(9)
     fun `kt_read_symbol reads overloads, classes and enum entries from the real tree`() = runBlocking {
-        val files = object : FileStore {
-            override fun resolve(path: String): Path = project.resolve(path)
-            override suspend fun read(file: Path): TextDocument = TextDocument(Files.readString(file))
-            override fun display(file: Path): String = project.relativize(file).toString()
-        }
         val read = ReadSymbol(files, lsp)
         val shapes = "src/main/kotlin/fixture/Shapes.kt"
 
@@ -187,5 +188,49 @@ class KotlinLspContractTest {
             assertIs<ReadSymbolResult.Ambiguous>(read(shapes, "apply")).candidates,
         )
         assertEquals("// TIMES in $shapes, L57-59", assertIs<ReadSymbolResult.Found>(read(shapes, "TIMES")).text.lines().first())
+    }
+
+    // The special forms live at the end of Spans.kt rather than in a fixture file of their own: with one more file,
+    // kotlin-lsp 271.2085.0 often began a second Indexing progress just after reporting ready (see #37).
+    @Test
+    @Order(10)
+    fun `kt_read_symbol resolves the special forms of Symbol Paths against the real tree`() = runBlocking<Unit> {
+        val read = ReadSymbol(files, lsp)
+        val spansKt = "src/main/kotlin/fixture/Spans.kt"
+        val shapes = "src/main/kotlin/fixture/Shapes.kt"
+        suspend fun header(file: String, path: String) = assertIs<ReadSymbolResult.Found>(read(file, path), path).text.lines().first()
+
+        // Extension receivers, read from detail (`String.(): String`, `String.: Char`).
+        assertEquals("// String.shout in $shapes, L64-65", header(shapes, "String.shout"))
+        assertEquals("// String.decorate in $spansKt, L37-37", header(spansKt, "Formatter/String.decorate"))
+        assertEquals("// Int.decorate in $spansKt, L39-39", header(spansKt, "Int.decorate"))
+        assertEquals("// List<T>.second in $spansKt, L91-91", header(spansKt, "List<T>.second"))
+        assertEquals("// String.firstChar in $spansKt, L93-94", header(spansKt, "String.firstChar"))
+        assertEquals(listOf("String.shout"), assertIs<ReadSymbolResult.NotFound>(read(shapes, "shout")).suggestions)
+
+        // A bare name prefers the property; parentheses select the function.
+        assertEquals("// size in $spansKt, L46-46", header(spansKt, "Sized/size"))
+        assertEquals("// size(Int) in $spansKt, L48-48", header(spansKt, "size(Int)"))
+        assertEquals("// total in $shapes, L17-17", header(shapes, "Calculator/total"))
+        assertEquals("// total() in $shapes, L19-19", header(shapes, "total()"))
+
+        // Constructors and primary-constructor val parameters.
+        assertEquals("// Box/constructor(Int) in $spansKt, L55-55", header(spansKt, "Box/constructor(Int)"))
+        assertIs<ReadSymbolResult.SharedLine>(read(spansKt, "Box/width"))
+        assertIs<ReadSymbolResult.NotFound>(read(spansKt, "Box/height"))
+
+        // Companions, enum entries with bodies, typealiases.
+        assertEquals("// create in $spansKt, L61-61", header(spansKt, "Widget/Companion/create"))
+        assertEquals("// create in $shapes, L48-48", header(shapes, "Outer/Factory/create"))
+        assertEquals("// PALE in $spansKt, L67-67", header(spansKt, "Tint/PALE"))
+        assertEquals("// hex() in $spansKt, L69-69", header(spansKt, "Tint/DEEP/hex()"))
+        assertEquals("// Names in $spansKt, L73-73", header(spansKt, "Names"))
+        assertEquals("// Area in $shapes, L3-3", header(shapes, "Area"))
+
+        // Not addressable: accessors, local declarations, lambdas.
+        listOf("counter/get", "Hidden/counter/set", "firstChar/get", "outer/local", "LocalClass", "lambda").forEach { path ->
+            assertIs<ReadSymbolResult.NotFound>(read(spansKt, path), path)
+        }
+        assertIs<ReadSymbolResult.NotFound>(read(shapes, "sumOfSquares/square"))
     }
 }

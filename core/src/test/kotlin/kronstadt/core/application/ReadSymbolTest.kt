@@ -211,4 +211,216 @@ class ReadSymbolTest {
         val result = assertIs<ReadSymbolResult.Found>(read("src/A.kt", "Box/constructor()"))
         assertEquals("// constructor() in src/A.kt, L2-2\n    constructor() : this(0)", result.text)
     }
+
+    // Special forms (ADR 0002), with trees shaped as kotlin-lsp 271.2085.0 reports them (see the contract test).
+
+    private val extensions = """
+        |class Formatter {
+        |    fun String.decorate(): String = "*${'$'}this*"
+        |
+        |    fun Int.decorate(): String = "#${'$'}this"
+        |
+        |    fun decorate(): String = "plain"
+        |}
+        |
+        |fun String.shout(): String = uppercase()
+        |
+        |fun <T> List<T>.second(): T = this[1]
+        |
+        |val String.firstChar: Char
+        |    get() = this[0]
+        |""".trimMargin()
+    private val stringDecorate = symbol("decorate", SymbolKind.FUNCTION, range(1, 4, 1, 45), 1, 15, "String.(): String")
+    private val intDecorate = symbol("decorate", SymbolKind.FUNCTION, range(3, 4, 3, 41), 3, 12, "Int.(): String")
+    private val plainDecorate = symbol("decorate", SymbolKind.FUNCTION, range(5, 4, 5, 36), 5, 8, "(): String")
+    private val formatter = symbol("Formatter", SymbolKind.CLASS, range(0, 0, 6, 1), 0, 6, children = listOf(stringDecorate, intDecorate, plainDecorate))
+    private val shout = symbol("shout", SymbolKind.FUNCTION, range(8, 0, 8, 41), 8, 11, "String.(): String")
+    private val second = symbol("second", SymbolKind.FUNCTION, range(10, 0, 10, 37), 10, 16, "List<T>.(): T")
+    private val firstCharGetter = CodeSymbol("get", SymbolKind.FUNCTION, range(13, 4, 13, 19), range(13, 4, 13, 19))
+    private val firstChar = symbol("firstChar", SymbolKind.PROPERTY, range(12, 0, 13, 19), 12, 11, "String.: Char", listOf(firstCharGetter))
+
+    private suspend fun readExtension(symbol: String) =
+        readSymbol(extensions, formatter, shout, second, firstChar)("src/A.kt", symbol)
+
+    @Test
+    fun `an extension receiver is written inside the segment, Kotlin-style`() = runTest {
+        assertEquals("// String.shout in src/A.kt, L9-9\nfun String.shout(): String = uppercase()", assertIs<ReadSymbolResult.Found>(readExtension("String.shout")).text)
+        assertEquals("// String.decorate in src/A.kt, L2-2", assertIs<ReadSymbolResult.Found>(readExtension("Formatter/String.decorate")).text.lines().first())
+        assertEquals("// Int.decorate in src/A.kt, L4-4", assertIs<ReadSymbolResult.Found>(readExtension("Int.decorate")).text.lines().first())
+        assertEquals("// decorate in src/A.kt, L6-6", assertIs<ReadSymbolResult.Found>(readExtension("Formatter/decorate")).text.lines().first())
+        assertEquals("// List<T>.second in src/A.kt, L11-11", assertIs<ReadSymbolResult.Found>(readExtension("List< T >.second")).text.lines().first())
+        assertEquals("// String.firstChar in src/A.kt, L13-14", assertIs<ReadSymbolResult.Found>(readExtension("String.firstChar")).text.lines().first())
+    }
+
+    @Test
+    fun `the receiver is part of the name, so leaving it out misses and suggests the extension`() = runTest {
+        assertEquals(listOf("String.shout"), assertIs<ReadSymbolResult.NotFound>(readExtension("shout")).suggestions)
+        assertIs<ReadSymbolResult.NotFound>(readExtension("Int.shout"))
+        assertIs<ReadSymbolResult.NotFound>(readExtension("CharSequence.firstChar"))
+    }
+
+    private val sized = """
+        |class Sized {
+        |    val size: Int = 0
+        |
+        |    fun size(extra: Int): Int = size + extra
+        |}
+        |
+        |class Other {
+        |    fun size(): Int = 1
+        |}
+        |""".trimMargin()
+    private val sizeProperty = symbol("size", SymbolKind.PROPERTY, range(1, 4, 1, 21), 1, 8, ": Int")
+    private val sizeFunction = symbol("size", SymbolKind.FUNCTION, range(3, 4, 3, 44), 3, 8, "(Int): Int")
+    private val sizedClass = symbol("Sized", SymbolKind.CLASS, range(0, 0, 4, 1), 0, 6, children = listOf(sizeProperty, sizeFunction))
+    private val otherSize = symbol("size", SymbolKind.FUNCTION, range(7, 4, 7, 23), 7, 8, "(): Int")
+    private val other = symbol("Other", SymbolKind.CLASS, range(6, 0, 8, 1), 6, 6, children = listOf(otherSize))
+
+    private suspend fun readSized(symbol: String) = readSymbol(sized, sizedClass, other)("src/A.kt", symbol)
+
+    @Test
+    fun `a bare name prefers the property over a same-named function beside it, and parentheses select the function`() = runTest {
+        assertEquals("// Sized/size in src/A.kt, L2-2", assertIs<ReadSymbolResult.Found>(readSized("Sized/size")).text.lines().first())
+        assertEquals("// size(Int) in src/A.kt, L4-4", assertIs<ReadSymbolResult.Found>(readSized("size(Int)")).text.lines().first())
+        assertEquals("// size() in src/A.kt, L8-8", assertIs<ReadSymbolResult.Found>(readSized("size()")).text.lines().first())
+        assertIs<ReadSymbolResult.NotFound>(readSized("Sized/size()"))
+    }
+
+    @Test
+    fun `the preference only settles a tie inside one declaration, never between unrelated ones`() = runTest {
+        assertEquals(listOf("Sized/size", "size()"), assertIs<ReadSymbolResult.Ambiguous>(readSized("size")).candidates)
+    }
+
+    @Test
+    fun `accessors and local declarations are not addressable, even if the server reports them`() = runTest {
+        val source = """
+            |class Hidden {
+            |    var counter: Int = 0
+            |        get() = field
+            |        set(value) {
+            |            field = value
+            |        }
+            |
+            |    fun outer(): Int {
+            |        fun local(): Int = 1
+            |        return local()
+            |    }
+            |}
+            |""".trimMargin()
+        // kotlin-lsp reports accessors as children named get and set; it omits local declarations, but another
+        // server might report them as children of the function.
+        val getter = CodeSymbol("get", SymbolKind.FUNCTION, range(2, 8, 2, 21), range(2, 8, 2, 21))
+        val setter = CodeSymbol("set", SymbolKind.FUNCTION, range(3, 8, 5, 9), range(3, 8, 5, 9))
+        val counter = symbol("counter", SymbolKind.PROPERTY, range(1, 4, 5, 9), 1, 8, ": Int", listOf(getter, setter))
+        val local = symbol("local", SymbolKind.FUNCTION, range(8, 8, 8, 28), 8, 12, "(): Int")
+        val outer = symbol("outer", SymbolKind.FUNCTION, range(7, 4, 10, 5), 7, 8, "(): Int", listOf(local))
+        val hidden = symbol("Hidden", SymbolKind.CLASS, range(0, 0, 11, 1), 0, 6, children = listOf(counter, outer))
+        val read = readSymbol(source, hidden)
+
+        listOf("counter/get", "get", "set", "Hidden/counter/set", "outer/local", "local").forEach { path ->
+            assertEquals(emptyList(), assertIs<ReadSymbolResult.NotFound>(read("src/A.kt", path), path).suggestions, path)
+        }
+        assertEquals("// counter in src/A.kt, L2-6", assertIs<ReadSymbolResult.Found>(read("src/A.kt", "counter")).text.lines().first())
+    }
+
+    private val forms = """
+        |class Box(
+        |    val width: Int,
+        |    height: Int,
+        |) {
+        |    constructor(side: Int) : this(side, side)
+        |}
+        |
+        |class Widget {
+        |    companion object {
+        |        fun create(): Widget = Widget()
+        |    }
+        |}
+        |
+        |class Outer {
+        |    companion object Factory {
+        |        fun create(): Outer = Outer()
+        |    }
+        |}
+        |
+        |enum class Tint(val code: Int) {
+        |    PALE(1),
+        |    DEEP(2) {
+        |        fun hex(): String = "deep"
+        |    },
+        |}
+        |
+        |typealias Names = List<String>
+        |""".trimMargin()
+
+    // kotlin-lsp reports a primary constructor's val parameter as a variable, and gives constructors and unnamed
+    // companions no separate name range.
+    private val width = symbol("width", SymbolKind.VARIABLE, range(1, 4, 1, 18), 1, 8, ": Int")
+    private val primary = CodeSymbol("Box", SymbolKind.CONSTRUCTOR, range(0, 9, 3, 1), range(0, 9, 3, 1), detail = "(Int, Int)")
+    private val secondary = CodeSymbol("Box", SymbolKind.CONSTRUCTOR, range(4, 4, 4, 45), range(4, 4, 4, 45), detail = "(Int)")
+    private val box = symbol("Box", SymbolKind.CLASS, range(0, 0, 5, 1), 0, 6, children = listOf(width, primary, secondary))
+    private val widgetCreate = symbol("create", SymbolKind.FUNCTION, range(9, 8, 9, 39), 9, 12, "(): Widget")
+    private val companion = CodeSymbol("Companion", SymbolKind.OBJECT, range(8, 4, 10, 5), range(8, 4, 10, 5), listOf(widgetCreate))
+    private val widget = symbol("Widget", SymbolKind.CLASS, range(7, 0, 11, 1), 7, 6, children = listOf(companion))
+    private val outerCreate = symbol("create", SymbolKind.FUNCTION, range(15, 8, 15, 37), 15, 12, "(): Outer")
+    private val factory = symbol("Factory", SymbolKind.OBJECT, range(14, 4, 16, 5), 14, 21, children = listOf(outerCreate))
+    private val outer = symbol("Outer", SymbolKind.CLASS, range(13, 0, 17, 1), 13, 6, children = listOf(factory))
+    private val code = symbol("code", SymbolKind.VARIABLE, range(19, 16, 19, 29), 19, 20, ": Int")
+    private val tintConstructor = CodeSymbol("Tint", SymbolKind.CONSTRUCTOR, range(19, 15, 19, 30), range(19, 15, 19, 30), detail = "(Int)")
+    private val pale = symbol("PALE", SymbolKind.ENUM_ENTRY, range(20, 4, 20, 12), 20, 4)
+    private val hex = symbol("hex", SymbolKind.FUNCTION, range(22, 8, 22, 34), 22, 12, "(): String")
+    private val deep = symbol("DEEP", SymbolKind.ENUM_ENTRY, range(21, 4, 23, 6), 21, 4, children = listOf(hex))
+    private val tint = symbol("Tint", SymbolKind.ENUM, range(19, 0, 24, 1), 19, 11, children = listOf(code, tintConstructor, pale, deep))
+    private val names = symbol("Names", SymbolKind.CLASS, range(26, 0, 26, 30), 26, 10)
+
+    private suspend fun readForm(symbol: String) =
+        readSymbol(forms, box, widget, outer, tint, names)("src/A.kt", symbol)
+
+    private suspend fun headerOf(symbol: String) = assertIs<ReadSymbolResult.Found>(readForm(symbol), symbol).text.lines().first()
+
+    @Test
+    fun `constructors are named constructor, and a primary constructor's val parameters are properties`() = runTest {
+        assertEquals("// Box/constructor(Int) in src/A.kt, L5-5", headerOf("Box/constructor(Int)"))
+        // The primary constructor starts on the class's line, so it can be named but not read on its own.
+        assertIs<ReadSymbolResult.SharedLine>(readForm("Box/constructor(Int, Int)"))
+        assertEquals(listOf("constructor(Int, Int)", "Box/constructor(Int)", "Tint/constructor"), assertIs<ReadSymbolResult.Ambiguous>(readForm("constructor")).candidates)
+        // Resolved as a property; its range stops before the comma, so the span guard refuses to read it alone.
+        assertEquals(ReadSymbolResult.SharedLine("width", "src/A.kt", 2), readForm("Box/width"))
+        assertIs<ReadSymbolResult.NotFound>(readForm("Box/height"))
+        assertIs<ReadSymbolResult.NotFound>(readForm("Box/Box"))
+    }
+
+    @Test
+    fun `a companion is Companion, or its own name when it has one`() = runTest {
+        assertEquals("// Companion/create in src/A.kt, L10-10", headerOf("Widget/Companion/create"))
+        assertEquals("// Companion in src/A.kt, L9-11", headerOf("Widget/Companion"))
+        assertEquals("// Factory/create in src/A.kt, L16-16", headerOf("Outer/Factory/create"))
+        assertIs<ReadSymbolResult.NotFound>(readForm("Outer/Companion/create"))
+    }
+
+    @Test
+    fun `enum entries and the members of their bodies are addressable`() = runTest {
+        assertEquals("// PALE in src/A.kt, L21-21", headerOf("Tint/PALE"))
+        assertEquals("// DEEP in src/A.kt, L22-24", headerOf("Tint/DEEP"))
+        assertEquals("// hex in src/A.kt, L23-23", headerOf("Tint/DEEP/hex()"))
+    }
+
+    @Test
+    fun `a typealias is addressed by its name`() = runTest {
+        assertEquals("// Names in src/A.kt, L27-27\ntypealias Names = List<String>", assertIs<ReadSymbolResult.Found>(readForm("Names")).text)
+    }
+
+    @Test
+    fun `function-type and nullable receivers are written as in Kotlin, and their canonical paths read back`() = runTest {
+        val source = "fun ((Int) -> Unit).twice(x: Int) = this(x)\n\nfun String?.orBlank(): String = this ?: \"\"\n"
+        val twice = symbol("twice", SymbolKind.FUNCTION, range(0, 0, 0, 43), 0, 20, "((Int) -> Unit).(Int): Unit")
+        val orBlank = symbol("orBlank", SymbolKind.FUNCTION, range(2, 0, 2, 42), 2, 12, "String?.(): String")
+        val read = readSymbol(source, twice, orBlank)
+
+        assertEquals("// ((Int) -> Unit).twice in src/A.kt, L1-1", assertIs<ReadSymbolResult.Found>(read("src/A.kt", "((Int)->Unit).twice")).text.lines().first())
+        assertIs<ReadSymbolResult.Found>(read("src/A.kt", "((Int) -> Unit).twice"))
+        assertIs<ReadSymbolResult.Found>(read("src/A.kt", "((Int) -> Unit).twice(Int)"))
+        assertEquals("// String?.orBlank in src/A.kt, L3-3", assertIs<ReadSymbolResult.Found>(read("src/A.kt", "String?.orBlank")).text.lines().first())
+        assertIs<ReadSymbolResult.InvalidPath>(read("src/A.kt", "(Int)x"))
+    }
 }
