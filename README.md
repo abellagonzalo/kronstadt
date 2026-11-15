@@ -19,7 +19,7 @@ Ports and adapters. Gradle modules make the build enforce the boundary: `core` c
 
 ```
 core/        pure Kotlin, no I/O
-  domain/      Position, TextRange, TextDocument (offset math), CodeSymbol, StructureRenderer,
+  domain/      Position, TextRange, TextDocument (offset math), PackageHeader (a file's package), CodeSymbol, StructureRenderer,
                SymbolPath, SymbolTree (resolution, canonical paths), SymbolSpan, FileLayout (re-indent),
                Diagnostic, Validation (new-error diff)
   port/        CodeIntelligence, FileStore

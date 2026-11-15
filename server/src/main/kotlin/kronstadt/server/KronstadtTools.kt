@@ -103,7 +103,8 @@ internal class KronstadtTools(
                         "Symbol Path: enclosing declaration names separated by '/', e.g. 'OrderController/create'. " +
                             "Trailing segments are enough when unambiguous ('run', 'Nested/run'); a leading '/' " +
                             "anchors at the top level; add parameter types to pick an overload: 'parse(String, Int)'. " +
-                            "Without a file, a dotted package may come first: 'com.example.a/Config'.",
+                            "Without a file, a dotted package may come first: 'com.example.a/Config' (a single-word first " +
+                            "segment is always a name; for single-word packages pass the file).",
                     )
                 },
                 required = listOf("symbol"),

@@ -78,6 +78,16 @@ class ReadSymbolWithoutFileTest {
     private val registryCompanion = CodeSymbol("Companion", SymbolKind.OBJECT, range(3, 4, 5, 5), range(3, 4, 5, 5), listOf(empty))
     private val registry = symbol("Registry", SymbolKind.CLASS, range(2, 0, 6, 1), 2, 6, children = listOf(registryCompanion))
 
+    // A block comment above the real header holds a line that starts with `package`.
+    private val widgetKt = "src/main/kotlin/com/example/g/Widget.kt"
+    private val widgetSource = "/*\npackage x.y\n*/\npackage com.example.g\n\nclass Widget\n"
+    private val widget = symbol("Widget", SymbolKind.CLASS, range(5, 0, 5, 12), 5, 6)
+
+    // A default-package file whose raw string has a line that starts with `package`.
+    private val templateKt = "src/main/kotlin/Template.kt"
+    private val templateSource = "class Template {\n    val text = \"\"\"\npackage other.pkg\n\"\"\"\n}\n"
+    private val template = symbol("Template", SymbolKind.CLASS, range(0, 0, 4, 1), 0, 6)
+
     private fun file(path: String) = root.resolve(path)
 
     /** kotlin-lsp's index: one location per declaration, searched by substring. */
@@ -96,6 +106,8 @@ class ReadSymbolWithoutFileTest {
         // An unnamed companion isn't indexed under its name.
         SymbolLocation("Registry", SymbolKind.CLASS, file(registryKt), registry.range),
         SymbolLocation("empty", SymbolKind.FUNCTION, file(registryKt), empty.range, "Companion"),
+        SymbolLocation("Widget", SymbolKind.CLASS, file(widgetKt), widget.range),
+        SymbolLocation("Template", SymbolKind.CLASS, file(templateKt), template.range),
     )
 
     private fun intelligence(notReadyPhase: String? = null) = FakeCodeIntelligence(
@@ -107,10 +119,18 @@ class ReadSymbolWithoutFileTest {
             file(betaKt) to listOf(betaConfig),
             file(boxKt) to listOf(box, shout),
             file(registryKt) to listOf(registry),
+            file(widgetKt) to listOf(widget),
+            file(templateKt) to listOf(template),
         ),
     )
 
-    private val files = FakeFileStore(root, mapOf(controllerKt to controllerSource, alphaKt to alphaSource, betaKt to betaSource, boxKt to boxSource, registryKt to registrySource))
+    private val files = FakeFileStore(
+        root,
+        mapOf(
+            controllerKt to controllerSource, alphaKt to alphaSource, betaKt to betaSource, boxKt to boxSource,
+            registryKt to registrySource, widgetKt to widgetSource, templateKt to templateSource,
+        ),
+    )
 
     private suspend fun read(symbol: String, intelligence: FakeCodeIntelligence = intelligence()) =
         ReadSymbol(files, intelligence)(null, symbol)
@@ -146,6 +166,17 @@ class ReadSymbolWithoutFileTest {
     fun `a wrong package suggests the Symbol where it really is`() = runTest {
         val result = assertIs<ReadSymbolResult.NotFound>(read("com.example.c/Config"))
         assertEquals(listOf(SymbolCandidate("Config", alphaKt), SymbolCandidate("Config", betaKt)), result.suggestions)
+    }
+
+    @Test
+    fun `the package comes from the header, not from a comment above it`() = runTest {
+        assertEquals("// Widget in $widgetKt, L6-6", assertIs<ReadSymbolResult.Found>(read("com.example.g/Widget")).text.lines().first())
+        assertIs<ReadSymbolResult.NotFound>(read("x.y/Widget"))
+    }
+
+    @Test
+    fun `a default-package file isn't matched by a package line in its body`() = runTest {
+        assertIs<ReadSymbolResult.NotFound>(read("other.pkg/Template"))
     }
 
     @Test

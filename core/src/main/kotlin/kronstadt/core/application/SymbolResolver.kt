@@ -4,6 +4,7 @@ import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolPath
 import kronstadt.core.domain.SymbolTree
 import kronstadt.core.domain.TextDocument
+import kronstadt.core.domain.packageName
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.core.port.FileStore
 import java.nio.file.Path
@@ -101,18 +102,11 @@ internal class SymbolResolver(
         SymbolCandidate(analysed.tree.canonicalPath(node).toString(), files.display(analysed.file))
 
     private fun inPackage(analysed: AnalysedFile, symbol: SymbolPath) =
-        symbol.packageName == null || packageOf(analysed.document) == symbol.packageName
+        symbol.packageName == null || analysed.document.packageName == symbol.packageName
 
     private companion object {
         val UNINDEXED_NAMES = setOf("constructor", "Companion")
         const val MIN_PREFIX = 3
         const val MAX_SUGGESTIONS = 5
-
-        /** The `package` header, at the start of a line after any file comments and annotations. */
-        private val packageHeader = Regex("^\\s*package\\s+([\\p{L}\\p{N}_.`]+)", RegexOption.MULTILINE)
-
-        fun packageOf(document: TextDocument): String =
-            packageHeader.find(document.text)?.groupValues?.get(1)?.replace("`", "").orEmpty()
-
     }
 }

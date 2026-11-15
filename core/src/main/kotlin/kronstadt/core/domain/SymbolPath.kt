@@ -9,7 +9,9 @@ package kronstadt.core.domain
  * name, Kotlin-style (`String.shout`), and is compared the same way.
  *
  * A dotted [packageName] may come first (`com.example.a/Config`): it narrows a file-less lookup to that package and
- * anchors the path at the top level, like a fully qualified name.
+ * anchors the path at the top level, like a fully qualified name. The prefix must contain a dot: a single-word first
+ * segment is always a declaration name (`pkg/Name` is `Name` inside `pkg`), so Symbols in single-word packages are
+ * told apart by passing the file.
  */
 public data class SymbolPath(val segments: List<Segment>, val anchored: Boolean = false, val packageName: String? = null) {
     init {
