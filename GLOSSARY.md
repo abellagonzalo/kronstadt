@@ -12,6 +12,10 @@ _Avoid_: AST node, element
 The address that names exactly one Symbol: its chain of enclosing declaration names, optionally scoped to a file, with a signature only where a name alone is ambiguous.
 _Avoid_: name path, FQN, selector, locator
 
+**Signature**:
+The parameter types of a function or constructor, e.g. `(String, Int)`, written in a Symbol Path only to tell overloads apart. It excludes the receiver and the return type.
+_Avoid_: parameter list, type, overload key
+
 **Symbol Span**:
 The full source text of a Symbol, as whole lines: its KDoc or the comments directly above it, its annotations, modifiers and declaration, and any comment at the end of its last line. It is what an agent reads and what replace and delete act on.
 _Avoid_: range, body, extent
