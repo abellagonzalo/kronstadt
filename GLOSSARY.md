@@ -13,7 +13,7 @@ The address that names exactly one Symbol: its chain of enclosing declaration na
 _Avoid_: name path, FQN, selector, locator
 
 **Shadow Workspace**:
-Kronstadt's in-memory view of the project's files, which the language server sees and edits are applied to before Write-back to disk.
+Kronstadt's in-memory copy of the files one edit touches, which the language server sees and validates before Write-back. It lasts only as long as that edit.
 _Avoid_: shadow file system, in-memory buffer, working memory copy
 
 **Write-back**:
