@@ -21,6 +21,7 @@ import kronstadt.core.application.ReadStructure
 import kronstadt.core.application.ReadStructureResult
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.port.FileStore
+import kotlin.time.Duration
 
 /**
  * MCP adapter: tool schemas plus thin handlers that parse arguments, call a use case, and turn its result
@@ -102,10 +103,10 @@ internal class KronstadtTools(
                 }.trimEnd(),
             )
             is FindSymbolResult.NoMatches -> text(
-                "No symbols matching '${result.query}'" + (result.kind?.let { " of kind ${it.name}" } ?: "") +
-                    ". If the project was just opened, the language server may still be indexing.",
+                "No symbols matching '${result.query}'" + (result.kind?.let { " of kind ${it.name}" } ?: "") + ".",
             )
             is FindSymbolResult.InvalidQuery -> error(result.reason)
+            is FindSymbolResult.NotReady -> notReady(result.phase, result.elapsed)
         }
     }
 
@@ -118,6 +119,9 @@ internal class KronstadtTools(
         } catch (e: Exception) {
             error("${e::class.simpleName}: ${e.message}")
         }
+
+    private fun notReady(phase: String, elapsed: Duration) =
+        error("kotlin-lsp still indexing (phase $phase, ${elapsed.inWholeSeconds} s elapsed); nothing returned/written, retry")
 
     private fun text(s: String) = CallToolResult(content = listOf(TextContent(s)))
 

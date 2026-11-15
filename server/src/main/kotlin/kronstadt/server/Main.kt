@@ -48,7 +48,8 @@ public fun main(args: Array<String>) {
 private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineScope {
     val files = LocalFileStore(config.projectRoot)
 
-    // Start the language server in the background; failures surface as tool errors, not a crashed server.
+    // Start kotlin-lsp eagerly in the background, so its import and indexing overlap the agent's first turns.
+    // Failures surface as tool errors, not a crashed server.
     val languageServer = async(Dispatchers.IO) {
         try {
             Result.success(LspCodeIntelligence.start(config.languageServer, files.root))
@@ -67,7 +68,7 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
             "Prefer kt_find_symbol over grep to locate declarations, and kt_read_structure over reading whole files.",
     )
     val intelligence = DeferredCodeIntelligence(languageServer)
-    KronstadtTools(ReadStructure(files, intelligence), FindSymbol(intelligence), files).registerOn(server)
+    KronstadtTools(ReadStructure(files, intelligence), FindSymbol(intelligence, config.readinessTimeout), files).registerOn(server)
 
     val transport = StdioServerTransport(System.`in`.asSource().buffered(), protocolOut.asSink().buffered())
     val session = server.createSession(transport)

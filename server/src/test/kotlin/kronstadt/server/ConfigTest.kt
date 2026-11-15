@@ -4,6 +4,7 @@ import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.time.Duration.Companion.seconds
 
 class ConfigTest {
     @Test
@@ -16,7 +17,24 @@ class ConfigTest {
     @Test
     fun `falls back to the environment, then the default command`() {
         assertEquals(listOf("my-ls"), Config.parse(emptyArray(), env = mapOf("KRONSTADT_LANGUAGE_SERVER" to "my-ls")).languageServer)
-        assertEquals(listOf("kotlin-language-server"), Config.parse(emptyArray(), env = emptyMap()).languageServer)
+        assertEquals(listOf("kotlin-lsp", "--stdio"), Config.parse(emptyArray(), env = emptyMap()).languageServer)
+    }
+
+    @Test
+    fun `readiness timeout defaults to 90 seconds, overridable by environment and argument`() {
+        assertEquals(90.seconds, Config.parse(emptyArray(), env = emptyMap()).readinessTimeout)
+        assertEquals(120.seconds, Config.parse(emptyArray(), env = mapOf("KRONSTADT_READINESS_TIMEOUT" to "120")).readinessTimeout)
+        assertEquals(
+            300.seconds,
+            Config.parse(arrayOf("--readiness-timeout", "300"), env = mapOf("KRONSTADT_READINESS_TIMEOUT" to "120")).readinessTimeout,
+        )
+    }
+
+    @Test
+    fun `rejects readiness timeouts that are not a positive number of seconds`() {
+        assertFailsWith<IllegalArgumentException> { Config.parse(arrayOf("--readiness-timeout", "0"), env = emptyMap()) }
+        assertFailsWith<IllegalArgumentException> { Config.parse(arrayOf("--readiness-timeout", "soon"), env = emptyMap()) }
+        assertFailsWith<IllegalArgumentException> { Config.parse(emptyArray(), env = mapOf("KRONSTADT_READINESS_TIMEOUT" to "-5")) }
     }
 
     @Test

@@ -1,11 +1,15 @@
 package kronstadt.server
 
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.withTimeoutOrNull
 import kronstadt.core.domain.CodeSymbol
+import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.port.CodeIntelligence
 import java.nio.file.Path
+import kotlin.time.Duration
+import kotlin.time.TimeSource
 
 /**
  * Lets the MCP server answer the client's handshake immediately while the language server is still booting
@@ -18,4 +22,15 @@ internal class DeferredCodeIntelligence(private val delegate: Deferred<Result<Co
 
     override suspend fun workspaceSymbols(query: String): List<SymbolLocation> =
         delegate.await().getOrThrow().workspaceSymbols(query)
+
+    /** Startup counts against [timeout]: the agent waits once, however the time is split. */
+    override suspend fun awaitReady(timeout: Duration): Readiness {
+        val start = TimeSource.Monotonic.markNow()
+        val started = withTimeoutOrNull(timeout) { delegate.await() }
+            ?: return Readiness.NotReady("Starting", start.elapsedNow())
+        return when (val readiness = started.getOrThrow().awaitReady(timeout - start.elapsedNow())) {
+            Readiness.Ready -> Readiness.Ready
+            is Readiness.NotReady -> readiness.copy(elapsed = start.elapsedNow())
+        }
+    }
 }
