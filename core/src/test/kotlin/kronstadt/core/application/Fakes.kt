@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import kronstadt.core.domain.CodeSymbol
+import kronstadt.core.domain.Definition
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
@@ -60,7 +61,8 @@ class FakeFileStore(private val root: Path, files: Map<String, String>) : FileSt
  * Workspace search returns [workspaceSymbols] whatever the query, unless an [index] is given: then it returns the
  * index entries whose name contains the query, ignoring case: kotlin-lsp 271.2085.0 matches substrings, not typos.
  * Diagnostics are [diagnosticsByText] for the exact text, else none; each pull takes [diagnosticsDelay] and first runs
- * [beforeDiagnostics]. References are [references] for the file and the exact position asked about, else none.
+ * [beforeDiagnostics]. References are [references], and definitions [definitions], for the file and the exact position
+ * asked about, else none.
  *
  * Documents are modelled like the language server sees them: the first analysis opens a document at version 1, an
  * analysis of different text changes it to the next version, and each analysis must be paired with a close.
@@ -76,6 +78,7 @@ class FakeCodeIntelligence(
     private val diagnosticsDelay: Duration = Duration.ZERO,
     private val beforeDiagnostics: suspend () -> Unit = {},
     private val references: Map<Pair<Path, Position>, List<SourceLocation>> = emptyMap(),
+    private val definitions: Map<Pair<Path, Position>, List<Definition>> = emptyMap(),
 ) : CodeIntelligence {
     val analysed = mutableListOf<Pair<Path, TextDocument>>()
     val searched = mutableListOf<String>()
@@ -136,6 +139,11 @@ class FakeCodeIntelligence(
     override suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation> {
         sync(file, document)
         return references[file to position].orEmpty()
+    }
+
+    override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> {
+        sync(file, document)
+        return definitions[file to position].orEmpty()
     }
 
     private fun sync(file: Path, document: TextDocument) {

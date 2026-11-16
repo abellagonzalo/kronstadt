@@ -12,10 +12,12 @@ import org.eclipse.lsp4j.DiagnosticSeverity
 import org.eclipse.lsp4j.DocumentDiagnosticReport
 import org.eclipse.lsp4j.DocumentSymbol
 import org.eclipse.lsp4j.Location
+import org.eclipse.lsp4j.LocationLink
 import org.eclipse.lsp4j.SymbolInformation
 import org.eclipse.lsp4j.WorkspaceSymbol
 import org.eclipse.lsp4j.jsonrpc.messages.Either
 import java.net.URI
+import java.net.URLDecoder
 import java.nio.file.Path
 import org.eclipse.lsp4j.Diagnostic as LspDiagnostic
 import org.eclipse.lsp4j.Position as LspPosition
@@ -120,5 +122,47 @@ internal object LspMapping {
             localPath(location.uri)?.let { SourceLocation(it, range(location.range)) }
         }
 
+    /**
+     * Where a `textDocument/definition` result points, from its URI: a local file, an entry in a jar
+     * (`jar:///<jar>!/<entry>`, a sources jar for Kotlin libraries) or a JDK class (`jrt:///<jdk>!/<module>/<entry>`).
+     * Null for any other URI.
+     */
+    fun definitionTarget(uri: String): DefinitionTarget? {
+        localPath(uri)?.let { return DefinitionTarget.Local(it) }
+        val (archive, entry) = archiveParts(uri, "jar:") ?: archiveParts(uri, "jrt:")?.let { (_, path) ->
+            val module = path.substringBefore('/')
+            return DefinitionTarget.Jdk(module, path.substringAfter('/'))
+        } ?: return null
+        return DefinitionTarget.Jar(archive, entry)
+    }
+
+    /** `<scheme>///<archive path>!/<entry>` split into the archive's path and the entry, URL-decoded. */
+    private fun archiveParts(uri: String, scheme: String): Pair<Path, String>? {
+        if (!uri.startsWith(scheme)) return null
+        val separator = uri.indexOf("!/").takeIf { it > 0 } ?: return null
+        val archive = runCatching { Path.of(URI("file:" + uri.substring(scheme.length, separator))) }.getOrNull() ?: return null
+        // A literal '+' stays a '+': URLDecoder would read it as a space.
+        val entry = URLDecoder.decode(uri.substring(separator + 2).replace("+", "%2B"), Charsets.UTF_8)
+        return archive to entry
+    }
+
+    /** The URI and name range of each `textDocument/definition` result, whether Locations or LocationLinks. */
+    fun definitionLocations(result: Either<List<Location?>, List<LocationLink?>>?): List<Pair<String, TextRange>> = when {
+        result == null -> emptyList()
+        result.isLeft -> result.left.orEmpty().filterNotNull().map { it.uri to range(it.range) }
+        else -> result.right.orEmpty().filterNotNull().map { it.targetUri to range(it.targetSelectionRange ?: it.targetRange) }
+    }
+
     fun uri(file: Path): String = file.toUri().toString()
+}
+
+/** A definition result's URI, taken apart. */
+internal sealed interface DefinitionTarget {
+    data class Local(val file: Path) : DefinitionTarget
+
+    /** [entry] inside the jar at [jar]. */
+    data class Jar(val jar: Path, val entry: String) : DefinitionTarget
+
+    /** A class file [entry] in the JDK's [module]. */
+    data class Jdk(val module: String, val entry: String) : DefinitionTarget
 }

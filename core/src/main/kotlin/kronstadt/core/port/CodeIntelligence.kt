@@ -1,6 +1,7 @@
 package kronstadt.core.port
 
 import kronstadt.core.domain.CodeSymbol
+import kronstadt.core.domain.Definition
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
@@ -49,6 +50,13 @@ public interface CodeIntelligence {
      * [documentSymbols] it opens the document, so each call is paired with a [closeDocument].
      */
     public suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation>
+
+    /**
+     * Where the name at [position] in [document] (the content of [file]) is declared, in the language server's
+     * order; several for e.g. `expect`/`actual`, none for a keyword, a literal or an unresolved name. Like
+     * [documentSymbols] it opens the document, so each call is paired with a [closeDocument].
+     */
+    public suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition>
 
     /**
      * Waits up to [timeout] until the project index is complete. Readiness is live: it can be lost again later,

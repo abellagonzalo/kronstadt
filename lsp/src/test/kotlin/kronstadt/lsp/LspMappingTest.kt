@@ -48,4 +48,36 @@ class LspMappingTest {
         assertEquals(listOf("Repo"), mapped.map { it.name })
         assertEquals(Path.of("/p/Repo.kt"), mapped.single().file)
     }
+
+    // Definition URIs as kotlin-lsp 271.2085.0 returns them (see the contract test).
+
+    @Test
+    fun `a definition in a local file is local`() {
+        assertEquals(DefinitionTarget.Local(Path.of("/p/src/A.kt")), LspMapping.definitionTarget("file:///p/src/A.kt"))
+    }
+
+    @Test
+    fun `a definition in a sources jar names the jar and the entry inside it`() {
+        assertEquals(
+            DefinitionTarget.Jar(Path.of("/cache/kotlin-stdlib-2.4.21-sources.jar"), "commonMain/kotlin/collections/Collections.kt"),
+            LspMapping.definitionTarget("jar:///cache/kotlin-stdlib-2.4.21-sources.jar!/commonMain/kotlin/collections/Collections.kt"),
+        )
+    }
+
+    @Test
+    fun `a definition in the JDK names its module and the class file`() {
+        assertEquals(
+            DefinitionTarget.Jdk("java.base", "java/io/File.class"),
+            LspMapping.definitionTarget("jrt:///opt/jbr/Contents/Home!/java.base/java/io/File.class"),
+        )
+    }
+
+    @Test
+    fun `definition URIs are decoded, and other schemes are dropped`() {
+        assertEquals(
+            DefinitionTarget.Jar(Path.of("/my cache/lib-sources.jar"), "a/B C.kt"),
+            LspMapping.definitionTarget("jar:///my%20cache/lib-sources.jar!/a/B%20C.kt"),
+        )
+        assertEquals(null, LspMapping.definitionTarget("untitled:Scratch.kt"))
+    }
 }

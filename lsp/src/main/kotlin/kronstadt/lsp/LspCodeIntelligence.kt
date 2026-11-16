@@ -1,11 +1,15 @@
 package kronstadt.lsp
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kronstadt.core.domain.CodeSymbol
+import kronstadt.core.domain.Definition
+import kronstadt.core.domain.LibrarySource
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
@@ -15,6 +19,7 @@ import kronstadt.core.domain.TextDocument
 import kronstadt.core.port.CodeIntelligence
 import org.eclipse.lsp4j.ClientCapabilities
 import org.eclipse.lsp4j.ConfigurationParams
+import org.eclipse.lsp4j.DefinitionParams
 import org.eclipse.lsp4j.DidChangeTextDocumentParams
 import org.eclipse.lsp4j.DidCloseTextDocumentParams
 import org.eclipse.lsp4j.DidOpenTextDocumentParams
@@ -53,6 +58,7 @@ import org.eclipse.lsp4j.services.LanguageServer
 import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
+import java.util.zip.ZipFile
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -153,6 +159,39 @@ public class LspCodeIntelligence private constructor(
             ReferenceContext(false),
         )
         return LspMapping.locations(request { server.textDocumentService.references(params) })
+    }
+
+    /**
+     * kotlin-lsp 271.2085.0 points into a library's sources jar when Gradle has one (`jar:` URIs), and at class files
+     * otherwise, including the JDK's (`jrt:` URIs). A sources-jar entry is read here, with its Symbols: kotlin-lsp
+     * answers `documentSymbol` for a jar URI without it being opened. Other URIs are dropped.
+     */
+    override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> {
+        val uri = LspMapping.uri(file)
+        sync(uri, document)
+        val params = DefinitionParams(TextDocumentIdentifier(uri), org.eclipse.lsp4j.Position(position.line, position.character))
+        return LspMapping.definitionLocations(request { server.textDocumentService.definition(params) }).mapNotNull { (target, range) ->
+            when (val parsed = LspMapping.definitionTarget(target)) {
+                is DefinitionTarget.Local -> Definition.InSource(SourceLocation(parsed.file, range))
+                is DefinitionTarget.Jar -> Definition.InLibrary(parsed.jar.fileName.toString(), parsed.entry, range, librarySource(target, parsed))
+                is DefinitionTarget.Jdk -> Definition.InLibrary("JDK ${parsed.module}", parsed.entry, range, source = null)
+                null -> null
+            }
+        }
+    }
+
+    /** The entry's text and Symbols, if it is source text that can be read; null for a class file. */
+    private suspend fun librarySource(uri: String, target: DefinitionTarget.Jar): LibrarySource? {
+        if (target.entry.endsWith(".class")) return null
+        val text = withContext(Dispatchers.IO) {
+            runCatching {
+                ZipFile(target.jar.toFile()).use { zip ->
+                    zip.getEntry(target.entry)?.let { entry -> zip.getInputStream(entry).use { String(it.readAllBytes(), Charsets.UTF_8) } }
+                }
+            }.getOrNull()
+        } ?: return null
+        val symbols = request { server.textDocumentService.documentSymbol(DocumentSymbolParams(TextDocumentIdentifier(uri))) }
+        return LibrarySource(TextDocument(text), LspMapping.documentSymbols(symbols))
     }
 
     override suspend fun awaitReady(timeout: Duration): Readiness = readiness.awaitReady(timeout)

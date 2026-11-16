@@ -23,6 +23,8 @@ import kronstadt.core.application.FindSymbol
 import kronstadt.core.application.FindSymbolResult
 import kronstadt.core.application.FindUsages
 import kronstadt.core.application.FindUsagesResult
+import kronstadt.core.application.GetDefinition
+import kronstadt.core.application.GetDefinitionResult
 import kronstadt.core.application.OperationFailure
 import kronstadt.core.application.Problem
 import kronstadt.core.application.ReadStructure
@@ -43,6 +45,7 @@ internal class KronstadtTools(
     private val findSymbol: FindSymbol,
     private val readSymbol: ReadSymbol,
     private val findUsages: FindUsages,
+    private val getDefinition: GetDefinition,
     private val edit: Edit,
 ) {
     fun registerOn(server: Server) {
@@ -137,6 +140,42 @@ internal class KronstadtTools(
                 required = listOf("symbol"),
             ),
         ) { request -> handle(request) { findUsages(it) } }
+
+        server.addTool(
+            name = "kt_get_definition",
+            description = "Finds where a name used inside a Kotlin Symbol is declared, without computing positions: pass " +
+                "the Symbol you are reading and the name. A project declaration comes back as a header (canonical Symbol " +
+                "Path, file, line span) and its KDoc and declaration without the body; call kt_read_symbol for the rest. A " +
+                "local variable or parameter gives the Symbol it is local to and its declaration line. A library or JDK " +
+                "declaration gives its fully qualified name, jar, and KDoc and declaration from the sources jar; it is " +
+                "read-only. Several definitions (e.g. expect/actual) are each shown. A keyword, literal or unresolved " +
+                "name is reported as such, with the compiler's error if any. Waits for indexing.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    stringProperty(
+                        "symbol",
+                        "Symbol Path of the Symbol the name is used in, as kt_read_symbol takes it, e.g. " +
+                            "'OrderController/create'.",
+                    )
+                    stringProperty(
+                        "name",
+                        "The identifier to resolve, e.g. 'place'. It must occur exactly once in the Symbol's span as a " +
+                            "whole identifier, unless 'at' is given.",
+                    )
+                    stringProperty(
+                        "at",
+                        "Optional snippet of the Symbol's source, exactly as written and occurring exactly once in it, " +
+                            "e.g. 'service.place(cmd)'; 'name' is looked up inside it.",
+                    )
+                    stringProperty(
+                        "file",
+                        "Optional path to the Symbol's .kt/.kts file, absolute or relative to the project root. Without " +
+                            "it the Symbol Path is resolved across the project.",
+                    )
+                },
+                required = listOf("symbol", "name"),
+            ),
+        ) { request -> handle(request) { getDefinition(it) } }
 
         server.addTool(
             name = "kt_edit",
@@ -354,6 +393,52 @@ internal class KronstadtTools(
             is FindUsagesResult.FileNotFound -> error("File not found: ${result.path}")
             is FindUsagesResult.NotKotlin -> error("Not a Kotlin file: ${result.path}. kt_find_usages only supports .kt and .kts files.")
             is FindUsagesResult.OutsideProject -> error("Path is outside the project root: ${result.path}")
+        }
+    }
+
+    private suspend fun getDefinition(args: JsonObject): CallToolResult {
+        val symbol = args.string("symbol") ?: return error("Missing required argument: symbol")
+        val name = args.string("name")?.takeIf { it.isNotBlank() } ?: return error("Missing required argument: name")
+        val at = args.string("at")?.takeIf { it.isNotEmpty() }
+        val file = args.string("file")?.takeIf { it.isNotBlank() }
+        return when (val result = getDefinition(symbol, name, at, file)) {
+            is GetDefinitionResult.Found -> text(result.text)
+            is GetDefinitionResult.Unresolved -> text(
+                "'${result.name}' on L${result.line} of ${result.symbol} resolves to no declaration (a keyword, a literal " +
+                    "or an unresolved reference)." + (result.diagnostic?.let { " Compiler: $it" } ?: ""),
+            )
+            is GetDefinitionResult.NotExactlyOnce -> {
+                val what = "'${result.text}'" + if (result.text == name) " (as a whole identifier)" else ""
+                val where = "${result.symbol} in ${result.file}"
+                error(
+                    if (result.lines.isEmpty()) {
+                        "$what doesn't occur in $where. Use kt_read_symbol to see its source."
+                    } else {
+                        "$what occurs more than once in $where; " +
+                            (if (at != null && result.text == name) "pick an 'at' snippet in which it occurs once" else "pass an 'at' snippet that occurs exactly once") +
+                            ":\n" +
+                            result.lines.joinToString("\n") { "  L${it.line}: ${it.source}" }
+                    },
+                )
+            }
+            is GetDefinitionResult.InvalidPath -> error("Invalid Symbol Path '${result.symbol}': ${result.reason}")
+            is GetDefinitionResult.Ambiguous -> error(
+                "'${result.symbol}' matches ${result.candidates.size} symbols${result.file.inFile()}; pass one of" +
+                    (if (result.file == null) " these paths with its file" else "") + ":\n" +
+                    candidates(result.candidates, withFiles = result.file == null),
+            )
+            is GetDefinitionResult.NotFound -> error(
+                "No symbol '${result.symbol}'${result.file.inFile()}." + when {
+                    result.suggestions.isNotEmpty() ->
+                        " Close names:\n" + candidates(result.suggestions, withFiles = result.file == null)
+                    result.file != null -> " Use kt_read_structure to list its declarations."
+                    else -> " Use kt_find_symbol to search by partial name."
+                },
+            )
+            is GetDefinitionResult.NotReady -> notReady(result.phase, result.elapsed)
+            is GetDefinitionResult.FileNotFound -> error("File not found: ${result.path}")
+            is GetDefinitionResult.NotKotlin -> error("Not a Kotlin file: ${result.path}. kt_get_definition only supports .kt and .kts files.")
+            is GetDefinitionResult.OutsideProject -> error("Path is outside the project root: ${result.path}")
         }
     }
 

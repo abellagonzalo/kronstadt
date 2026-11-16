@@ -14,6 +14,8 @@ import kronstadt.core.application.FindSymbolResult
 import kronstadt.core.application.FindUsages
 import kronstadt.core.application.FindUsagesResult
 import kronstadt.core.application.FoundSymbol
+import kronstadt.core.application.GetDefinition
+import kronstadt.core.application.GetDefinitionResult
 import kronstadt.core.application.Problem
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.ReadSymbolResult
@@ -43,6 +45,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
@@ -421,5 +424,85 @@ class KotlinLspContractTest {
             usages("Operation/apply"),
         )
         assertEquals(FindUsagesResult.NoUsages("describe", searchedFiles = 1), find("Outer/Nested/describe", file = "src/main/kotlin/fixture/Shapes.kt"))
+    }
+
+    // kt_get_definition: textDocument/definition, on fixture/Definitions.kt.
+
+    @Test
+    @Order(17)
+    fun `kt_get_definition shows project, local, sources-jar and JDK targets`() = runBlocking<Unit> {
+        val get = GetDefinition(files, lsp)
+        val definitions = "src/main/kotlin/fixture/Definitions.kt"
+        suspend fun found(name: String, at: String? = null) =
+            assertIs<GetDefinitionResult.Found>(get("Definitions/uses", name, at), name).text
+
+        // Project targets resolve through the target file's tree: definition points at the name.
+        assertEquals(
+            """
+            |// Documented in src/main/kotlin/fixture/Spans.kt, L3-20
+            |/**
+            | * KDoc above an annotated class.
+            | */
+            |@Suppress("unused")
+            |@Deprecated("probe")
+            |internal class Documented
+            |// Body omitted. Full source: kt_read_symbol(symbol="Documented", file="src/main/kotlin/fixture/Spans.kt")
+            """.trimMargin(),
+            found("Documented"),
+        )
+        assertEquals(
+            "// blocky in src/main/kotlin/fixture/Spans.kt, L14-15\n    /* A block comment above. */\n    fun blocky(): Int\n" +
+                "// Body omitted. Full source: kt_read_symbol(symbol=\"blocky\", file=\"src/main/kotlin/fixture/Spans.kt\")",
+            found("blocky"),
+        )
+        assertEquals(
+            "// String.shout in src/main/kotlin/fixture/Shapes.kt, L64-65\n/** Extensions. */\nfun String.shout(): String\n" +
+                "// Body omitted. Full source: kt_read_symbol(symbol=\"String.shout\", file=\"src/main/kotlin/fixture/Shapes.kt\")",
+            found("shout"),
+        )
+        // Locals and parameters: the definition is in the same file, at a name no Symbol has.
+        assertEquals(
+            "// documented is local to uses in $definitions, not addressable; declared at L8\nval documented = Documented()",
+            found("documented", at = "documented.blocky"),
+        )
+        assertEquals(
+            "// radius is local to uses in $definitions, not addressable; declared at L7\nfun uses(radius: Int): String {",
+            found("radius", at = "\$radius"),
+        )
+        // Kotlin libraries: a sources-jar entry, with a documentSymbol tree for its jar: URI.
+        val listOf = found("listOf")
+        assertEquals("// kotlin.collections.listOf in kotlin-stdlib-", listOf.substringBefore("2.4.21"))
+        assertEquals(
+            "-sources.jar!/commonMain/kotlin/collections/Collections.kt (library: read-only, not addressable)",
+            listOf.lines().first().substringAfter("2.4.21"),
+        )
+        assertTrue("Returns a new read-only list of given elements." in listOf, listOf)
+        assertTrue(listOf.endsWith("fun <T> listOf(vararg elements: T): List<T>"), listOf)
+        val toInt = found("toInt")
+        assertTrue(toInt.startsWith("// kotlin.text.toInt in kotlin-stdlib-"), toInt)
+        assertTrue(toInt.endsWith("fun String.toInt(): Int"), toInt)
+        // The JDK: a class file in a jrt: URI, no sources.
+        assertEquals(
+            "// name in java.io.File, in JDK java.base (library: read-only, not addressable; no sources, so no KDoc or declaration)",
+            found("name"),
+        )
+        // A keyword has no definition.
+        assertEquals(GetDefinitionResult.Unresolved("return", "uses", 11, diagnostic = null), get("Definitions/uses", "return"))
+    }
+
+    @Test
+    @Order(18)
+    fun `an unresolved reference has no definition, but a diagnostic on its name`() = runBlocking<Unit> {
+        val file = project.resolve("src/main/kotlin/fixture/Definitions.kt")
+        val broken = TextDocument(Files.readString(file).replace("area(1.0, 2.0)", "nope(1.0, 2.0)"))
+        val name = broken.positionOf(broken.text.indexOf("nope"))
+        try {
+            assertEquals(emptyList(), lsp.definition(file, broken, name))
+            val diagnostic = lsp.diagnostics(file, broken).single { name in it.range }
+            assertEquals("UNRESOLVED_REFERENCE", diagnostic.code)
+        } finally {
+            lsp.closeDocument(file)
+            lsp.closeDocument(file)
+        }
     }
 }

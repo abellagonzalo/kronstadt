@@ -1,0 +1,191 @@
+package kronstadt.core.application
+
+import kronstadt.core.domain.Definition
+import kronstadt.core.domain.DeclarationHead
+import kronstadt.core.domain.Position
+import kronstadt.core.domain.Readiness
+import kronstadt.core.domain.SymbolPath
+import kronstadt.core.domain.SymbolSpan
+import kronstadt.core.domain.SymbolTree
+import kronstadt.core.domain.TextRange
+import kronstadt.core.domain.packageName
+import kronstadt.core.port.CodeIntelligence
+import kronstadt.core.port.FileStore
+import kotlin.time.Duration
+
+/**
+ * Use case behind `kt_get_definition`: where a name used inside a Symbol is declared, and that declaration's contract
+ * (its KDoc and declaration, without the body), found by text within the Symbol Span so the agent never computes positions.
+ */
+public class GetDefinition(
+    private val files: FileStore,
+    private val intelligence: CodeIntelligence,
+    private val readinessTimeout: Duration = Readiness.DEFAULT_TIMEOUT,
+) {
+    private val resolver = SymbolResolver(files, intelligence, readinessTimeout)
+
+    /** Resolves [name] where it occurs in [symbol] (in [file], else resolved project-wide). */
+    public suspend operator fun invoke(symbol: String, name: String, at: String? = null, file: String? = null): GetDefinitionResult {
+        val symbolPath = SymbolPath.parse(symbol).getOrElse { return GetDefinitionResult.InvalidPath(symbol, it.message.orEmpty()) }
+        if (file != null && symbolPath.packageName != null) {
+            return GetDefinitionResult.InvalidPath(symbol, "a package prefix is only for paths without a file; drop it or the file")
+        }
+        // Definitions come from the index even when the Symbol's file is given.
+        val readiness = intelligence.awaitReady(readinessTimeout)
+        if (readiness is Readiness.NotReady) return GetDefinitionResult.NotReady(readiness.phase, readiness.elapsed)
+        val found = when (val resolution = resolver.resolve(file, symbolPath)) {
+            is SymbolResolver.Resolution.Found -> resolution
+            is SymbolResolver.Resolution.Ambiguous -> return GetDefinitionResult.Ambiguous(symbol, file, resolution.candidates)
+            is SymbolResolver.Resolution.NotFound -> return GetDefinitionResult.NotFound(symbol, file, resolution.suggestions)
+            is SymbolResolver.Resolution.NotReady -> return GetDefinitionResult.NotReady(resolution.phase, resolution.elapsed)
+            is SymbolResolver.Resolution.FileNotFound -> return GetDefinitionResult.FileNotFound(resolution.path)
+            is SymbolResolver.Resolution.NotKotlin -> return GetDefinitionResult.NotKotlin(resolution.path)
+            is SymbolResolver.Resolution.OutsideProject -> return GetDefinitionResult.OutsideProject(resolution.path)
+        }
+        val document = found.document
+        val (first, last) = SymbolSpan.lines(document, found.node.symbol)
+        val span = document.offsetOf(Position(first, 0)) until document.offsetOf(Position(last, Int.MAX_VALUE))
+        fun notExactlyOnce(text: String, matches: List<IntRange>) = GetDefinitionResult.NotExactlyOnce(
+            text,
+            found.tree.canonicalPath(found.node).toString(),
+            files.display(found.file),
+            matches.map { document.positionOf(it.first).line }.distinct().map { Occurrence(it + 1, document.line(it).trim()) },
+        )
+        // The name is looked up inside the `at` snippet when there is one, else inside the whole span.
+        val scope = if (at == null) span else {
+            val snippets = occurrences(document.text, at, span)
+            snippets.singleOrNull() ?: return notExactlyOnce(at, snippets)
+        }
+        // Searched in the whole text, so the identifier boundaries see past the scope's ends.
+        val names = identifier(name).findAll(document.text, scope.first).map { it.range }.takeWhile { it.last <= scope.last }.toList()
+        val nameRange = names.singleOrNull() ?: return notExactlyOnce(name, names)
+        val position = document.positionOf(nameRange.first)
+        val definitions = try {
+            intelligence.definition(found.file, document, position)
+        } finally {
+            intelligence.closeDocument(found.file)
+        }
+        if (definitions.isEmpty()) {
+            val range = TextRange(position, document.positionOf(nameRange.last + 1))
+            val diagnostic = try {
+                intelligence.diagnostics(found.file, document)
+            } finally {
+                intelligence.closeDocument(found.file)
+            }.firstOrNull { it.range.start < range.end && range.start < it.range.end }
+            return GetDefinitionResult.Unresolved(
+                name,
+                found.tree.canonicalPath(found.node).toString(),
+                position.line + 1,
+                diagnostic?.let { d -> d.code?.let { "$it: ${d.message}" } ?: d.message },
+            )
+        }
+        val text = definitions.map { definition ->
+            when (definition) {
+                is Definition.InSource -> sourceTarget(definition, name)
+                is Definition.InLibrary -> libraryTarget(definition, name)
+            }
+        }.joinToString("\n\n")
+        return GetDefinitionResult.Found(text)
+    }
+
+    /** Where [snippet] occurs, exactly as written, within [range] of [text]; overlapping occurrences included. */
+    private fun occurrences(text: String, snippet: String, range: IntRange): List<IntRange> {
+        if (snippet.isEmpty()) return emptyList()
+        return generateSequence(text.indexOf(snippet, range.first)) { text.indexOf(snippet, it + 1) }
+            .takeWhile { it >= 0 && it + snippet.length <= range.last + 1 }
+            .map { it until it + snippet.length }
+            .toList()
+    }
+
+    /** [name] as a whole identifier, not part of a longer one; backticks optional. */
+    private fun identifier(name: String): Regex {
+        val bare = name.removeSurrounding("`")
+        return Regex("""(?<![\p{L}\p{N}_`])`?""" + Regex.escape(bare) + """`?(?![\p{L}\p{N}_`])""")
+    }
+
+    /**
+     * A declaration in a source file: a project Symbol, a local, or something in a file Kronstadt can't address (not
+     * Kotlin, or outside the project), shown with the line it is on. [name] stands in for a name that can't be read.
+     */
+    private suspend fun sourceTarget(definition: Definition.InSource, name: String): String {
+        val location = definition.location
+        val file = location.file
+        val line = location.range.start.line
+        if (files.resolve(file.toString()) != file) return "// $name in $file, L${line + 1} (outside the project: read-only, not addressable)"
+        val shown = files.display(file)
+        if (!AnalysedFile.isKotlin(file)) {
+            val document = files.read(file)?.takeIf { line < it.lineCount }
+            return "// ${document?.slice(location.range) ?: name} in $shown, L${line + 1} (not Kotlin: read-only, not addressable)" +
+                (document?.let { "\n" + it.line(line).trim() } ?: "")
+        }
+        val analysed = AnalysedFile.of(files, intelligence, file) ?: return "// $name in $shown, L${line + 1} (file not found)"
+        val node = analysed.tree.nodes.lastOrNull { it.symbol.selectionRange.start == location.range.start }
+            ?: return local(analysed, location.range, shown)
+        val canonical = analysed.tree.canonicalPath(node).toString()
+        val (first, last) = SymbolSpan.lines(analysed.document, node.symbol)
+        return "// $canonical in $shown, L${first + 1}-${last + 1}\n" +
+            DeclarationHead.of(analysed.document, node.symbol, first) + "\n" +
+            "// Body omitted. Full source: kt_read_symbol(symbol=\"$canonical\", file=\"$shown\")"
+    }
+
+    /**
+     * A library or JDK declaration, which no tool can edit. With sources: its fully qualified name, then its KDoc and
+     * declaration without the body. Without: the class it is in, from the class file's path.
+     */
+    private fun libraryTarget(definition: Definition.InLibrary, name: String): String {
+        val where = "${definition.origin}!/${definition.entry} (library: read-only, not addressable)"
+        val source = definition.source
+        val node = source?.let { SymbolTree(it.symbols).nodes.lastOrNull { node -> node.symbol.selectionRange.start == definition.range.start } }
+        if (source == null || node == null) {
+            val className = definition.entry.removeSuffix(".class").replace('/', '.').replace('$', '.')
+            val member = if (className.substringAfterLast('.') == name) "" else "$name in "
+            return "// $member$className, in ${definition.origin} (library: read-only, not addressable; no sources, so no KDoc or declaration)"
+        }
+        val fqName = (listOf(source.document.packageName) + (node.ancestors + node.symbol).map { it.name })
+            .filter { it.isNotEmpty() }.joinToString(".")
+        val (first, _) = SymbolSpan.lines(source.document, node.symbol)
+        return "// $fqName in $where\n" + DeclarationHead.of(source.document, node.symbol, first)
+    }
+
+    /** A declaration no Symbol Path addresses (a local variable, parameter or local function): where it is. */
+    private fun local(analysed: AnalysedFile, range: TextRange, shown: String): String {
+        val name = analysed.document.slice(range)
+        val enclosing = analysed.tree.nodes.lastOrNull { range.start in it.symbol.range }
+            ?.let { analysed.tree.canonicalPath(it).toString() } ?: FILE_LEVEL
+        val line = range.start.line
+        return "// $name is local to $enclosing in $shown, not addressable; declared at L${line + 1}\n" +
+            analysed.document.line(line).trim()
+    }
+
+    private companion object {
+        const val FILE_LEVEL = "(file level)"
+    }
+}
+
+public sealed interface GetDefinitionResult {
+    /** Each definition as its own block, in the code intelligence's order. */
+    public data class Found(val text: String) : GetDefinitionResult
+    public data class InvalidPath(val symbol: String, val reason: String) : GetDefinitionResult
+
+    /** [text] (the name, or the `at` snippet) doesn't occur exactly once in [symbol]'s span in [file]; [lines] are where it does. */
+    public data class NotExactlyOnce(val text: String, val symbol: String, val file: String, val lines: List<Occurrence>) : GetDefinitionResult
+
+    /** [file] is null when the path was resolved project-wide; each candidate names its own file. */
+    public data class Ambiguous(val symbol: String, val file: String?, val candidates: List<SymbolCandidate>) : GetDefinitionResult
+    public data class NotFound(val symbol: String, val file: String?, val suggestions: List<SymbolCandidate>) : GetDefinitionResult
+
+    /**
+     * [name] (on 1-based [line] of [symbol]) resolves to no declaration: a keyword, a literal or an unresolved
+     * reference. Not an error. [diagnostic] is the compiler's finding on the name, if any.
+     */
+    public data class Unresolved(val name: String, val symbol: String, val line: Int, val diagnostic: String?) : GetDefinitionResult
+
+    /** The index was still incomplete after waiting [elapsed]. */
+    public data class NotReady(val phase: String, val elapsed: Duration) : GetDefinitionResult
+    public data class FileNotFound(val path: String) : GetDefinitionResult
+    public data class NotKotlin(val path: String) : GetDefinitionResult
+    public data class OutsideProject(val path: String) : GetDefinitionResult
+}
+
+/** A 1-based [line] and its trimmed [source]. */
+public data class Occurrence(val line: Int, val source: String)

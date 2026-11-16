@@ -1,0 +1,356 @@
+package kronstadt.core.application
+
+import kotlinx.coroutines.test.runTest
+import kronstadt.core.domain.CodeSymbol
+import kronstadt.core.domain.Definition
+import kronstadt.core.domain.Diagnostic
+import kronstadt.core.domain.LibrarySource
+import kronstadt.core.domain.Position
+import kronstadt.core.domain.Severity
+import kronstadt.core.domain.SourceLocation
+import kronstadt.core.domain.SymbolKind
+import kronstadt.core.domain.SymbolLocation
+import kronstadt.core.domain.TextDocument
+import kronstadt.core.domain.TextRange
+import java.nio.file.Path
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.time.Duration.Companion.seconds
+
+/** `kt_get_definition`: where a name used inside a Symbol is declared, without the agent computing positions. */
+class GetDefinitionTest {
+    private val root = Path.of("/project")
+
+    private fun range(startLine: Int, startChar: Int, endLine: Int, endChar: Int) =
+        TextRange(Position(startLine, startChar), Position(endLine, endChar))
+
+    private fun symbol(name: String, kind: SymbolKind, range: TextRange, nameLine: Int, nameChar: Int, detail: String? = null, children: List<CodeSymbol> = emptyList()) =
+        CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, detail)
+
+    // The Greeter, documented, and a caller that uses it.
+
+    private val greeterKt = "src/main/kotlin/com/example/Greeter.kt"
+    private val greeterSource = """
+        |package com.example
+        |
+        |/** Says hello. */
+        |class Greeter(private val prefix: String) {
+        |    /**
+        |     * Greets [name].
+        |     */
+        |    @Deprecated("use greetAll")
+        |    fun greet(name: String): String {
+        |        return "${'$'}prefix, ${'$'}name"
+        |    }
+        |}
+        |""".trimMargin()
+    private val greet = symbol("greet", SymbolKind.FUNCTION, range(4, 4, 10, 5), 8, 8, "(String): String")
+    private val greeter = symbol("Greeter", SymbolKind.CLASS, range(2, 0, 11, 1), 3, 6, children = listOf(greet))
+
+    private val callerKt = "src/main/kotlin/com/example/Caller.kt"
+    private val callerSource = """
+        |package com.example
+        |
+        |fun welcome(guest: String): String {
+        |    val greeter = Greeter("Hi")
+        |    return greeter.greet(guest)
+        |}
+        |""".trimMargin()
+    private val welcome = symbol("welcome", SymbolKind.FUNCTION, range(2, 0, 5, 1), 2, 4, "(String): String")
+
+    private val listsKt = "src/main/kotlin/com/example/Lists.kt"
+    private val listsSource = """
+        |package com.example
+        |
+        |fun names(): Int = listOf("a").size + java.io.File("x").name.length
+        |""".trimMargin()
+    private val names = symbol("names", SymbolKind.FUNCTION, range(2, 0, 2, 67), 2, 4, "(): Int")
+
+    /** The name at [line]:[char] (zero-based) of the lists file. */
+    private fun inLists(line: Int, char: Int) = root.resolve(listsKt) to Position(line, char)
+
+    // A slice of the Kotlin standard library's sources, as kotlin-lsp finds them in its sources jar.
+
+    private val stdlibSource = """
+        |package kotlin.collections
+        |
+        |/**
+        | * Returns a new read-only list of given elements.
+        | */
+        |public fun <T> listOf(vararg elements: T): List<T> =
+        |    if (elements.size > 0) elements.asList() else emptyList()
+        |
+        |public interface List<out E> : Collection<E> {
+        |    /** The number of elements. */
+        |    override val size: Int
+        |}
+        |""".trimMargin()
+    private val listOf = symbol("listOf", SymbolKind.FUNCTION, range(2, 0, 6, 61), 5, 15, "(vararg T): List<T>")
+    private val size = symbol("size", SymbolKind.PROPERTY, range(9, 4, 10, 26), 10, 17, ": Int")
+    private val list = symbol("List", SymbolKind.INTERFACE, range(8, 0, 11, 1), 8, 17, children = listOf(size))
+    private val stdlib = LibrarySource(TextDocument(stdlibSource), listOf(listOf, list))
+    private fun inStdlib(symbol: CodeSymbol) =
+        Definition.InLibrary("kotlin-stdlib-2.4.21-sources.jar", "commonMain/kotlin/collections/Collections.kt", symbol.selectionRange, stdlib)
+
+    private val legacyJava = "src/main/java/com/example/Legacy.java"
+    private val legacySource = "package com.example;\n\npublic class Legacy {\n    public static String hello() { return \"hi\"; }\n}\n"
+
+    private fun project(
+        definitions: Map<Pair<Path, Position>, List<Definition>> = emptyMap(),
+        notReadyPhase: String? = null,
+        diagnosticsByText: Map<String, List<Diagnostic>> = emptyMap(),
+    ): Pair<FakeFileStore, FakeCodeIntelligence> {
+        val files = FakeFileStore(
+            root,
+            mapOf(greeterKt to greeterSource, callerKt to callerSource, listsKt to listsSource, legacyJava to legacySource),
+        )
+        val symbols = mapOf(greeterKt to listOf(greeter), callerKt to listOf(welcome), listsKt to listOf(names))
+        val index = symbols.flatMap { (file, roots) ->
+            fun all(s: CodeSymbol): List<CodeSymbol> = listOf(s) + s.children.flatMap(::all)
+            roots.flatMap(::all).map { SymbolLocation(it.name, it.kind, root.resolve(file), it.selectionRange) }
+        }
+        val intelligence = FakeCodeIntelligence(
+            notReadyPhase = notReadyPhase,
+            symbolsByFile = symbols.mapKeys { (file, _) -> root.resolve(file) },
+            index = index,
+            definitions = definitions,
+            diagnosticsByText = diagnosticsByText,
+        )
+        return files to intelligence
+    }
+
+    /** The name at [line]:[char] (zero-based) of the caller. */
+    private fun inCaller(line: Int, char: Int) = root.resolve(callerKt) to Position(line, char)
+
+    private fun inSource(file: String, symbol: CodeSymbol) = Definition.InSource(SourceLocation(root.resolve(file), symbol.selectionRange))
+
+    @Test
+    fun `a project target shows its header, KDoc and signature without the body, and how to read the rest`() = runTest {
+        val (files, intelligence) = project(mapOf(inCaller(4, 19) to listOf(inSource(greeterKt, greet))))
+
+        val result = GetDefinition(files, intelligence)("welcome", "greet")
+
+        assertEquals(
+            """
+            |// greet in src/main/kotlin/com/example/Greeter.kt, L5-11
+            |    /**
+            |     * Greets [name].
+            |     */
+            |    @Deprecated("use greetAll")
+            |    fun greet(name: String): String
+            |// Body omitted. Full source: kt_read_symbol(symbol="greet", file="src/main/kotlin/com/example/Greeter.kt")
+            """.trimMargin(),
+            assertIs<GetDefinitionResult.Found>(result).text,
+        )
+        assertEquals(emptySet(), intelligence.openDocuments)
+    }
+
+    @Test
+    fun `a name that occurs more than once in the Symbol Span fails and lists the lines where it occurs`() = runTest {
+        val (files, intelligence) = project()
+
+        assertEquals(
+            GetDefinitionResult.NotExactlyOnce(
+                text = "greeter",
+                symbol = "welcome",
+                file = callerKt,
+                lines = listOf(Occurrence(4, "val greeter = Greeter(\"Hi\")"), Occurrence(5, "return greeter.greet(guest)")),
+            ),
+            GetDefinition(files, intelligence)("welcome", "greeter"),
+        )
+        assertEquals(emptySet(), intelligence.openDocuments)
+    }
+
+    @Test
+    fun `a name that doesn't occur in the Symbol Span as a whole identifier fails with no lines`() = runTest {
+        val (files, intelligence) = project()
+
+        assertEquals(
+            GetDefinitionResult.NotExactlyOnce("greete", "welcome", callerKt, emptyList()),
+            GetDefinition(files, intelligence)("welcome", "greete"),
+        )
+    }
+
+    /** A declaration in the caller, at [line]:[char] (zero-based), [length] long. */
+    private fun inCallerAt(line: Int, char: Int, length: Int) =
+        Definition.InSource(SourceLocation(root.resolve(callerKt), range(line, char, line, char + length)))
+
+    @Test
+    fun `with at, the name is looked up inside the snippet, and a local variable shows its enclosing Symbol Path and declaration line`() = runTest {
+        val (files, intelligence) = project(mapOf(inCaller(4, 11) to listOf(inCallerAt(3, 8, 7))))
+
+        val result = GetDefinition(files, intelligence)("welcome", "greeter", at = "greeter.greet(")
+
+        assertEquals(
+            "// greeter is local to welcome in src/main/kotlin/com/example/Caller.kt, not addressable; declared at L4\n" +
+                "val greeter = Greeter(\"Hi\")",
+            assertIs<GetDefinitionResult.Found>(result).text,
+        )
+        assertEquals(emptySet(), intelligence.openDocuments)
+    }
+
+    @Test
+    fun `a parameter is local too`() = runTest {
+        val (files, intelligence) = project(mapOf(inCaller(4, 25) to listOf(inCallerAt(2, 12, 5))))
+
+        val result = GetDefinition(files, intelligence)("welcome", "guest", at = "greet(guest)")
+
+        assertEquals(
+            "// guest is local to welcome in src/main/kotlin/com/example/Caller.kt, not addressable; declared at L3\n" +
+                "fun welcome(guest: String): String {",
+            assertIs<GetDefinitionResult.Found>(result).text,
+        )
+    }
+
+    @Test
+    fun `an at snippet that doesn't occur exactly once fails and lists its lines`() = runTest {
+        val (files, intelligence) = project()
+
+        assertEquals(
+            GetDefinitionResult.NotExactlyOnce(
+                text = "greeter",
+                symbol = "welcome",
+                file = callerKt,
+                lines = listOf(Occurrence(4, "val greeter = Greeter(\"Hi\")"), Occurrence(5, "return greeter.greet(guest)")),
+            ),
+            GetDefinition(files, intelligence)("welcome", "greet", at = "greeter"),
+        )
+    }
+
+    @Test
+    fun `a name that isn't inside the at snippet fails`() = runTest {
+        val (files, intelligence) = project()
+
+        assertEquals(
+            GetDefinitionResult.NotExactlyOnce("guest", "welcome", callerKt, emptyList()),
+            GetDefinition(files, intelligence)("welcome", "guest", at = "greeter.greet"),
+        )
+    }
+
+    @Test
+    fun `a library target shows its fully qualified name, its jar, and its KDoc and signature, read-only`() = runTest {
+        val (files, intelligence) = project(mapOf(inLists(2, 19) to listOf(inStdlib(listOf))))
+
+        val result = GetDefinition(files, intelligence)("names", "listOf")
+
+        assertEquals(
+            """
+            |// kotlin.collections.listOf in kotlin-stdlib-2.4.21-sources.jar!/commonMain/kotlin/collections/Collections.kt (library: read-only, not addressable)
+            |/**
+            | * Returns a new read-only list of given elements.
+            | */
+            |public fun <T> listOf(vararg elements: T): List<T>
+            """.trimMargin(),
+            assertIs<GetDefinitionResult.Found>(result).text,
+        )
+        assertEquals(emptySet(), intelligence.openDocuments)
+    }
+
+    @Test
+    fun `a library member's fully qualified name goes through its enclosing declarations`() = runTest {
+        val (files, intelligence) = project(mapOf(inLists(2, 31) to listOf(inStdlib(size))))
+
+        val result = GetDefinition(files, intelligence)("names", "size")
+
+        assertEquals(
+            """
+            |// kotlin.collections.List.size in kotlin-stdlib-2.4.21-sources.jar!/commonMain/kotlin/collections/Collections.kt (library: read-only, not addressable)
+            |    /** The number of elements. */
+            |    override val size: Int
+            """.trimMargin(),
+            assertIs<GetDefinitionResult.Found>(result).text,
+        )
+    }
+
+    @Test
+    fun `a target without sources, such as a JDK class, shows the class it is in`() = runTest {
+        val inFile = Definition.InLibrary("JDK java.base", "java/io/File.class", range(37, 63, 37, 70), source = null)
+        val (files, intelligence) = project(mapOf(inLists(2, 56) to listOf(inFile)))
+
+        val result = GetDefinition(files, intelligence)("names", "name")
+
+        assertEquals(
+            "// name in java.io.File, in JDK java.base (library: read-only, not addressable; no sources, so no KDoc or declaration)",
+            assertIs<GetDefinitionResult.Found>(result).text,
+        )
+    }
+
+    @Test
+    fun `several definitions are each printed as their own block, in the order the code intelligence gives them`() = runTest {
+        val (files, intelligence) = project(mapOf(inLists(2, 19) to listOf(inStdlib(listOf), inSource(greeterKt, greet))))
+
+        val text = assertIs<GetDefinitionResult.Found>(GetDefinition(files, intelligence)("names", "listOf")).text
+
+        val blocks = text.split("\n\n")
+        assertEquals(2, blocks.size, text)
+        assertEquals("// kotlin.collections.listOf in", blocks[0].substringBefore(" kotlin-stdlib"))
+        assertEquals("// greet in src/main/kotlin/com/example/Greeter.kt, L5-11", blocks[1].lines().first())
+    }
+
+    @Test
+    fun `an unresolved reference isn't an error, it says so with the compiler's diagnostic`() = runTest {
+        val unresolved = Diagnostic(range(3, 18, 3, 25), Severity.ERROR, "Unresolved reference 'Greeter'.", "UNRESOLVED_REFERENCE")
+        val (files, intelligence) = project(diagnosticsByText = mapOf(callerSource to listOf(unresolved)))
+
+        assertEquals(
+            GetDefinitionResult.Unresolved("Greeter", "welcome", 4, "UNRESOLVED_REFERENCE: Unresolved reference 'Greeter'."),
+            GetDefinition(files, intelligence)("welcome", "Greeter"),
+        )
+        assertEquals(emptySet(), intelligence.openDocuments)
+    }
+
+    @Test
+    fun `a keyword doesn't resolve either, and has no diagnostic`() = runTest {
+        val (files, intelligence) = project()
+
+        assertEquals(
+            GetDefinitionResult.Unresolved("return", "welcome", 5, diagnostic = null),
+            GetDefinition(files, intelligence)("welcome", "return"),
+        )
+    }
+
+    @Test
+    fun `waits for the index even with a file, and fails with the phase if it isn't ready in time`() = runTest {
+        val (files, intelligence) = project(notReadyPhase = "Indexing")
+
+        val result = GetDefinition(files, intelligence, readinessTimeout = 5.seconds)("welcome", "greet", file = callerKt)
+
+        assertEquals(GetDefinitionResult.NotReady("Indexing", 5.seconds), result)
+        assertEquals(emptyList(), intelligence.analysed)
+    }
+
+    @Test
+    fun `a target in a file Kronstadt can't address, such as Java source or a file outside the project, shows where it is`() = runTest {
+        val inJava = Definition.InSource(SourceLocation(root.resolve(legacyJava), range(3, 25, 3, 30)))
+        val outside = Definition.InSource(SourceLocation(Path.of("/elsewhere/Gen.kt"), range(9, 4, 9, 9)))
+        val (files, intelligence) = project(mapOf(inCaller(4, 19) to listOf(inJava, outside)))
+
+        val result = GetDefinition(files, intelligence)("welcome", "greet")
+
+        assertEquals(
+            "// hello in src/main/java/com/example/Legacy.java, L4 (not Kotlin: read-only, not addressable)\n" +
+                "public static String hello() { return \"hi\"; }\n\n" +
+                "// greet in /elsewhere/Gen.kt, L10 (outside the project: read-only, not addressable)",
+            assertIs<GetDefinitionResult.Found>(result).text,
+        )
+        assertEquals(emptySet(), intelligence.openDocuments)
+    }
+
+    @Test
+    fun `a package prefix is only for Symbol Paths without a file`() = runTest {
+        val (files, intelligence) = project()
+
+        assertIs<GetDefinitionResult.InvalidPath>(GetDefinition(files, intelligence)("com.example/welcome", "greet", file = callerKt))
+    }
+
+    @Test
+    fun `a name cut short by the end of the at snippet is not a whole identifier`() = runTest {
+        val (files, intelligence) = project()
+
+        assertEquals(
+            GetDefinitionResult.NotExactlyOnce("gre", "welcome", callerKt, emptyList()),
+            GetDefinition(files, intelligence)("welcome", "gre", at = "greeter.gre"),
+        )
+    }
+}

@@ -17,6 +17,7 @@ import kotlinx.io.buffered
 import kronstadt.core.application.Edit
 import kronstadt.core.application.FindSymbol
 import kronstadt.core.application.FindUsages
+import kronstadt.core.application.GetDefinition
 import kronstadt.core.application.ReadStructure
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.WriteLock
@@ -70,7 +71,8 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
         ServerOptions(capabilities = ServerCapabilities(tools = ServerCapabilities.Tools(listChanged = false))),
         instructions = "Kronstadt gives symbol-level access to the Kotlin project at ${files.root}. " +
             "Prefer kt_find_symbol over grep to locate declarations, kt_find_usages over grep to find where a Symbol is " +
-            "used, and kt_read_structure and kt_read_symbol over reading whole files.",
+            "used, kt_get_definition over grep to find where a name is declared, and kt_read_structure and kt_read_symbol " +
+            "over reading whole files.",
     )
     val intelligence = DeferredCodeIntelligence(languageServer)
     KronstadtTools(
@@ -78,6 +80,7 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
         FindSymbol(files, intelligence, config.readinessTimeout),
         ReadSymbol(files, intelligence, config.readinessTimeout),
         FindUsages(files, intelligence, config.readinessTimeout),
+        GetDefinition(files, intelligence, config.readinessTimeout),
         Edit(files, intelligence, config.readinessTimeout, config.validationTimeout, WriteLock()),
     ).registerOn(server)
 

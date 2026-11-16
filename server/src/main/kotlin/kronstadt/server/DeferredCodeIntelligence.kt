@@ -3,6 +3,7 @@ package kronstadt.server
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.withTimeoutOrNull
 import kronstadt.core.domain.CodeSymbol
+import kronstadt.core.domain.Definition
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
@@ -41,6 +42,9 @@ internal class DeferredCodeIntelligence(private val delegate: Deferred<Result<Co
 
     override suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation> =
         delegate.await().getOrThrow().references(file, document, position)
+
+    override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> =
+        delegate.await().getOrThrow().definition(file, document, position)
 
     /** Startup counts against [timeout]: the agent waits once, however the time is split. */
     override suspend fun awaitReady(timeout: Duration): Readiness {
