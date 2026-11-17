@@ -78,6 +78,9 @@ internal class ShadowWorkspace(
         data object FileNotFound : Lookup
     }
 
+    /** [file]'s current text, loading it from disk on first touch; null if there's no such file. */
+    suspend fun current(file: Path): TextDocument? = touch(file)?.current
+
     /** Resolves [symbol] against [file]'s current text, loading the file from disk on first touch. */
     suspend fun resolve(file: Path, symbol: SymbolPath): Lookup {
         val found = when (val resolution = resolver.resolveIn(this, file, symbol)) {

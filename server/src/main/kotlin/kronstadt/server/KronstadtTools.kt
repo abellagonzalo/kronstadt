@@ -18,6 +18,7 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import kronstadt.core.application.Delete
 import kronstadt.core.application.Edit
+import kronstadt.core.application.EditIn
 import kronstadt.core.application.EditResult
 import kronstadt.core.application.EditedFile
 import kronstadt.core.application.FindSymbol
@@ -189,6 +190,11 @@ internal class KronstadtTools(
                 "'insert_before' and 'insert_after' add your code as a sibling of the Symbol, one blank line from it " +
                 "('insert_before' goes above its KDoc and annotations). 'delete' removes the whole span and one " +
                 "blank line next to it. Code is re-indented to the target's column, so indentation needn't match. " +
+                "'edit_in' replaces 'old', which must occur exactly once in the Symbol's span (whitespace included, " +
+                "no regex or fuzzy matching), with 'new' as written (only its line breaks become the file's); it " +
+                "changes one line of a large Symbol cheaply. " +
+                "With a file and no symbol, 'edit_in' works on the whole file: the only way to change text outside " +
+                "any Symbol, such as the package line, file annotations or imports. " +
                 "Files are written only if the Edit adds no compiler errors to them; otherwise nothing is written and " +
                 "the new errors are listed. " +
                 "An Edit is an ordered batch of Operations, possibly across files: each resolves against the code the " +
@@ -212,12 +218,14 @@ internal class KronstadtTools(
                                         add("insert_before")
                                         add("insert_after")
                                         add("delete")
+                                        add("edit_in")
                                     }
                                     put("description", "The Operation.")
                                 }
                                 stringProperty(
                                     "symbol",
-                                    "Symbol Path of the target, as kt_read_symbol takes it, e.g. 'OrderController/create'.",
+                                    "Symbol Path of the target, as kt_read_symbol takes it, e.g. 'OrderController/create'. " +
+                                        "Required, except by an 'edit_in' on a whole file.",
                                 )
                                 stringProperty(
                                     "file",
@@ -227,12 +235,17 @@ internal class KronstadtTools(
                                 stringProperty(
                                     "code",
                                     "For 'replace', the complete new source for the Symbol's whole span; for " +
-                                        "'insert_before' and 'insert_after', the code to add. Not used by 'delete'.",
+                                        "'insert_before' and 'insert_after', the code to add. Not used by 'delete' or 'edit_in'.",
                                 )
+                                stringProperty(
+                                    "old",
+                                    "For 'edit_in', the exact text to replace, copied from kt_read_symbol output; it " +
+                                        "must occur exactly once in the target.",
+                                )
+                                stringProperty("new", "For 'edit_in', the text to put in place of 'old', as written; may be empty.")
                             }
                             putJsonArray("required") {
                                 add("type")
-                                add("symbol")
                             }
                         }
                     }
@@ -248,17 +261,22 @@ internal class KronstadtTools(
         val parsed = operations.mapIndexed { index, element ->
             val operation = element as? JsonObject ?: return error("Operation $index must be an object. Nothing written.")
             val type = operation.string("type") ?: return error("Operation $index: missing 'type'. Nothing written.")
-            val symbol = operation.string("symbol") ?: return error("Operation $index: missing 'symbol'. Nothing written.")
+            val symbol = operation.string("symbol")?.takeIf { it.isNotBlank() }
             val file = operation.string("file")?.takeIf { it.isNotBlank() }
+            fun missing(what: String) = error("Operation $index: missing $what, which '$type' needs. Nothing written.")
             val code = operation.string("code")
-            val missingCode = "Operation $index: missing 'code', which '$type' needs. Nothing written."
             when (type) {
-                "replace" -> Replace(file, symbol, code ?: return error(missingCode))
-                "insert_before" -> InsertBefore(file, symbol, code ?: return error(missingCode))
-                "insert_after" -> InsertAfter(file, symbol, code ?: return error(missingCode))
-                "delete" -> Delete(file, symbol)
+                "replace" -> Replace(file, symbol ?: return missing("'symbol'"), code ?: return missing("'code'"))
+                "insert_before" -> InsertBefore(file, symbol ?: return missing("'symbol'"), code ?: return missing("'code'"))
+                "insert_after" -> InsertAfter(file, symbol ?: return missing("'symbol'"), code ?: return missing("'code'"))
+                "delete" -> Delete(file, symbol ?: return missing("'symbol'"))
+                "edit_in" -> {
+                    if (symbol == null && file == null) return missing("a 'symbol', a 'file', or both")
+                    val old = operation.string("old")?.takeIf { it.isNotEmpty() } ?: return missing("a non-empty 'old'")
+                    EditIn(file, symbol, old, operation.string("new") ?: return missing("'new'"))
+                }
                 else -> return error(
-                    "Operation $index: unsupported type '$type'; use replace, insert_before, insert_after or delete. Nothing written.",
+                    "Operation $index: unsupported type '$type'; use replace, insert_before, insert_after, delete or edit_in. Nothing written.",
                 )
             }
         }
@@ -330,6 +348,16 @@ internal class KronstadtTools(
         is OperationFailure.NeedsFile ->
             "'${failure.symbol}' exists only in what earlier Operations of this Edit wrote, and a Symbol Path without a " +
                 "file is looked up on disk; pass its file:\n" + candidates(failure.candidates, withFiles = true) + "\n"
+        is OperationFailure.NotExactlyOnce -> {
+            val where = (failure.symbol?.let { "$it in " } ?: "") + failure.file
+            if (failure.lines.isEmpty()) {
+                "'old' doesn't occur in $where, exactly as written (whitespace included). " +
+                    (if (failure.symbol == null) "Read the file to copy it." else "Use kt_read_symbol to see its source.")
+            } else {
+                "'old' occurs ${failure.count} times in $where; make it longer so it occurs exactly once:\n" +
+                    failure.lines.joinToString("\n") { "  L${it.line}: ${it.source}" } + "\n"
+            }
+        }
         is OperationFailure.FileNotFound -> "file not found: ${failure.path}."
         is OperationFailure.NotKotlin -> "not a Kotlin file: ${failure.path}. kt_edit only supports .kt and .kts files."
         is OperationFailure.OutsideProject -> "path is outside the project root: ${failure.path}."

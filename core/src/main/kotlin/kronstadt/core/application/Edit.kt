@@ -1,8 +1,10 @@
 package kronstadt.core.application
 
 import kronstadt.core.domain.FileLayout
+import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolPath
+import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.Validation
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
@@ -10,10 +12,12 @@ import kronstadt.core.port.FileStore
 import java.nio.file.Path
 import kotlin.time.Duration
 
-/** A single step inside an Edit, aimed at one Symbol Path, in [file] if it is given. */
+/** A single step inside an Edit, aimed at one Symbol Path, in [file] if it is given, or at a whole [file]. */
 public sealed interface Operation {
     public val file: String?
-    public val symbol: String
+
+    /** Null only for an [EditIn] on a whole file. */
+    public val symbol: String?
 }
 
 /** Replaces the whole Symbol Span of [symbol] with [code] (ADR 0004); nothing of the old span is kept. */
@@ -27,6 +31,18 @@ public data class InsertAfter(override val file: String?, override val symbol: S
 
 /** Removes the whole Symbol Span of [symbol] and one blank line next to it, below if there is one, else above. */
 public data class Delete(override val file: String?, override val symbol: String) : Operation
+
+/**
+ * Replaces the one occurrence of [old], exactly as written, whitespace included, inside the Symbol Span of [symbol],
+ * or anywhere in [file] when there is no [symbol], with [new] as written: no re-indentation, no fuzzy matching. Only
+ * the line breaks in [new] become the file's.
+ */
+public data class EditIn(override val file: String?, override val symbol: String?, val old: String, val new: String) : Operation {
+    init {
+        require(symbol != null || file != null) { "edit_in needs a symbol, a file, or both" }
+        require(old.isNotEmpty()) { "edit_in needs a non-empty 'old'" }
+    }
+}
 
 /**
  * Use case behind `kt_edit`: applies an Edit's Operations, in order, in a Shadow Workspace, validates them and writes
@@ -51,7 +67,7 @@ public class Edit(
      */
     public suspend operator fun invoke(operations: List<Operation>): EditResult {
         val paths = operations.mapIndexed { index, operation ->
-            val symbol = operation.symbol
+            val symbol = operation.symbol ?: return@mapIndexed null
             val symbolPath = SymbolPath.parse(symbol)
                 .getOrElse { return EditResult.OperationFailed(index, OperationFailure.InvalidPath(symbol, it.message.orEmpty())) }
             if (operation.file != null && symbolPath.packageName != null) {
@@ -96,10 +112,12 @@ public class Edit(
 
     /**
      * Resolves [operation]'s Symbol against the Shadow Workspace's current text and changes the lines around its span;
-     * new code is re-indented to the span's column.
+     * new code is re-indented to the span's column, except an [EditIn]'s. An [EditIn] without a Symbol works on its
+     * whole file instead.
      */
-    private suspend fun apply(session: AnalysisSession, shadow: ShadowWorkspace, operation: Operation, symbolPath: SymbolPath): Applied {
-        val symbol = operation.symbol
+    private suspend fun apply(session: AnalysisSession, shadow: ShadowWorkspace, operation: Operation, symbolPath: SymbolPath?): Applied {
+        if (symbolPath == null) return applyToFile(shadow, operation as EditIn)
+        val symbol = checkNotNull(operation.symbol)
         val file = when (val located = locate(session, shadow, operation.file, symbolPath)) {
             is Located.File -> located.file
             is Located.Failed -> return Applied.Failed(located.failure)
@@ -129,6 +147,11 @@ public class Edit(
             is Replace -> shadow.replaceLines(file, first..span.lastLine, reindented(operation.code))
             is InsertBefore -> shadow.replaceLines(file, first until first, sibling(operation.code) + "")
             is InsertAfter -> shadow.replaceLines(file, afterSpan until afterSpan, listOf("") + sibling(operation.code))
+            is EditIn -> when (val splice = Splice.inSpan(document, first..span.lastLine, operation)) {
+                is Splice.Done -> shadow.replaceLines(file, splice.lines, splice.newLines)
+                is Splice.NotExactlyOnce ->
+                    return Applied.Failed(OperationFailure.NotExactlyOnce(operation.old, found.canonical, shown, splice.count, splice.lines))
+            }
             is Delete -> {
                 // The last line is the empty one after a final newline, not a blank line between declarations.
                 val blankAfter = afterSpan < document.lineCount - 1 && document.line(afterSpan).isBlank()
@@ -144,10 +167,65 @@ public class Edit(
         return Applied.Done
     }
 
+    /** An [EditIn] on a whole file: its span is the whole text, and only the lines the occurrence is on change. */
+    private suspend fun applyToFile(shadow: ShadowWorkspace, operation: EditIn): Applied {
+        val path = checkNotNull(operation.file) { "an edit_in without a symbol has a file" }
+        val file = when (val located = fileAt(path)) {
+            is Located.File -> located.file
+            is Located.Failed -> return Applied.Failed(located.failure)
+            is Located.NotReady -> return Applied.NotReady(located.phase, located.elapsed)
+        }
+        val document = shadow.current(file) ?: return Applied.Failed(OperationFailure.FileNotFound(path))
+        when (val splice = Splice.inFile(document, operation)) {
+            is Splice.Done -> shadow.replaceLines(file, splice.lines, splice.newLines)
+            is Splice.NotExactlyOnce ->
+                return Applied.Failed(OperationFailure.NotExactlyOnce(operation.old, null, files.display(file), splice.count, splice.lines))
+        }
+        return Applied.Done
+    }
+
+    /** [EditIn]'s change to a document: whole [lines] (0-based) to replace with [newLines]. */
+    private sealed interface Splice {
+        data class Done(val lines: IntRange, val newLines: List<String>) : Splice
+        /** `old` occurs [count] times, on [lines]. */
+        data class NotExactlyOnce(val count: Int, val lines: List<Occurrence>) : Splice
+
+        companion object {
+            /** In a Symbol Span, [span] (0-based lines): the whole span is replaced, so it is what Validation and the result see as edited. */
+            fun inSpan(document: TextDocument, span: IntRange, operation: EditIn): Splice = of(document, span, operation) { span }
+
+            /** In a whole file, which belongs to no Symbol: only the lines the occurrence is on are replaced. */
+            fun inFile(document: TextDocument, operation: EditIn): Splice =
+                of(document, 0 until document.lineCount, operation) { it }
+
+            /** Replaces the one occurrence of the Operation's `old` within [scope] lines of [document], in the [replaced] lines (given the occurrence's). */
+            private fun of(document: TextDocument, scope: IntRange, operation: EditIn, replaced: (IntRange) -> IntRange): Splice {
+                val text = document.text
+                val old = operation.old
+                val start = document.offsetOf(Position(scope.first, 0))
+                val end = document.offsetOf(Position(scope.last, Int.MAX_VALUE))
+                val matches = exactOccurrences(document, old, start until end)
+                val match = matches.singleOrNull() ?: return NotExactlyOnce(matches.size, occurrenceLines(document, matches))
+                val lines = replaced(document.positionOf(match).line..document.positionOf(match + old.length).line)
+                val linesStart = document.offsetOf(Position(lines.first, 0))
+                val linesEnd = document.offsetOf(Position(lines.last, Int.MAX_VALUE))
+                val spliced = text.substring(linesStart, match) + operation.new + text.substring(match + old.length, linesEnd)
+                return Done(lines, spliced.lines())
+            }
+        }
+    }
+
     private sealed interface Located {
         data class File(val file: Path) : Located
         data class Failed(val failure: OperationFailure) : Located
         data class NotReady(val phase: String, val elapsed: Duration) : Located
+    }
+
+    /** The Kotlin file at [path], as the agent passed it. */
+    private fun fileAt(path: String): Located {
+        val file = files.resolve(path) ?: return Located.Failed(OperationFailure.OutsideProject(path))
+        if (!AnalysedFile.isKotlin(file)) return Located.Failed(OperationFailure.NotKotlin(path))
+        return Located.File(file)
     }
 
     /**
@@ -156,11 +234,7 @@ public class Edit(
      * sees only the disk, so a Symbol that exists only in that text needs its file.
      */
     private suspend fun locate(session: AnalysisSession, shadow: ShadowWorkspace, path: String?, symbolPath: SymbolPath): Located {
-        if (path != null) {
-            val file = files.resolve(path) ?: return Located.Failed(OperationFailure.OutsideProject(path))
-            if (!AnalysedFile.isKotlin(file)) return Located.Failed(OperationFailure.NotKotlin(path))
-            return Located.File(file)
-        }
+        if (path != null) return fileAt(path)
         val symbol = symbolPath.toString()
         return when (val resolution = resolver.resolve(session, null, symbolPath)) {
             is SymbolResolver.Resolution.Found -> Located.File(resolution.file)
@@ -247,6 +321,19 @@ public sealed interface OperationFailure {
      * [candidates]. A Symbol Path without a file is looked up in the project index, which sees only the disk.
      */
     public data class NeedsFile(val symbol: String, val candidates: List<SymbolCandidate>) : OperationFailure
+
+    /**
+     * An `edit_in`'s [text] occurs [count] times, not exactly once, in [symbol]'s span in [file], or in the whole file
+     * when [symbol] is null; [lines] are where.
+     */
+    public data class NotExactlyOnce(
+        val text: String,
+        val symbol: String?,
+        val file: String,
+        val count: Int,
+        val lines: List<Occurrence>,
+    ) : OperationFailure
+
     public data class FileNotFound(val path: String) : OperationFailure
     public data class NotKotlin(val path: String) : OperationFailure
     public data class OutsideProject(val path: String) : OperationFailure

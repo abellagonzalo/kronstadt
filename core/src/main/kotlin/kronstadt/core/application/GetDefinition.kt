@@ -62,11 +62,11 @@ public class GetDefinition(
             text,
             found.tree.canonicalPath(found.node).toString(),
             files.display(found.file),
-            matches.map { document.positionOf(it.first).line }.distinct().map { Occurrence(it + 1, document.line(it).trim()) },
+            occurrenceLines(document, matches.map { it.first }),
         )
         // The name is looked up inside the `at` snippet when there is one, else inside the whole span.
         val scope = if (at == null) span else {
-            val snippets = occurrences(document.text, at, span)
+            val snippets = exactOccurrences(document, at, span).map { it until it + at.length }
             snippets.singleOrNull() ?: return notExactlyOnce(at, snippets)
         }
         // Searched in the whole text, so the identifier boundaries see past the scope's ends.
@@ -91,15 +91,6 @@ public class GetDefinition(
             }
         }.joinToString("\n\n")
         return GetDefinitionResult.Found(text)
-    }
-
-    /** Where [snippet] occurs, exactly as written, within [range] of [text]; overlapping occurrences included. */
-    private fun occurrences(text: String, snippet: String, range: IntRange): List<IntRange> {
-        if (snippet.isEmpty()) return emptyList()
-        return generateSequence(text.indexOf(snippet, range.first)) { text.indexOf(snippet, it + 1) }
-            .takeWhile { it >= 0 && it + snippet.length <= range.last + 1 }
-            .map { it until it + snippet.length }
-            .toList()
     }
 
     /** [name] as a whole identifier, not part of a longer one; backticks optional. */
