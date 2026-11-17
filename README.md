@@ -18,6 +18,8 @@ backed by JetBrains' [kotlin-lsp](https://github.com/Kotlin/kotlin-lsp) (see ADR
 
 Ports and adapters. Gradle modules make the build enforce the boundary: `core` cannot see lsp4j or the MCP SDK.
 
+![Kronstadt architecture](docs/architecture.png)
+
 ```
 core/        pure Kotlin, no I/O
   domain/      Position, TextRange, TextDocument (offset math), PackageHeader (a file's package), CodeSymbol, StructureRenderer,

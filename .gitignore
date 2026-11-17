@@ -5,3 +5,5 @@ build/
 *.iml
 .kronstadt/
 .claude/
+.java-version
+.out-of-scope/
