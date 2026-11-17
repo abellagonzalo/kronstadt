@@ -246,12 +246,14 @@ public class LspCodeIntelligence private constructor(
 
         /**
          * Spawns [command] (e.g. `kotlin-lsp --stdio`) in [projectRoot] and completes the LSP handshake.
+         * kotlin-lsp keeps its index in [indexDir] (created if missing), never in JetBrains' default cache.
          * The server's stderr is inherited, which is safe: MCP only uses our stdout.
          * Returns as soon as `initialize` answers; the import and indexing go on in the background (see [awaitReady]).
          */
         public suspend fun start(
             command: List<String>,
             projectRoot: Path,
+            indexDir: Path,
             requestTimeout: Duration = 120.seconds,
         ): LspCodeIntelligence {
             val process = ProcessBuilder(command)
@@ -268,7 +270,7 @@ public class LspCodeIntelligence private constructor(
             val server = launcher.remoteProxy
 
             val serverVersion = try {
-                awaitAlive(process, requestTimeout, server.initialize(initializeParams(projectRoot))).serverInfo?.version
+                awaitAlive(process, requestTimeout, server.initialize(initializeParams(projectRoot, indexDir))).serverInfo?.version
             } catch (e: CancellationException) {
                 process.destroyForcibly()
                 throw e
@@ -295,9 +297,11 @@ public class LspCodeIntelligence private constructor(
                 future.await()
             }
 
-        private fun initializeParams(projectRoot: Path) = InitializeParams().apply {
+        private fun initializeParams(projectRoot: Path, indexDir: Path) = InitializeParams().apply {
             processId = ProcessHandle.current().pid().toInt()
             clientInfo = org.eclipse.lsp4j.ClientInfo("kronstadt")
+            // kotlin-lsp uses this directory verbatim in place of its default `.../index/kotlin-server`.
+            initializationOptions = mapOf("indexDir" to indexDir.toString())
             workspaceFolders = listOf(WorkspaceFolder(LspMapping.uri(projectRoot), projectRoot.fileName.toString()))
             capabilities = ClientCapabilities().apply {
                 // Makes kotlin-lsp report its import and indexing as `$/progress`, which readiness depends on.

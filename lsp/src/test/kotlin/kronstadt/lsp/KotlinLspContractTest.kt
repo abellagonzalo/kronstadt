@@ -61,6 +61,7 @@ import kotlin.time.Duration.Companion.minutes
 @TestMethodOrder(MethodOrderer.OrderAnnotation::class)
 class KotlinLspContractTest {
     private lateinit var project: Path
+    private lateinit var indexDir: Path
     private lateinit var lsp: LspCodeIntelligence
 
     @BeforeAll
@@ -69,13 +70,16 @@ class KotlinLspContractTest {
         project = Files.createTempDirectory("kronstadt-fixture").toRealPath()
         fixture.copyToRecursively(project, followLinks = false, overwrite = true)
         val command = (System.getenv("KRONSTADT_LANGUAGE_SERVER") ?: "kotlin-lsp --stdio").trim().split(Regex("\\s+"))
-        lsp = runBlocking { LspCodeIntelligence.start(command, project) }
+        // A missing directory, as for a new worktree: kotlin-lsp creates it.
+        indexDir = Files.createTempDirectory("kronstadt-index").toRealPath().resolve("kotlin-server")
+        lsp = runBlocking { LspCodeIntelligence.start(command, project, indexDir) }
     }
 
     @AfterAll
     fun stop() {
         if (::lsp.isInitialized) lsp.close()
         if (::project.isInitialized) project.deleteRecursively()
+        if (::indexDir.isInitialized) indexDir.parent.deleteRecursively()
     }
 
     @Test
@@ -117,6 +121,13 @@ class KotlinLspContractTest {
         assertEquals(Readiness.Ready, lsp.awaitReady(Duration.ZERO))
     }
 
+    @Test
+    @Order(5)
+    fun `keeps its index in the indexDir it was given`() {
+        assertTrue(Files.isDirectory(indexDir), "kotlin-lsp did not create $indexDir")
+        assertTrue(Files.list(indexDir).use { it.findAny().isPresent }, "kotlin-lsp left $indexDir empty")
+    }
+
     // documentSymbol facts behind Symbol Paths (ADR 0002) and Symbol Spans (ADR 0004), on fixture/Spans.kt.
 
     private fun spans(): Pair<TextDocument, List<CodeSymbol>> = runBlocking {
@@ -133,7 +144,7 @@ class KotlinLspContractTest {
         names.drop(1).fold(single { it.name == names.first() }) { parent, name -> parent.children.single { it.name == name } }
 
     @Test
-    @Order(5)
+    @Order(6)
     fun `range starts at the KDoc or comments above and covers annotations and the end-of-line comment`() {
         val (document, symbols) = spans()
         assertEquals(
@@ -151,7 +162,7 @@ class KotlinLspContractTest {
     }
 
     @Test
-    @Order(6)
+    @Order(7)
     fun `an enum entry's range includes its separator and its KDoc`() {
         val (document, symbols) = spans()
         assertEquals("/** Entry KDoc. */\n    RED(\"f00\"),", document.slice(symbols.find("Color", "RED").range))
@@ -160,7 +171,7 @@ class KotlinLspContractTest {
     }
 
     @Test
-    @Order(7)
+    @Order(8)
     fun `selectionRange is the name, backticks included, except for constructors which get the whole declaration`() {
         val (document, symbols) = spans()
         assertEquals("Documented", document.slice(symbols.find("Documented").selectionRange))
@@ -171,7 +182,7 @@ class KotlinLspContractTest {
     }
 
     @Test
-    @Order(8)
+    @Order(9)
     fun `detail renders parameter types without names, then the return type`() {
         val (_, symbols) = spans()
         assertEquals("(): Int", symbols.find("Documented", "blocky").detail)
@@ -185,7 +196,7 @@ class KotlinLspContractTest {
     private val files by lazy { LocalFileStore(project) }
 
     @Test
-    @Order(9)
+    @Order(10)
     fun `kt_read_symbol reads overloads, classes and enum entries from the real tree`() = runBlocking {
         val read = ReadSymbol(files, lsp)
         val shapes = "src/main/kotlin/fixture/Shapes.kt"
@@ -207,7 +218,7 @@ class KotlinLspContractTest {
     // The special forms live at the end of Spans.kt rather than in a fixture file of their own: with one more file,
     // kotlin-lsp 271.2085.0 often began a second Indexing progress just after reporting ready (see #37).
     @Test
-    @Order(10)
+    @Order(11)
     fun `kt_read_symbol resolves the special forms of Symbol Paths against the real tree`() = runBlocking<Unit> {
         val read = ReadSymbol(files, lsp)
         val spansKt = "src/main/kotlin/fixture/Spans.kt"
@@ -249,7 +260,7 @@ class KotlinLspContractTest {
     }
 
     @Test
-    @Order(11)
+    @Order(12)
     fun `kt_read_symbol resolves Symbol Paths without a file, through each candidate's own tree`() = runBlocking<Unit> {
         val read = ReadSymbol(files, lsp)
         val shapes = "src/main/kotlin/fixture/Shapes.kt"
@@ -282,7 +293,7 @@ class KotlinLspContractTest {
     }
 
     @Test
-    @Order(12)
+    @Order(13)
     fun `kt_find_symbol prints canonical Symbol Paths of addressable declarations in project source`() = runBlocking<Unit> {
         val find = FindSymbol(files, lsp)
         val shapes = "src/main/kotlin/fixture/Shapes.kt"
@@ -322,7 +333,7 @@ class KotlinLspContractTest {
     // Validation (ADR 0003): diagnostics are pulled for the exact text the Shadow Workspace sent.
 
     @Test
-    @Order(13)
+    @Order(14)
     fun `pulled diagnostics describe exactly the document text sent, whatever is on disk`() = runBlocking<Unit> {
         val file = project.resolve("src/main/kotlin/fixture/alpha/Shape.kt")
         val disk = TextDocument(Files.readString(file))
@@ -344,7 +355,7 @@ class KotlinLspContractTest {
     // kt_edit end to end (ADR 0003): Shadow Workspace, Validation and Write-back against the real server and disk.
 
     @Test
-    @Order(14)
+    @Order(15)
     fun `kt_edit rejects a replace that adds a compiler error, writing nothing`() = runBlocking<Unit> {
         val path = "src/main/kotlin/fixture/alpha/Shape.kt"
         val before = Files.readString(project.resolve(path))
@@ -357,7 +368,7 @@ class KotlinLspContractTest {
     }
 
     @Test
-    @Order(15)
+    @Order(16)
     fun `kt_edit writes a valid replace back, and kt_find_symbol sees it right away`() = runBlocking<Unit> {
         val path = "src/main/kotlin/fixture/alpha/Shape.kt"
 
@@ -377,7 +388,7 @@ class KotlinLspContractTest {
     // kt_find_usages: textDocument/references without the declaration, attributed through each file's own tree.
 
     @Test
-    @Order(16)
+    @Order(17)
     fun `kt_find_usages lists Usages by containing Symbol, main before test, imports only counted`() = runBlocking<Unit> {
         val find = FindUsages(files, lsp)
         suspend fun usages(path: String) = assertIs<FindUsagesResult.Found>(find(path), path).text
@@ -429,7 +440,7 @@ class KotlinLspContractTest {
     // kt_get_definition: textDocument/definition, on fixture/Definitions.kt.
 
     @Test
-    @Order(17)
+    @Order(18)
     fun `kt_get_definition shows project, local, sources-jar and JDK targets`() = runBlocking<Unit> {
         val get = GetDefinition(files, lsp)
         val definitions = "src/main/kotlin/fixture/Definitions.kt"
@@ -491,7 +502,7 @@ class KotlinLspContractTest {
     }
 
     @Test
-    @Order(18)
+    @Order(19)
     fun `an unresolved reference has no definition, but a diagnostic on its name`() = runBlocking<Unit> {
         val file = project.resolve("src/main/kotlin/fixture/Definitions.kt")
         val broken = TextDocument(Files.readString(file).replace("area(1.0, 2.0)", "nope(1.0, 2.0)"))

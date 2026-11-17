@@ -27,7 +27,8 @@ core/        pure Kotlin, no I/O
   application/ ReadStructure, FindSymbol, ReadSymbol, Edit — one use case per MCP tool, returning sealed results;
                ShadowWorkspace (documents one Edit opens), WriteLock
 lsp/         CodeIntelligence over kotlin-lsp (lsp4j), incl. readiness tracking
-workspace/   FileStore over the local disk, confined to the project root
+workspace/   FileStore over the local disk, confined to the project root;
+             IndexDirectories (kotlin-lsp index per worktree and Index Seed slots, under ~/Library/Caches/kronstadt)
 server/      MCP stdio server: tool schemas -> use cases; composition root (Main.kt)
 ```
 
@@ -72,6 +73,10 @@ readiness timeout, it fails with a retry error rather than returning partial res
 
 Each instance spawns its own language server bound to one project root, so parallel agents in separate Git
 worktrees don't share state. Mind the memory: one JVM language server per agent.
+
+Kronstadt keeps each worktree's kotlin-lsp index in `~/Library/Caches/kronstadt/index/<hash of worktree path>/`
+(about 1 GB each), never in JetBrains' default cache. At every start it deletes the indexes of worktrees that no
+longer exist.
 
 ## Known limitations
 

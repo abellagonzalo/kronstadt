@@ -22,6 +22,7 @@ import kronstadt.core.application.ReadStructure
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.WriteLock
 import kronstadt.lsp.LspCodeIntelligence
+import kronstadt.workspace.IndexDirectories
 import kronstadt.workspace.LocalFileStore
 import java.io.PrintStream
 import kotlin.system.exitProcess
@@ -57,7 +58,14 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
     // Failures surface as tool errors, not a crashed server.
     val languageServer = async(Dispatchers.IO) {
         try {
-            Result.success(LspCodeIntelligence.start(config.languageServer, files.root))
+            val indexes = IndexDirectories.default()
+            try {
+                indexes.prune()
+            } catch (e: Exception) {
+                // Pruning only frees disk; it must never stop kotlin-lsp from starting.
+                System.err.println("kronstadt: could not prune ${indexes.cacheRoot}: ${e.message}")
+            }
+            Result.success(LspCodeIntelligence.start(config.languageServer, files.root, indexes.forWorktree(files.root)))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
