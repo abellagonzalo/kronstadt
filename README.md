@@ -31,6 +31,7 @@ workspace/   FileStore over the local disk, confined to the project root;
              IndexDirectories (kotlin-lsp index per worktree and Index Seed slots, under ~/Library/Caches/kronstadt);
              IndexSeeds (seed a new worktree's index, refresh the seed on clean shutdown; clonefile via FFM)
 server/      MCP stdio server: tool schemas -> use cases; composition root (Main.kt)
+evaluation/  dev-only, never shipped: judges v1 on Claude Code transcripts (see Evaluation below)
 ```
 
 Rules of thumb:
@@ -85,6 +86,35 @@ clones the index copy-on-write (`clonefile`) and atomically swaps it in as the n
 starts from a clone of the seed, ready in seconds at about 1 GB instead of indexing cold at about 5 GB. With no seed
 yet, outside a git repository, or on a volume without copy-on-write (anything but APFS), it indexes cold; Kronstadt
 never falls back to a full copy, and never clones the index of a running instance.
+
+## Evaluation (dev-only)
+
+`evaluation/` reads Claude Code transcripts (`~/.claude/projects/**/*.jsonl`, subagents included) and judges v1 against
+its bar: 0 corrupted files, 0 circumventions, and at least 80% of Kotlin reads and searches through Kronstadt. It
+prints each sample session, then the totals, and exits 0 only if the sample is complete (at least 30 sessions spanning
+14 days) and meets the bar. It is not part of the server.
+
+```sh
+./gradlew -q :evaluation:run --args="--include $HOME/github/traderepublic --exclude $HOME/github/abellagonzalo/kronstadt --since 2026-12-01"
+```
+
+- Sample: sessions started on or after `--since`, working inside an `--include` directory and no `--exclude` one,
+  that touch a `.kt` file (`.kts` doesn't count).
+- Read/search share: Kronstadt read/search calls ÷ (those + `Read` of a `.kt`, and `Grep`/`Glob` on a `.kt` path, a
+  `*.kt` glob or `type: kotlin`), over the whole sample.
+- Circumventions, inside the session's project: Bash writes to an existing `.kt` (`sed -i`, `perl -i`, `>`/`>>`,
+  `tee`, `cp`/`mv` onto it), and `Write` recreating a `.kt` the session deleted (`rm`, `git rm`). Existence is judged
+  from the session: in-place editors need an existing file; other writes count if an earlier call or result named
+  the path, so a heredoc creating a new file doesn't. A `cd` earlier in the same command is followed.
+- Corrupted files: every commit a session's `git` command printed (`[branch hash] subject`) is checked out with its
+  parent into throwaway worktrees, and `./gradlew compileKotlin compileTestKotlin` runs on the modules owning its
+  `.kt` files. A file counts when the commit's compiler errors are in it, the parent compiled, and a Kronstadt
+  Write-back (`Edited <file>`, relative to the project root) touched it in that session. Commits that can't be
+  checked (repo gone, build failing without compiler errors) are listed as unchecked and leave this bar unmet.
+  `--no-compile` skips compiling; each compile is logged on stderr.
+- Informational: Bash `grep`/`rg`, `cat` and `sed -n` on Kotlin; hook denials (a failed `Edit`/`MultiEdit`/`Write`
+  whose message names `kt_edit`) by what the same agent did next; Validation rejections per `kt_edit` that reached
+  Validation; readiness timeouts.
 
 ## Known limitations
 

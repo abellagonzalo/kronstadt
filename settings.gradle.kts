@@ -1,3 +1,3 @@
 rootProject.name = "kronstadt"
 
-include("core", "lsp", "workspace", "server")
+include("core", "lsp", "workspace", "server", "evaluation")
