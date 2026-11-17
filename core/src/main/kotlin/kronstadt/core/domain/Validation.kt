@@ -11,13 +11,13 @@ public object Validation {
     /**
      * The [severity] diagnostics in [after] that weren't in [before]. Positions shift when code changes, so they are
      * compared by (code, message) only: a key is new as many times as its count rose. Which of a key's diagnostics
-     * count as the new ones can't be known; those on [editedLines] (0-based) are picked first, then the earliest.
+     * count as the new ones can't be known; those on [editedLines] (0-based ranges) are picked first, then the earliest.
      */
-    public fun introduced(before: List<Diagnostic>, after: List<Diagnostic>, severity: Severity, editedLines: IntRange): List<Diagnostic> {
+    public fun introduced(before: List<Diagnostic>, after: List<Diagnostic>, severity: Severity, editedLines: List<IntRange>): List<Diagnostic> {
         val previous = before.filter { it.severity == severity }.groupingBy(::key).eachCount()
         return after.filter { it.severity == severity }.groupBy(::key).flatMap { (key, found) ->
             val rise = found.size - (previous[key] ?: 0)
-            found.sortedWith(compareBy({ it.range.start.line !in editedLines }, { it.range.start })).take(maxOf(rise, 0))
+            found.sortedWith(compareBy({ diagnostic -> editedLines.none { diagnostic.range.start.line in it } }, { it.range.start })).take(maxOf(rise, 0))
         }.sortedBy { it.range.start }
     }
 

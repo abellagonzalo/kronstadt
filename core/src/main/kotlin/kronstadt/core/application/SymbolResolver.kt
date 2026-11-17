@@ -42,7 +42,15 @@ internal class SymbolResolver(
     private suspend fun resolveInFile(session: AnalysisSession, path: String, symbol: SymbolPath): Resolution {
         val file = files.resolve(path) ?: return Resolution.OutsideProject(path)
         if (!AnalysedFile.isKotlin(file)) return Resolution.NotKotlin(path)
-        val analysed = AnalysedFile.of(files, session, file) ?: return Resolution.FileNotFound(path)
+        return resolveIn(DocumentSource.disk(files, session), file, symbol) ?: Resolution.FileNotFound(path)
+    }
+
+    /**
+     * Resolves [symbol] in [file] as [source] has it: [Resolution.Found], [Resolution.Ambiguous] or
+     * [Resolution.NotFound]; null if [source] has no such file.
+     */
+    suspend fun resolveIn(source: DocumentSource, file: Path, symbol: SymbolPath): Resolution? {
+        val analysed = source.analysed(file) ?: return null
         return when (val resolution = analysed.tree.resolve(symbol)) {
             is SymbolTree.Resolution.Found -> found(analysed, resolution.node)
             is SymbolTree.Resolution.Ambiguous -> Resolution.Ambiguous(resolution.candidates.map { candidate(analysed, it) })

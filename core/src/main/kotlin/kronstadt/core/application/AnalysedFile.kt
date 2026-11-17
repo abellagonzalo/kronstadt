@@ -18,3 +18,17 @@ internal class AnalysedFile(val file: Path, val document: TextDocument, val tree
         fun isKotlin(file: Path): Boolean = file.fileName.toString().let { it.endsWith(".kt") || it.endsWith(".kts") }
     }
 }
+
+/**
+ * Where in-file resolution reads a file's text and `documentSymbol` tree: the file on disk for read tools, the Shadow
+ * Workspace's current text for `kt_edit`.
+ */
+internal fun interface DocumentSource {
+    /** [file] as this source has it, analysed; null if it doesn't exist. */
+    suspend fun analysed(file: Path): AnalysedFile?
+
+    companion object {
+        /** The file as read from [files], analysed in [session]. */
+        fun disk(files: FileStore, session: AnalysisSession) = DocumentSource { AnalysedFile.of(files, session, it) }
+    }
+}

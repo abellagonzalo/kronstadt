@@ -1,22 +1,12 @@
 package kronstadt.core.application
 
-import kotlinx.coroutines.withTimeoutOrNull
-import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.FileLayout
-import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
-import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SymbolPath
-import kronstadt.core.domain.SymbolSpan
-import kronstadt.core.domain.SymbolTree
-import kronstadt.core.domain.TextDocument
-import kronstadt.core.domain.TextRange
 import kronstadt.core.domain.Validation
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.core.port.FileStore
-import kronstadt.core.port.HashedDocument
-import kronstadt.core.port.WriteResult
 import java.nio.file.Path
 import kotlin.time.Duration
 
@@ -27,38 +17,89 @@ public sealed interface Operation
 public data class Replace(val file: String?, val symbol: String, val code: String) : Operation
 
 /**
- * Use case behind `kt_edit`: applies an Operation in a Shadow Workspace, validates it and writes it back (ADR 0003).
+ * Use case behind `kt_edit`: applies an Edit's Operations, in order, in a Shadow Workspace, validates them and writes
+ * them back as a whole (ADR 0003).
  */
 public class Edit(
     private val files: FileStore,
     private val intelligence: CodeIntelligence,
     private val readinessTimeout: Duration = Readiness.DEFAULT_TIMEOUT,
-    /** One budget for all of Validation's diagnostics: before and after the change. */
+    /** One budget for all of Validation's diagnostics: before and after the Edit, across every touched file. */
     private val validationTimeout: Duration = Validation.DEFAULT_TIMEOUT,
     private val writeLock: WriteLock = WriteLock(),
 ) {
     private val resolver = SymbolResolver(files, intelligence, readinessTimeout)
 
-    public suspend operator fun invoke(operation: Replace): EditResult {
-        val failed = { failure: OperationFailure -> EditResult.OperationFailed(0, failure) }
-        val symbol = operation.symbol
-        val symbolPath = SymbolPath.parse(symbol).getOrElse { return failed(OperationFailure.InvalidPath(symbol, it.message.orEmpty())) }
-        if (operation.file != null && symbolPath.packageName != null) {
-            return failed(OperationFailure.InvalidPath(symbol, "a package prefix is only for paths without a file; drop it or the file"))
+    public suspend operator fun invoke(operation: Replace): EditResult = invoke(listOf(operation))
+
+    /** Several Operations, applied in order; `kt_edit` passes exactly one until it takes a batch (#26). */
+    internal suspend operator fun invoke(operations: List<Replace>): EditResult {
+        val paths = operations.mapIndexed { index, operation ->
+            val symbol = operation.symbol
+            val symbolPath = SymbolPath.parse(symbol)
+                .getOrElse { return EditResult.OperationFailed(index, OperationFailure.InvalidPath(symbol, it.message.orEmpty())) }
+            if (operation.file != null && symbolPath.packageName != null) {
+                return EditResult.OperationFailed(
+                    index,
+                    OperationFailure.InvalidPath(symbol, "a package prefix is only for paths without a file; drop it or the file"),
+                )
+            }
+            symbolPath
         }
         return writeLock.withLock {
             val readiness = intelligence.awaitReady(readinessTimeout)
             if (readiness is Readiness.NotReady) return@withLock EditResult.NotReady(readiness.phase, readiness.elapsed)
             intelligence.session { session ->
-                val file = when (val located = locate(session, operation.file, symbolPath)) {
-                    is Located.File -> located.file
-                    is Located.Failed -> return@session failed(located.failure)
-                    is Located.NotReady -> return@session EditResult.NotReady(located.phase, located.elapsed)
+                val shadow = ShadowWorkspace(files, session, resolver, validationTimeout)
+                operations.zip(paths).forEachIndexed { index, (operation, symbolPath) ->
+                    when (val applied = apply(session, shadow, operation, symbolPath)) {
+                        Applied.Done -> Unit
+                        is Applied.Failed -> return@session EditResult.OperationFailed(index, applied.failure)
+                        is Applied.NotReady -> return@session EditResult.NotReady(applied.phase, applied.elapsed)
+                    }
                 }
-                val read = files.readHashed(file) ?: return@session failed(OperationFailure.FileNotFound(operation.file ?: files.display(file)))
-                replace(ShadowWorkspace(session), file, read, symbol, symbolPath, operation.code)
+                when (val validated = shadow.validate()) {
+                    is ShadowWorkspace.Validated.Passed -> when (val writeBack = shadow.writeBack()) {
+                        ShadowWorkspace.WriteBack.Written -> EditResult.Written(validated.files)
+                        is ShadowWorkspace.WriteBack.ChangedOnDisk -> EditResult.ChangedOnDisk(writeBack.file)
+                        is ShadowWorkspace.WriteBack.Partial ->
+                            EditResult.PartiallyWritten(writeBack.written, writeBack.failed, writeBack.reason)
+                    }
+                    is ShadowWorkspace.Validated.Rejected -> EditResult.Rejected(validated.newErrors)
+                    ShadowWorkspace.Validated.TimedOut -> EditResult.ValidationTimedOut
+                }
             }
         }
+    }
+
+    private sealed interface Applied {
+        data object Done : Applied
+        data class Failed(val failure: OperationFailure) : Applied
+        data class NotReady(val phase: String, val elapsed: Duration) : Applied
+    }
+
+    /** Resolves [operation]'s Symbol against the Shadow Workspace's current text and replaces its span, re-indented. */
+    private suspend fun apply(session: AnalysisSession, shadow: ShadowWorkspace, operation: Replace, symbolPath: SymbolPath): Applied {
+        val symbol = operation.symbol
+        val file = when (val located = locate(session, operation.file, symbolPath)) {
+            is Located.File -> located.file
+            is Located.Failed -> return Applied.Failed(located.failure)
+            is Located.NotReady -> return Applied.NotReady(located.phase, located.elapsed)
+        }
+        val shown = files.display(file)
+        val found = when (val lookup = shadow.resolve(file, symbolPath)) {
+            is ShadowWorkspace.Lookup.Found -> lookup
+            is ShadowWorkspace.Lookup.Ambiguous -> return Applied.Failed(OperationFailure.Ambiguous(symbol, shown, lookup.candidates))
+            is ShadowWorkspace.Lookup.NotFound -> return Applied.Failed(OperationFailure.NotFound(symbol, shown, lookup.suggestions))
+            is ShadowWorkspace.Lookup.OutOfSync -> return Applied.Failed(OperationFailure.OutOfSync(lookup.canonical, shown))
+            is ShadowWorkspace.Lookup.SharedLine ->
+                return Applied.Failed(OperationFailure.SharedLine(lookup.canonical, shown, lookup.line + 1))
+            ShadowWorkspace.Lookup.FileNotFound -> return Applied.Failed(OperationFailure.FileNotFound(operation.file ?: shown))
+        }
+        val span = found.span
+        val prefix = found.document.line(span.firstLine).takeWhile { it == ' ' || it == '\t' }
+        shadow.replaceSpan(file, span.firstLine..span.lastLine, FileLayout.of(found.document).reindent(operation.code, prefix))
+        return Applied.Done
     }
 
     private sealed interface Located {
@@ -69,7 +110,7 @@ public class Edit(
 
     /**
      * The file the Operation targets. Without one, the Symbol Path is resolved project-wide only to find its file;
-     * it is resolved again in the Shadow Workspace, against the text the Edit is based on.
+     * it is resolved again in the Shadow Workspace, against the text the earlier Operations left.
      */
     private suspend fun locate(session: AnalysisSession, path: String?, symbolPath: SymbolPath): Located {
         if (path != null) {
@@ -87,96 +128,6 @@ public class Edit(
             is SymbolResolver.Resolution.NotKotlin -> Located.Failed(OperationFailure.NotKotlin(resolution.path))
             is SymbolResolver.Resolution.OutsideProject -> Located.Failed(OperationFailure.OutsideProject(resolution.path))
         }
-    }
-
-    private suspend fun replace(
-        shadow: ShadowWorkspace,
-        file: Path,
-        read: HashedDocument,
-        symbol: String,
-        symbolPath: SymbolPath,
-        newCode: String,
-    ): EditResult {
-        val failed = { failure: OperationFailure -> EditResult.OperationFailed(0, failure) }
-        val shown = files.display(file)
-        val document = read.document
-        val tree = SymbolTree(shadow.symbols(file, document))
-        val node = when (val resolution = tree.resolve(symbolPath)) {
-            is SymbolTree.Resolution.Found -> resolution.node
-            is SymbolTree.Resolution.Ambiguous ->
-                return failed(OperationFailure.Ambiguous(symbol, shown, resolution.candidates.map { candidate(tree, it, shown) }))
-            is SymbolTree.Resolution.NotFound ->
-                return failed(OperationFailure.NotFound(symbol, shown, resolution.suggestions.map { candidate(tree, it, shown) }))
-        }
-        val canonical = tree.canonicalPath(node).toString()
-        val span = when (val computation = SymbolSpan.of(document, node.symbol)) {
-            is SymbolSpan.Computation.Computed -> computation.span
-            SymbolSpan.Computation.OutOfSync -> return failed(OperationFailure.OutOfSync(canonical, shown))
-            is SymbolSpan.Computation.SharedLine -> return failed(OperationFailure.SharedLine(canonical, shown, computation.line + 1))
-        }
-
-        val firstLine = document.line(span.firstLine)
-        val prefix = firstLine.takeWhile { it == ' ' || it == '\t' }
-        val code = FileLayout.of(document).reindent(newCode, prefix)
-        val edited = document.replace(TextRange(Position(span.firstLine, 0), Position(span.lastLine, Int.MAX_VALUE)), code)
-        val lastNewLine = span.firstLine + code.lines().size - 1
-
-        val editedLines = span.firstLine..lastNewLine
-        val (before, after) = withTimeoutOrNull(validationTimeout) {
-            shadow.diagnostics(file, document) to shadow.diagnostics(file, edited)
-        } ?: return EditResult.ValidationTimedOut
-        val editedTree = SymbolTree(shadow.symbols(file, edited))
-        val newErrors = Validation.introduced(before, after, Severity.ERROR, editedLines)
-        if (newErrors.isNotEmpty()) {
-            return EditResult.Rejected(newErrors.map { problem(files.display(file), edited, editedTree, it) })
-        }
-
-        when (files.writeIfUnchanged(file, read.hash, edited)) {
-            WriteResult.Written -> Unit
-            WriteResult.ChangedOnDisk -> return EditResult.ChangedOnDisk(files.display(file))
-        }
-        shadow.writtenBack(file, edited)
-        val resulting = editedTree.nodes.filter { node ->
-            val (first, last) = SymbolSpan.lines(edited, node.symbol)
-            first >= span.firstLine && last <= lastNewLine
-        }
-        val topMost = resulting.filter { node -> resulting.none { it.symbol in node.ancestors } }
-        val symbols = topMost.map { node ->
-            val (first, last) = SymbolSpan.lines(edited, node.symbol)
-            EditedSymbol(editedTree.canonicalPath(node).toString(), first + 1, last + 1)
-        }
-        val newWarnings = Validation.introduced(before, after, Severity.WARNING, editedLines)
-        val preexistingErrors = after.count { it.severity == Severity.ERROR } - newErrors.size
-        return EditResult.Written(
-            listOf(
-                EditedFile(
-                    file = files.display(file),
-                    symbols = symbols,
-                    newWarnings = newWarnings.take(MAX_WARNINGS).map { problem(files.display(file), edited, editedTree, it) },
-                    moreWarnings = maxOf(newWarnings.size - MAX_WARNINGS, 0),
-                    preexistingErrors = preexistingErrors,
-                ),
-            ),
-        )
-    }
-
-    private fun candidate(tree: SymbolTree, node: SymbolTree.Node, file: String) = SymbolCandidate(tree.canonicalPath(node).toString(), file)
-
-    /** [diagnostic] in [document], attributed to the innermost Symbol of [tree] whose range holds it. */
-    private fun problem(file: String, document: TextDocument, tree: SymbolTree, diagnostic: Diagnostic): Problem {
-        val start = diagnostic.range.start
-        val enclosing = tree.nodes.filter { start in it.symbol.range }.maxByOrNull { it.ancestors.size }
-        return Problem(
-            file = file,
-            symbol = enclosing?.let { tree.canonicalPath(it).toString() },
-            line = start.line + 1,
-            message = diagnostic.message,
-            source = document.line(start.line).trim(),
-        )
-    }
-
-    private companion object {
-        const val MAX_WARNINGS = 5
     }
 }
 
@@ -205,6 +156,12 @@ public sealed interface EditResult {
 
     /** [file] changed on disk after the Edit read it; nothing was written. */
     public data class ChangedOnDisk(val file: String) : EditResult
+
+    /**
+     * Write-back failed part-way: [written] are on disk, writing [failed] failed with [reason], and the Edit's other
+     * files weren't written. Nothing is rolled back (ADR 0003, Consequences).
+     */
+    public data class PartiallyWritten(val written: List<String>, val failed: String, val reason: String) : EditResult
 
     /** Validation didn't finish within its timeout; nothing was written. */
     public data object ValidationTimedOut : EditResult

@@ -18,13 +18,21 @@ import kronstadt.core.port.ContentHash
 import kronstadt.core.port.FileStore
 import kronstadt.core.port.HashedDocument
 import kronstadt.core.port.WriteResult
+import java.io.IOException
 import java.nio.file.Path
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 
-/** Files in memory, keyed by project-relative path. A hash is the text itself, so any change changes it. */
-class FakeFileStore(private val root: Path, files: Map<String, String>) : FileStore {
+/**
+ * Files in memory, keyed by project-relative path. A hash is the text itself, so any change changes it. A write to one
+ * of [failingWrites] fails with an [IOException], as a full disk would.
+ */
+class FakeFileStore(
+    private val root: Path,
+    files: Map<String, String>,
+    private val failingWrites: Set<String> = emptySet(),
+) : FileStore {
     private val files = files.toMutableMap()
 
     /** Every successful Write-back, in order: project-relative path to the text written. */
@@ -45,6 +53,7 @@ class FakeFileStore(private val root: Path, files: Map<String, String>) : FileSt
 
     override suspend fun writeIfUnchanged(file: Path, basedOn: ContentHash, document: TextDocument): WriteResult {
         if (files[key(file)] != basedOn.value) return WriteResult.ChangedOnDisk
+        if (key(file) in failingWrites) throw IOException("No space left on device")
         files[key(file)] = document.text
         written += key(file) to document.text
         return WriteResult.Written

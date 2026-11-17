@@ -243,6 +243,11 @@ internal class KronstadtTools(
                 },
             )
             is EditResult.ChangedOnDisk -> error("${result.file} changed on disk since read; re-read and retry")
+            is EditResult.PartiallyWritten -> error(
+                "Write-back failed part-way: writing ${result.failed} failed (${result.reason}). " +
+                    "Already written, not rolled back: ${result.written.joinToString()}. " +
+                    "Nothing else was written; re-read these files before retrying.",
+            )
             EditResult.ValidationTimedOut -> error("validation timed out; nothing written")
             is EditResult.NotReady -> notReady(result.phase, result.elapsed)
             is EditResult.OperationFailed -> error("Operation ${result.index}: ${failure(result.failure)} Nothing written.")

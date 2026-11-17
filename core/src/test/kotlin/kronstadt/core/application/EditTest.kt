@@ -273,4 +273,36 @@ class EditTest {
         assertEquals(twoFunctions, files.content(path))
         assertEquals(listOf(EditedSymbol("hi", 4, 4), EditedSymbol("bye", 6, 6)), assertIs<EditResult.Written>(result).files.single().symbols)
     }
+
+    @Test
+    fun `an Operation that fails after others applied reports its own index, and nothing is written`() = runTest {
+        val files = FakeFileStore(root, mapOf(path to source))
+        val intelligence = intelligence()
+
+        val result = edit(intelligence, files)(
+            listOf(
+                Replace(path, "Greeter/greet", "fun greet(): String =\n    \"hello\""),
+                Replace(path, "Greeter/missing", "fun missing() = 1"),
+            ),
+        )
+
+        assertIs<OperationFailure.NotFound>(assertIs<EditResult.OperationFailed>(result).failure)
+        assertEquals(1, result.index)
+        assertEquals(emptyList(), files.written)
+        intelligence.assertOneSessionClosedEverything()
+    }
+
+    @Test
+    fun `a Write-back that fails part-way reports what was written, and still closes every document`() = runTest {
+        val other = "src/B.kt"
+        val files = FakeFileStore(root, mapOf(path to source, other to source), failingWrites = setOf(other))
+        val intelligence = intelligence()
+        val replace = "fun greet(): String =\n    \"hello\""
+
+        val result = edit(intelligence, files)(listOf(Replace(path, "Greeter/greet", replace), Replace(other, "Greeter/greet", replace)))
+
+        assertEquals(EditResult.PartiallyWritten(listOf(path), other, "No space left on device"), result)
+        assertEquals(listOf(path to hello), files.written)
+        intelligence.assertOneSessionClosedEverything()
+    }
 }
