@@ -21,11 +21,17 @@ import kronstadt.core.application.GetDefinition
 import kronstadt.core.application.ReadStructure
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.WriteLock
+import kronstadt.core.domain.Readiness
 import kronstadt.lsp.LspCodeIntelligence
 import kronstadt.workspace.IndexDirectories
+import kronstadt.workspace.IndexSeeds
 import kronstadt.workspace.LocalFileStore
+import kronstadt.workspace.SeedRefresh
+import kronstadt.workspace.Seeding
+import kronstadt.workspace.WorktreeIndex
 import java.io.PrintStream
 import kotlin.system.exitProcess
+import kotlin.time.Duration
 
 internal const val VERSION = "0.1.0"
 
@@ -53,19 +59,28 @@ public fun main(args: Array<String>) {
 
 private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineScope {
     val files = LocalFileStore(config.projectRoot)
+    val indexes = IndexDirectories.default()
+    val seeds = IndexSeeds(indexes)
+    val worktreeIndex = CompletableDeferred<WorktreeIndex>()
 
     // Start kotlin-lsp eagerly in the background, so its import and indexing overlap the agent's first turns.
     // Failures surface as tool errors, not a crashed server.
     val languageServer = async(Dispatchers.IO) {
         try {
-            val indexes = IndexDirectories.default()
             try {
                 indexes.prune()
             } catch (e: Exception) {
                 // Pruning only frees disk; it must never stop kotlin-lsp from starting.
                 System.err.println("kronstadt: could not prune ${indexes.cacheRoot}: ${e.message}")
             }
-            Result.success(LspCodeIntelligence.start(config.languageServer, files.root, indexes.forWorktree(files.root)))
+            val index = seeds.prepare(files.root)
+            when (val seeding = index.seeding) {
+                Seeding.Seeded -> System.err.println("kronstadt: started ${index.dir} from the repo's Index Seed")
+                Seeding.AlreadyIndexed -> {}
+                is Seeding.Cold -> System.err.println("kronstadt: indexing cold: ${seeding.reason}")
+            }
+            worktreeIndex.complete(index)
+            Result.success(LspCodeIntelligence.start(config.languageServer, files.root, index.dir))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -99,8 +114,30 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
     closed.await()
 
     if (languageServer.isCompleted) {
-        languageServer.await().onSuccess { it.close() }
+        languageServer.await().onSuccess { shutDown(it, seeds, worktreeIndex.await()) }
     } else {
         languageServer.cancel()
+    }
+}
+
+/**
+ * Stops kotlin-lsp and, if it had a complete index and exited cleanly, makes that index its repo's Index Seed.
+ * Seeding failures only cost the next worktree a cold index, so they are logged, never thrown.
+ */
+private suspend fun shutDown(languageServer: LspCodeIntelligence, seeds: IndexSeeds, index: WorktreeIndex) {
+    val ready = languageServer.awaitReady(Duration.ZERO) == Readiness.Ready
+    val clean = languageServer.shutdown()
+    val outcome = when {
+        !ready -> SeedRefresh.Skipped("kotlin-lsp had not finished indexing")
+        !clean -> SeedRefresh.Skipped("kotlin-lsp did not exit cleanly")
+        else -> try {
+            seeds.refresh(index)
+        } catch (e: Exception) {
+            SeedRefresh.Skipped(e.message ?: e.toString())
+        }
+    }
+    when (outcome) {
+        SeedRefresh.Refreshed -> System.err.println("kronstadt: refreshed the Index Seed from ${index.dir}")
+        is SeedRefresh.Skipped -> System.err.println("kronstadt: Index Seed not refreshed: ${outcome.reason}")
     }
 }

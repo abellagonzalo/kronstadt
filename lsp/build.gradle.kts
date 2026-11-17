@@ -8,7 +8,7 @@ dependencies {
     implementation(libs.lsp4j)
     implementation(libs.coroutines.core)
     testImplementation(libs.coroutines.test)
-    // The Write-back acceptance test writes through the real FileStore.
+    // The Write-back acceptance test writes through the real FileStore; the Index Seed one seeds real index directories.
     testImplementation(project(":workspace"))
 }
 

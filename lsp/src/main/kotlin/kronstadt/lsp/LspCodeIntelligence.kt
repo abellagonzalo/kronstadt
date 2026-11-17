@@ -234,15 +234,29 @@ public class LspCodeIntelligence private constructor(
     private suspend fun <T> request(call: () -> CompletableFuture<T>): T = awaitAlive(process, requestTimeout, call())
 
     override fun close() {
-        runCatching {
+        shutdown()
+    }
+
+    /**
+     * Asks kotlin-lsp to shut down and exit, and waits for its process to end; kills it if it doesn't in time.
+     * Returns true only for a clean exit: `shutdown` answered and the process exited by itself with code 0, so its
+     * index was closed properly and may become the Index Seed.
+     */
+    public fun shutdown(): Boolean {
+        val answered = runCatching {
             server.shutdown().get(5, TimeUnit.SECONDS)
             server.exit()
-        }
-        if (!process.waitFor(5, TimeUnit.SECONDS)) process.destroyForcibly()
+        }.isSuccess
+        val exited = process.waitFor(EXIT_TIMEOUT.inWholeMilliseconds, TimeUnit.MILLISECONDS)
+        if (!exited) process.destroyForcibly()
+        return answered && exited && process.exitValue() == 0
     }
 
     public companion object {
         private const val MAX_DIAGNOSTIC_PULLS = 3
+
+        /** How long [shutdown] waits for kotlin-lsp to close its index and exit. */
+        private val EXIT_TIMEOUT = 10.seconds
 
         /**
          * Spawns [command] (e.g. `kotlin-lsp --stdio`) in [projectRoot] and completes the LSP handshake.

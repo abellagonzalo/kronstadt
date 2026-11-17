@@ -28,7 +28,8 @@ core/        pure Kotlin, no I/O
                ShadowWorkspace (documents one Edit opens), WriteLock
 lsp/         CodeIntelligence over kotlin-lsp (lsp4j), incl. readiness tracking
 workspace/   FileStore over the local disk, confined to the project root;
-             IndexDirectories (kotlin-lsp index per worktree and Index Seed slots, under ~/Library/Caches/kronstadt)
+             IndexDirectories (kotlin-lsp index per worktree and Index Seed slots, under ~/Library/Caches/kronstadt);
+             IndexSeeds (seed a new worktree's index, refresh the seed on clean shutdown; clonefile via FFM)
 server/      MCP stdio server: tool schemas -> use cases; composition root (Main.kt)
 ```
 
@@ -77,6 +78,13 @@ worktrees don't share state. Mind the memory: one JVM language server per agent.
 Kronstadt keeps each worktree's kotlin-lsp index in `~/Library/Caches/kronstadt/index/<hash of worktree path>/`
 (about 1 GB each), never in JetBrains' default cache. At every start it deletes the indexes of worktrees that no
 longer exist.
+
+Worktrees of one clone share an Index Seed in `~/Library/Caches/kronstadt/seed/<hash of git common dir>/`. Each time
+an instance shuts down cleanly with a complete index, Kronstadt waits for kotlin-lsp to exit and release its index,
+clones the index copy-on-write (`clonefile`) and atomically swaps it in as the new seed. A worktree without an index
+starts from a clone of the seed, ready in seconds at about 1 GB instead of indexing cold at about 5 GB. With no seed
+yet, outside a git repository, or on a volume without copy-on-write (anything but APFS), it indexes cold; Kronstadt
+never falls back to a full copy, and never clones the index of a running instance.
 
 ## Known limitations
 

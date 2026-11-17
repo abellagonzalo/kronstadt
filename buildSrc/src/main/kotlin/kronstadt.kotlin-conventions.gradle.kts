@@ -21,3 +21,8 @@ dependencies {
 tasks.test {
     useJUnitPlatform()
 }
+
+tasks.withType<Test>().configureEach {
+    // The workspace module calls clonefile(2) through the Foreign Function API.
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+}

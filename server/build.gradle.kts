@@ -15,4 +15,6 @@ dependencies {
 application {
     applicationName = "kronstadt"
     mainClass = "kronstadt.server.MainKt"
+    // Index seeding calls clonefile(2) through the Foreign Function API.
+    applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
 }
