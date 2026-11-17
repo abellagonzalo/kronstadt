@@ -32,8 +32,12 @@ public class Edit(
 
     public suspend operator fun invoke(operation: Replace): EditResult = invoke(listOf(operation))
 
-    /** Several Operations, applied in order; `kt_edit` passes exactly one until it takes a batch (#26). */
-    internal suspend operator fun invoke(operations: List<Replace>): EditResult {
+    /**
+     * Applies [operations] in order, each resolved against the text the earlier ones left, possibly across several
+     * files; validates once after the last and writes every edited file back, or nothing (unless a write fails
+     * part-way, see [EditResult.PartiallyWritten]).
+     */
+    public suspend operator fun invoke(operations: List<Replace>): EditResult {
         val paths = operations.mapIndexed { index, operation ->
             val symbol = operation.symbol
             val symbolPath = SymbolPath.parse(symbol)
@@ -81,7 +85,7 @@ public class Edit(
     /** Resolves [operation]'s Symbol against the Shadow Workspace's current text and replaces its span, re-indented. */
     private suspend fun apply(session: AnalysisSession, shadow: ShadowWorkspace, operation: Replace, symbolPath: SymbolPath): Applied {
         val symbol = operation.symbol
-        val file = when (val located = locate(session, operation.file, symbolPath)) {
+        val file = when (val located = locate(session, shadow, operation.file, symbolPath)) {
             is Located.File -> located.file
             is Located.Failed -> return Applied.Failed(located.failure)
             is Located.NotReady -> return Applied.NotReady(located.phase, located.elapsed)
@@ -91,6 +95,8 @@ public class Edit(
             is ShadowWorkspace.Lookup.Found -> lookup
             is ShadowWorkspace.Lookup.Ambiguous -> return Applied.Failed(OperationFailure.Ambiguous(symbol, shown, lookup.candidates))
             is ShadowWorkspace.Lookup.NotFound -> return Applied.Failed(OperationFailure.NotFound(symbol, shown, lookup.suggestions))
+            is ShadowWorkspace.Lookup.RemovedEarlier ->
+                return Applied.Failed(OperationFailure.RemovedEarlier(symbol, shown, lookup.suggestions))
             is ShadowWorkspace.Lookup.OutOfSync -> return Applied.Failed(OperationFailure.OutOfSync(lookup.canonical, shown))
             is ShadowWorkspace.Lookup.SharedLine ->
                 return Applied.Failed(OperationFailure.SharedLine(lookup.canonical, shown, lookup.line + 1))
@@ -110,9 +116,10 @@ public class Edit(
 
     /**
      * The file the Operation targets. Without one, the Symbol Path is resolved project-wide only to find its file;
-     * it is resolved again in the Shadow Workspace, against the text the earlier Operations left.
+     * it is resolved again in the Shadow Workspace, against the text the earlier Operations left. The project index
+     * sees only the disk, so a Symbol that exists only in that text needs its file.
      */
-    private suspend fun locate(session: AnalysisSession, path: String?, symbolPath: SymbolPath): Located {
+    private suspend fun locate(session: AnalysisSession, shadow: ShadowWorkspace, path: String?, symbolPath: SymbolPath): Located {
         if (path != null) {
             val file = files.resolve(path) ?: return Located.Failed(OperationFailure.OutsideProject(path))
             if (!AnalysedFile.isKotlin(file)) return Located.Failed(OperationFailure.NotKotlin(path))
@@ -122,7 +129,13 @@ public class Edit(
         return when (val resolution = resolver.resolve(session, null, symbolPath)) {
             is SymbolResolver.Resolution.Found -> Located.File(resolution.file)
             is SymbolResolver.Resolution.Ambiguous -> Located.Failed(OperationFailure.Ambiguous(symbol, null, resolution.candidates))
-            is SymbolResolver.Resolution.NotFound -> Located.Failed(OperationFailure.NotFound(symbol, null, resolution.suggestions))
+            is SymbolResolver.Resolution.NotFound -> {
+                val inEdit = shadow.findInEdited(symbolPath)
+                Located.Failed(
+                    if (inEdit.isNotEmpty()) OperationFailure.NeedsFile(symbol, inEdit)
+                    else OperationFailure.NotFound(symbol, null, resolution.suggestions),
+                )
+            }
             is SymbolResolver.Resolution.NotReady -> Located.NotReady(resolution.phase, resolution.elapsed)
             is SymbolResolver.Resolution.FileNotFound -> Located.Failed(OperationFailure.FileNotFound(resolution.path))
             is SymbolResolver.Resolution.NotKotlin -> Located.Failed(OperationFailure.NotKotlin(resolution.path))
@@ -186,6 +199,18 @@ public sealed interface OperationFailure {
 
     /** Something other than whitespace shares 1-based [line] with the Symbol, so it has no whole-line span. */
     public data class SharedLine(val symbol: String, val file: String, val line: Int) : OperationFailure
+
+    /**
+     * [symbol] is in [file] on disk, but an earlier Operation of this Edit removed or renamed it; [suggestions] are
+     * close names in what the earlier Operations left.
+     */
+    public data class RemovedEarlier(val symbol: String, val file: String, val suggestions: List<SymbolCandidate>) : OperationFailure
+
+    /**
+     * [symbol], passed without a file, isn't on disk but is in the text earlier Operations of this Edit left, at
+     * [candidates]. A Symbol Path without a file is looked up in the project index, which sees only the disk.
+     */
+    public data class NeedsFile(val symbol: String, val candidates: List<SymbolCandidate>) : OperationFailure
     public data class FileNotFound(val path: String) : OperationFailure
     public data class NotKotlin(val path: String) : OperationFailure
     public data class OutsideProject(val path: String) : OperationFailure

@@ -183,14 +183,19 @@ internal class KronstadtTools(
                 "A 'replace' Operation swaps a Symbol's whole span (exactly what kt_read_symbol returns: KDoc or " +
                 "comments above, annotations, modifiers, declaration, end-of-line comment) for your code; omitted " +
                 "KDoc or annotations are deleted. The code may rename the declaration or hold several. It is " +
-                "re-indented to the target's column, so indentation needn't match. The file is written only if the " +
-                "edit adds no compiler errors to it; otherwise nothing is written and the new errors are listed. " +
-                "Currently takes exactly one replace Operation.",
+                "re-indented to the target's column, so indentation needn't match. Files are written only if the " +
+                "Edit adds no compiler errors to them; otherwise nothing is written and the new errors are listed. " +
+                "An Edit is an ordered batch of Operations, possibly across files: each resolves against the code the " +
+                "earlier ones left (so you can rename a Symbol, then target its new name), the batch is validated once " +
+                "after the last, and either every file is written or none is (a write failing part-way is reported). " +
+                "Intermediate states may not compile. A Symbol Path without a file is looked up on disk, so to " +
+                "target a Symbol an earlier Operation created or " +
+                "renamed, pass its file. The result lists each written file.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
                     putJsonObject("operations") {
                         put("type", "array")
-                        put("description", "The Operations of this Edit, in order. Currently exactly one.")
+                        put("description", "The Operations of this Edit, applied in order; at least one.")
                         putJsonObject("items") {
                             put("type", "object")
                             putJsonObject("properties") {
@@ -225,14 +230,18 @@ internal class KronstadtTools(
 
     private suspend fun edit(args: JsonObject): CallToolResult {
         val operations = args["operations"] as? JsonArray ?: return error("Missing required argument: operations (an array)")
-        if (operations.size != 1) return error("kt_edit currently takes exactly one Operation; got ${operations.size}.")
-        val operation = operations.single() as? JsonObject ?: return error("Operation 0 must be an object.")
-        val type = operation.string("type") ?: return error("Operation 0: missing 'type'.")
-        if (type != "replace") return error("Operation 0: unsupported type '$type'; kt_edit currently supports 'replace'.")
-        val symbol = operation.string("symbol") ?: return error("Operation 0: missing 'symbol'.")
-        val code = operation.string("code") ?: return error("Operation 0: missing 'code'.")
-        val file = operation.string("file")?.takeIf { it.isNotBlank() }
-        return when (val result = edit(Replace(file, symbol, code))) {
+        if (operations.isEmpty()) return error("kt_edit needs at least one Operation. Nothing written.")
+        val replaces = operations.mapIndexed { index, element ->
+            val operation = element as? JsonObject ?: return error("Operation $index must be an object. Nothing written.")
+            val type = operation.string("type") ?: return error("Operation $index: missing 'type'. Nothing written.")
+            if (type != "replace") {
+                return error("Operation $index: unsupported type '$type'; kt_edit currently supports 'replace'. Nothing written.")
+            }
+            val symbol = operation.string("symbol") ?: return error("Operation $index: missing 'symbol'. Nothing written.")
+            val code = operation.string("code") ?: return error("Operation $index: missing 'code'. Nothing written.")
+            Replace(operation.string("file")?.takeIf { it.isNotBlank() }, symbol, code)
+        }
+        return when (val result = edit(replaces)) {
             is EditResult.Written -> text(result.files.joinToString("\n") { written(it) })
             is EditResult.Rejected -> error(
                 buildString {
@@ -293,6 +302,13 @@ internal class KronstadtTools(
         is OperationFailure.SharedLine ->
             "${failure.symbol} shares line ${failure.line} of ${failure.file} with other code, so it has no whole-line " +
                 "span; replace the enclosing symbol instead."
+        is OperationFailure.RemovedEarlier ->
+            "'${failure.symbol}' in ${failure.file} was removed or renamed by an earlier Operation of this Edit; target " +
+                "what that Operation left." +
+                (if (failure.suggestions.isEmpty()) "" else " Close names:\n" + candidates(failure.suggestions, withFiles = false) + "\n")
+        is OperationFailure.NeedsFile ->
+            "'${failure.symbol}' exists only in what earlier Operations of this Edit wrote, and a Symbol Path without a " +
+                "file is looked up on disk; pass its file:\n" + candidates(failure.candidates, withFiles = true) + "\n"
         is OperationFailure.FileNotFound -> "file not found: ${failure.path}."
         is OperationFailure.NotKotlin -> "not a Kotlin file: ${failure.path}. kt_edit only supports .kt and .kts files."
         is OperationFailure.OutsideProject -> "path is outside the project root: ${failure.path}."

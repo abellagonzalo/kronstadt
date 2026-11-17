@@ -77,7 +77,8 @@ class ShadowWorkspaceTest {
             val found = assertIs<ShadowWorkspace.Lookup.Found>(resolve(root.resolve(a), path("two")))
             assertEquals("two", found.canonical)
             assertEquals(2..2, found.span.firstLine..found.span.lastLine)
-            assertIs<ShadowWorkspace.Lookup.NotFound>(resolve(root.resolve(a), path("one")))
+            assertIs<ShadowWorkspace.Lookup.RemovedEarlier>(resolve(root.resolve(a), path("one")))
+            assertIs<ShadowWorkspace.Lookup.NotFound>(resolve(root.resolve(a), path("three")))
         }
     }
 

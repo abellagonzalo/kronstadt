@@ -292,6 +292,97 @@ class EditTest {
         intelligence.assertOneSessionClosedEverything()
     }
 
+    private val renamed = source.replace("    /** Says hi. */\n    fun greet(): String = \"hi\"\n", "    fun hi(): Int = 1\n")
+    private val renamedAgain = renamed.replace("fun hi(): Int = 1", "fun hi(): Int = 2")
+    private fun renamedSymbols() = listOf(
+        greeter(symbol("hi", SymbolKind.FUNCTION, range(3, 4, 3, 21), 3, 8, "(): Int"), symbol("other", SymbolKind.FUNCTION, range(5, 4, 5, 24), 5, 8, "(): Int"), lastLine = 6),
+    )
+    private fun batchIntelligence(index: List<SymbolLocation> = emptyList()) = FakeCodeIntelligence(
+        symbolsByText = mapOf(
+            source to listOf(greeter(greet, other)),
+            hello to listOf(greeter(helloGreet, other)),
+            renamed to renamedSymbols(),
+            renamedAgain to renamedSymbols(),
+        ),
+        index = index,
+    )
+
+    @Test
+    fun `a batch applies in order across files, a later Operation targets a name an earlier one gave, and each file is reported`() = runTest {
+        val other = "src/B.kt"
+        val files = FakeFileStore(root, mapOf(path to source, other to source))
+        val intelligence = batchIntelligence()
+
+        val result = edit(intelligence, files)(
+            listOf(
+                Replace(path, "Greeter/greet", "fun hi(): Int = 1"),
+                Replace(path, "Greeter/hi", "fun hi(): Int = 2"),
+                Replace(other, "Greeter/greet", "fun greet(): String =\n    \"hello\""),
+            ),
+        )
+
+        assertEquals(
+            EditResult.Written(
+                listOf(
+                    EditedFile(path, listOf(EditedSymbol("hi", 4, 4)), emptyList(), 0, 0),
+                    EditedFile(other, listOf(EditedSymbol("greet", 4, 5)), emptyList(), 0, 0),
+                ),
+            ),
+            result,
+        )
+        assertEquals(renamedAgain, files.content(path))
+        assertEquals(hello, files.content(other))
+        intelligence.assertOneSessionClosedEverything()
+    }
+
+    @Test
+    fun `an Operation aimed at a Symbol an earlier one removed or renamed says so with close names, and nothing is written`() = runTest {
+        val files = FakeFileStore(root, mapOf(path to source))
+        val greets = source.replace("    /** Says hi. */\n    fun greet(): String = \"hi\"\n", "    fun greets(): Int = 1\n")
+        val intelligence = FakeCodeIntelligence(
+            symbolsByText = mapOf(
+                source to listOf(greeter(greet, other)),
+                greets to listOf(greeter(symbol("greets", SymbolKind.FUNCTION, range(3, 4, 3, 25), 3, 8, "(): Int"), symbol("other", SymbolKind.FUNCTION, range(5, 4, 5, 24), 5, 8, "(): Int"), lastLine = 6)),
+            ),
+        )
+
+        val result = edit(intelligence, files)(
+            listOf(Replace(path, "Greeter/greet", "fun greets(): Int = 1"), Replace(path, "Greeter/greet", "fun greet() = 1")),
+        )
+
+        assertEquals(EditResult.OperationFailed(1, OperationFailure.RemovedEarlier("Greeter/greet", path, listOf(SymbolCandidate("greets", path)))), result)
+        assertEquals(emptyList(), files.written)
+        intelligence.assertOneSessionClosedEverything()
+    }
+
+    @Test
+    fun `an Operation without a file aimed at a Symbol an earlier one renamed is found on disk, then said to be removed`() = runTest {
+        val files = FakeFileStore(root, mapOf(path to source))
+        val intelligence = batchIntelligence(index = listOf(SymbolLocation("greet", SymbolKind.FUNCTION, root.resolve(path), greet.range, "Greeter")))
+
+        val result = edit(intelligence, files)(
+            listOf(Replace(path, "Greeter/greet", "fun hi(): Int = 1"), Replace(null, "Greeter/greet", "fun greet() = 1")),
+        )
+
+        assertIs<OperationFailure.RemovedEarlier>(assertIs<EditResult.OperationFailed>(result).failure)
+        assertEquals(1, result.index)
+        assertEquals(emptyList(), files.written)
+    }
+
+    @Test
+    fun `an Operation without a file can't target a Symbol an earlier one created, and is told where to find it`() = runTest {
+        val files = FakeFileStore(root, mapOf(path to source))
+        val intelligence = batchIntelligence()
+
+        val result = edit(intelligence, files)(
+            listOf(Replace(path, "Greeter/greet", "fun hi(): Int = 1"), Replace(null, "Greeter/hi", "fun hi(): Int = 2")),
+        )
+
+        assertEquals(EditResult.OperationFailed(1, OperationFailure.NeedsFile("Greeter/hi", listOf(SymbolCandidate("hi", path)))), result)
+        assertEquals(emptyList(), files.written)
+        intelligence.assertOneSessionClosedEverything()
+    }
+
     @Test
     fun `a Write-back that fails part-way reports what was written, and still closes every document`() = runTest {
         val other = "src/B.kt"

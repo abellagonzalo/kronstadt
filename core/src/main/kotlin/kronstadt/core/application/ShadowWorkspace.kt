@@ -11,6 +11,7 @@ import kronstadt.core.domain.SymbolTree
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.TextRange
 import kronstadt.core.domain.Validation
+import kronstadt.core.domain.packageName
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.FileStore
 import kronstadt.core.port.HashedDocument
@@ -38,6 +39,7 @@ internal class ShadowWorkspace(
     private class Touched(val base: HashedDocument) {
         var current: TextDocument = base.document
         val edited = mutableListOf<IntRange>()
+        val isEdited get() = edited.isNotEmpty()
     }
 
     /** In the order the Edit first touched them. */
@@ -48,14 +50,23 @@ internal class ShadowWorkspace(
 
     override suspend fun analysed(file: Path): AnalysedFile? {
         val document = touch(file)?.current ?: return null
-        return AnalysedFile(file, document, SymbolTree(session.documentSymbols(file, document)))
+        return analyse(file, document)
     }
+
+    private suspend fun analyse(file: Path, document: TextDocument) =
+        AnalysedFile(file, document, SymbolTree(session.documentSymbols(file, document)))
 
     sealed interface Lookup {
         /** The Symbol at [canonical] and its [span] in [document], the file's current text. */
         data class Found(val document: TextDocument, val canonical: String, val span: SymbolSpan) : Lookup
         data class Ambiguous(val candidates: List<SymbolCandidate>) : Lookup
         data class NotFound(val suggestions: List<SymbolCandidate>) : Lookup
+
+        /**
+         * The Symbol is in the file as read from disk, but an earlier Operation removed or renamed it; [suggestions]
+         * are close names in the current text.
+         */
+        data class RemovedEarlier(val suggestions: List<SymbolCandidate>) : Lookup
 
         /** The text at the Symbol's name range isn't its name, so its range can't be trusted. */
         data class OutOfSync(val canonical: String) : Lookup
@@ -71,7 +82,8 @@ internal class ShadowWorkspace(
             null -> return Lookup.FileNotFound
             is SymbolResolver.Resolution.Found -> resolution
             is SymbolResolver.Resolution.Ambiguous -> return Lookup.Ambiguous(resolution.candidates)
-            is SymbolResolver.Resolution.NotFound -> return Lookup.NotFound(resolution.suggestions)
+            is SymbolResolver.Resolution.NotFound ->
+                return if (inBase(file, symbol)) Lookup.RemovedEarlier(resolution.suggestions) else Lookup.NotFound(resolution.suggestions)
             else -> error("in-file resolution reported $resolution")
         }
         val canonical = found.tree.canonicalPath(found.node).toString()
@@ -81,6 +93,29 @@ internal class ShadowWorkspace(
             is SymbolSpan.Computation.SharedLine -> Lookup.SharedLine(canonical, computation.line)
         }
     }
+
+    /** Whether [symbol] resolves in [file] as read from disk, which differs from its current text only once edited. */
+    private suspend fun inBase(file: Path, symbol: SymbolPath): Boolean {
+        val target = touched[file]?.takeIf { it.isEdited } ?: return false
+        val base = DocumentSource { analyse(file, target.base.document) }
+        return resolver.resolveIn(base, file, symbol) !is SymbolResolver.Resolution.NotFound
+    }
+
+    /**
+     * Where [symbol] is in the current text of the files this Edit has edited, in its package if it names one: what
+     * a project-wide lookup, which sees only the disk, can't find.
+     */
+    suspend fun findInEdited(symbol: SymbolPath): List<SymbolCandidate> =
+        touched.filterValues { it.isEdited }.keys.flatMap { file ->
+            val current = touched.getValue(file).current
+            if (symbol.packageName != null && current.packageName != symbol.packageName) return@flatMap emptyList()
+            when (val resolution = resolver.resolveIn(this, file, symbol)) {
+                is SymbolResolver.Resolution.Found ->
+                    listOf(SymbolCandidate(resolution.tree.canonicalPath(resolution.node).toString(), files.display(file)))
+                is SymbolResolver.Resolution.Ambiguous -> resolution.candidates
+                else -> emptyList()
+            }
+        }
 
     /**
      * Replaces whole [lines] (0-based) of [file]'s current text with [code], already laid out for the file. Edited
@@ -118,7 +153,7 @@ internal class ShadowWorkspace(
      * preferring those on its edited lines. All diagnostics share one [validationTimeout].
      */
     suspend fun validate(): Validated {
-        val edited = touched.filterValues { it.edited.isNotEmpty() }
+        val edited = touched.filterValues { it.isEdited }
         val diagnostics = withTimeoutOrNull(validationTimeout) {
             edited.map { (file, it) -> session.diagnostics(file, it.base.document) to session.diagnostics(file, it.current) }
         } ?: return Validated.TimedOut
@@ -191,7 +226,7 @@ internal class ShadowWorkspace(
      * fails after others succeeded leaves those on disk (ADR 0003, Consequences); one that fails first throws.
      */
     suspend fun writeBack(): WriteBack {
-        val edited = touched.filterValues { it.edited.isNotEmpty() }
+        val edited = touched.filterValues { it.isEdited }
         for ((file, it) in edited) {
             if (files.readHashed(file)?.hash != it.base.hash) return WriteBack.ChangedOnDisk(files.display(file))
         }
