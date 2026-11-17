@@ -10,11 +10,23 @@ import kronstadt.core.port.FileStore
 import java.nio.file.Path
 import kotlin.time.Duration
 
-/** A single step inside an Edit, aimed at one Symbol Path. */
-public sealed interface Operation
+/** A single step inside an Edit, aimed at one Symbol Path, in [file] if it is given. */
+public sealed interface Operation {
+    public val file: String?
+    public val symbol: String
+}
 
 /** Replaces the whole Symbol Span of [symbol] with [code] (ADR 0004); nothing of the old span is kept. */
-public data class Replace(val file: String?, val symbol: String, val code: String) : Operation
+public data class Replace(override val file: String?, override val symbol: String, val code: String) : Operation
+
+/** Adds [code] before the Symbol Span of [symbol] (above its KDoc and annotations), as a sibling at its indentation, one blank line above it. */
+public data class InsertBefore(override val file: String?, override val symbol: String, val code: String) : Operation
+
+/** Adds [code] after the Symbol Span of [symbol], as a sibling at its indentation, one blank line below it. */
+public data class InsertAfter(override val file: String?, override val symbol: String, val code: String) : Operation
+
+/** Removes the whole Symbol Span of [symbol] and one blank line next to it, below if there is one, else above. */
+public data class Delete(override val file: String?, override val symbol: String) : Operation
 
 /**
  * Use case behind `kt_edit`: applies an Edit's Operations, in order, in a Shadow Workspace, validates them and writes
@@ -30,14 +42,14 @@ public class Edit(
 ) {
     private val resolver = SymbolResolver(files, intelligence, readinessTimeout)
 
-    public suspend operator fun invoke(operation: Replace): EditResult = invoke(listOf(operation))
+    public suspend operator fun invoke(operation: Operation): EditResult = invoke(listOf(operation))
 
     /**
      * Applies [operations] in order, each resolved against the text the earlier ones left, possibly across several
      * files; validates once after the last and writes every edited file back, or nothing (unless a write fails
      * part-way, see [EditResult.PartiallyWritten]).
      */
-    public suspend operator fun invoke(operations: List<Replace>): EditResult {
+    public suspend operator fun invoke(operations: List<Operation>): EditResult {
         val paths = operations.mapIndexed { index, operation ->
             val symbol = operation.symbol
             val symbolPath = SymbolPath.parse(symbol)
@@ -82,8 +94,11 @@ public class Edit(
         data class NotReady(val phase: String, val elapsed: Duration) : Applied
     }
 
-    /** Resolves [operation]'s Symbol against the Shadow Workspace's current text and replaces its span, re-indented. */
-    private suspend fun apply(session: AnalysisSession, shadow: ShadowWorkspace, operation: Replace, symbolPath: SymbolPath): Applied {
+    /**
+     * Resolves [operation]'s Symbol against the Shadow Workspace's current text and changes the lines around its span;
+     * new code is re-indented to the span's column.
+     */
+    private suspend fun apply(session: AnalysisSession, shadow: ShadowWorkspace, operation: Operation, symbolPath: SymbolPath): Applied {
         val symbol = operation.symbol
         val file = when (val located = locate(session, shadow, operation.file, symbolPath)) {
             is Located.File -> located.file
@@ -102,9 +117,30 @@ public class Edit(
                 return Applied.Failed(OperationFailure.SharedLine(lookup.canonical, shown, lookup.line + 1))
             ShadowWorkspace.Lookup.FileNotFound -> return Applied.Failed(OperationFailure.FileNotFound(operation.file ?: shown))
         }
+        val document = found.document
         val span = found.span
-        val prefix = found.document.line(span.firstLine).takeWhile { it == ' ' || it == '\t' }
-        shadow.replaceSpan(file, span.firstLine..span.lastLine, FileLayout.of(found.document).reindent(operation.code, prefix))
+        val prefix = document.line(span.firstLine).takeWhile { it == ' ' || it == '\t' }
+        fun reindented(code: String) = FileLayout.of(document).reindent(code, prefix).lines()
+        // Inserted code starts and ends at its first and last non-blank lines: the one blank line comes from here.
+        fun sibling(code: String) = reindented(code).dropWhile { it.isEmpty() }
+        val first = span.firstLine
+        val afterSpan = span.lastLine + 1
+        when (operation) {
+            is Replace -> shadow.replaceLines(file, first..span.lastLine, reindented(operation.code))
+            is InsertBefore -> shadow.replaceLines(file, first until first, sibling(operation.code) + "")
+            is InsertAfter -> shadow.replaceLines(file, afterSpan until afterSpan, listOf("") + sibling(operation.code))
+            is Delete -> {
+                // The last line is the empty one after a final newline, not a blank line between declarations.
+                val blankAfter = afterSpan < document.lineCount - 1 && document.line(afterSpan).isBlank()
+                val blankBefore = first > 0 && document.line(first - 1).isBlank()
+                val lines = when {
+                    blankAfter -> first..afterSpan
+                    blankBefore -> (first - 1)..span.lastLine
+                    else -> first..span.lastLine
+                }
+                shadow.replaceLines(file, lines, emptyList())
+            }
+        }
         return Applied.Done
     }
 

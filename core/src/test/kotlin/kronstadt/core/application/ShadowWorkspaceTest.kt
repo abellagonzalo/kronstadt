@@ -60,7 +60,7 @@ class ShadowWorkspaceTest {
 
     private suspend fun ShadowWorkspace.replace(file: String, symbol: String, code: String) {
         val found = assertIs<ShadowWorkspace.Lookup.Found>(resolve(root.resolve(file), path(symbol)), symbol)
-        replaceSpan(root.resolve(file), found.span.firstLine..found.span.lastLine, code)
+        replaceLines(root.resolve(file), found.span.firstLine..found.span.lastLine, code.lines())
     }
 
     @Test

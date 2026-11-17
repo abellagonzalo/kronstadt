@@ -51,6 +51,28 @@ public class TextDocument(public val text: String) {
         return TextDocument(text.substring(0, start) + newText + text.substring(end))
     }
 
+    /**
+     * Replaces whole [lines] (0-based, inclusive) with [newLines], each ended by [separator]. An empty range
+     * (`n until n`) inserts before line `n`, or after the last line when `n` is [lineCount]. The other lines keep their
+     * terminators. The last line has none, so whatever line ends the result has none either.
+     */
+    public fun replaceLines(lines: IntRange, newLines: List<String>, separator: String): TextDocument {
+        val first = lines.first
+        val end = lines.last + 1
+        require(first in 0..end && end <= lineCount) { "lines $lines out of bounds (document has $lineCount lines)" }
+        if (end < lineCount) {
+            val inserted = newLines.joinToString("") { it + separator }
+            return TextDocument(text.substring(0, lineStarts[first]) + inserted + text.substring(lineStarts[end]))
+        }
+        return when {
+            newLines.isNotEmpty() && first == lineCount -> TextDocument(text + separator + newLines.joinToString(separator))
+            newLines.isNotEmpty() -> TextDocument(text.substring(0, lineStarts[first]) + newLines.joinToString(separator))
+            first == lineCount -> this
+            first == 0 -> TextDocument("")
+            else -> TextDocument(text.substring(0, lineContentEnd(first - 1)))
+        }
+    }
+
     /** Offset just past the last content character of [line], i.e. where its terminator starts. */
     private fun lineContentEnd(line: Int): Int {
         if (line == lineCount - 1) return text.length

@@ -16,6 +16,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+import kronstadt.core.application.Delete
 import kronstadt.core.application.Edit
 import kronstadt.core.application.EditResult
 import kronstadt.core.application.EditedFile
@@ -25,6 +26,8 @@ import kronstadt.core.application.FindUsages
 import kronstadt.core.application.FindUsagesResult
 import kronstadt.core.application.GetDefinition
 import kronstadt.core.application.GetDefinitionResult
+import kronstadt.core.application.InsertAfter
+import kronstadt.core.application.InsertBefore
 import kronstadt.core.application.OperationFailure
 import kronstadt.core.application.Problem
 import kronstadt.core.application.ReadStructure
@@ -182,9 +185,12 @@ internal class KronstadtTools(
             description = "Changes Kotlin code by Symbol, validated against the compiler before anything is written. " +
                 "A 'replace' Operation swaps a Symbol's whole span (exactly what kt_read_symbol returns: KDoc or " +
                 "comments above, annotations, modifiers, declaration, end-of-line comment) for your code; omitted " +
-                "KDoc or annotations are deleted. The code may rename the declaration or hold several. It is " +
-                "re-indented to the target's column, so indentation needn't match. Files are written only if the " +
-                "Edit adds no compiler errors to them; otherwise nothing is written and the new errors are listed. " +
+                "KDoc or annotations are deleted. The code may rename the declaration or hold several. " +
+                "'insert_before' and 'insert_after' add your code as a sibling of the Symbol, one blank line from it " +
+                "('insert_before' goes above its KDoc and annotations). 'delete' removes the whole span and one " +
+                "blank line next to it. Code is re-indented to the target's column, so indentation needn't match. " +
+                "Files are written only if the Edit adds no compiler errors to them; otherwise nothing is written and " +
+                "the new errors are listed. " +
                 "An Edit is an ordered batch of Operations, possibly across files: each resolves against the code the " +
                 "earlier ones left (so you can rename a Symbol, then target its new name), the batch is validated once " +
                 "after the last, and either every file is written or none is (a write failing part-way is reported). " +
@@ -201,7 +207,12 @@ internal class KronstadtTools(
                             putJsonObject("properties") {
                                 putJsonObject("type") {
                                     put("type", "string")
-                                    putJsonArray("enum") { add("replace") }
+                                    putJsonArray("enum") {
+                                        add("replace")
+                                        add("insert_before")
+                                        add("insert_after")
+                                        add("delete")
+                                    }
                                     put("description", "The Operation.")
                                 }
                                 stringProperty(
@@ -213,12 +224,15 @@ internal class KronstadtTools(
                                     "Optional path to the target's .kt/.kts file, absolute or relative to the project " +
                                         "root. Without it the Symbol Path is resolved across the project.",
                                 )
-                                stringProperty("code", "The complete new source for the Symbol's whole span.")
+                                stringProperty(
+                                    "code",
+                                    "For 'replace', the complete new source for the Symbol's whole span; for " +
+                                        "'insert_before' and 'insert_after', the code to add. Not used by 'delete'.",
+                                )
                             }
                             putJsonArray("required") {
                                 add("type")
                                 add("symbol")
-                                add("code")
                             }
                         }
                     }
@@ -231,17 +245,24 @@ internal class KronstadtTools(
     private suspend fun edit(args: JsonObject): CallToolResult {
         val operations = args["operations"] as? JsonArray ?: return error("Missing required argument: operations (an array)")
         if (operations.isEmpty()) return error("kt_edit needs at least one Operation. Nothing written.")
-        val replaces = operations.mapIndexed { index, element ->
+        val parsed = operations.mapIndexed { index, element ->
             val operation = element as? JsonObject ?: return error("Operation $index must be an object. Nothing written.")
             val type = operation.string("type") ?: return error("Operation $index: missing 'type'. Nothing written.")
-            if (type != "replace") {
-                return error("Operation $index: unsupported type '$type'; kt_edit currently supports 'replace'. Nothing written.")
-            }
             val symbol = operation.string("symbol") ?: return error("Operation $index: missing 'symbol'. Nothing written.")
-            val code = operation.string("code") ?: return error("Operation $index: missing 'code'. Nothing written.")
-            Replace(operation.string("file")?.takeIf { it.isNotBlank() }, symbol, code)
+            val file = operation.string("file")?.takeIf { it.isNotBlank() }
+            val code = operation.string("code")
+            val missingCode = "Operation $index: missing 'code', which '$type' needs. Nothing written."
+            when (type) {
+                "replace" -> Replace(file, symbol, code ?: return error(missingCode))
+                "insert_before" -> InsertBefore(file, symbol, code ?: return error(missingCode))
+                "insert_after" -> InsertAfter(file, symbol, code ?: return error(missingCode))
+                "delete" -> Delete(file, symbol)
+                else -> return error(
+                    "Operation $index: unsupported type '$type'; use replace, insert_before, insert_after or delete. Nothing written.",
+                )
+            }
         }
-        return when (val result = edit(replaces)) {
+        return when (val result = edit(parsed)) {
             is EditResult.Written -> text(result.files.joinToString("\n") { written(it) })
             is EditResult.Rejected -> error(
                 buildString {

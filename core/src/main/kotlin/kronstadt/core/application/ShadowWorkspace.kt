@@ -3,13 +3,12 @@ package kronstadt.core.application
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 import kronstadt.core.domain.Diagnostic
-import kronstadt.core.domain.Position
+import kronstadt.core.domain.FileLayout
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SymbolPath
 import kronstadt.core.domain.SymbolSpan
 import kronstadt.core.domain.SymbolTree
 import kronstadt.core.domain.TextDocument
-import kronstadt.core.domain.TextRange
 import kronstadt.core.domain.Validation
 import kronstadt.core.domain.packageName
 import kronstadt.core.port.AnalysisSession
@@ -35,11 +34,14 @@ internal class ShadowWorkspace(
     /** One budget for all of Validation's diagnostics: base and current text, across every touched file. */
     private val validationTimeout: Duration,
 ) : DocumentSource {
-    /** A touched file: its [base] as read from disk, its [current] text and the line ranges edited in [current]. */
+    /**
+     * A touched file: its [base] as read from disk, its [current] text and the line ranges edited in [current] (a
+     * deletion edits the file but leaves no edited lines).
+     */
     private class Touched(val base: HashedDocument) {
         var current: TextDocument = base.document
         val edited = mutableListOf<IntRange>()
-        val isEdited get() = edited.isNotEmpty()
+        var isEdited = false
     }
 
     /** In the order the Edit first touched them. */
@@ -118,15 +120,17 @@ internal class ShadowWorkspace(
         }
 
     /**
-     * Replaces whole [lines] (0-based) of [file]'s current text with [code], already laid out for the file. Edited
-     * ranges below the splice move with it; ones it overlaps merge into the new range.
+     * Replaces whole [lines] (0-based; empty to insert before `lines.first`) of [file]'s current text with [newLines],
+     * already laid out for the file. Edited ranges below the splice move with it; ones it overlaps merge into the new
+     * range.
      */
-    fun replaceSpan(file: Path, lines: IntRange, code: String) {
+    fun replaceLines(file: Path, lines: IntRange, newLines: List<String>) {
         val target = checkNotNull(touched[file]) { "$file was never resolved in this Shadow Workspace" }
-        target.current = target.current.replace(TextRange(Position(lines.first, 0), Position(lines.last, Int.MAX_VALUE)), code)
-        val newLines = lines.first until lines.first + code.lines().size
-        val shift = newLines.count() - lines.count()
-        var merged = newLines
+        target.current = target.current.replaceLines(lines, newLines, FileLayout.of(target.current).lineSeparator)
+        target.isEdited = true
+        val written = lines.first until lines.first + newLines.size
+        val shift = newLines.size - lines.count()
+        var merged = written
         val kept = target.edited.mapNotNull { range ->
             when {
                 range.last < lines.first -> range
@@ -138,7 +142,7 @@ internal class ShadowWorkspace(
             }
         }
         target.edited.clear()
-        target.edited += (kept + listOf(merged)).sortedBy { it.first }
+        target.edited += (kept + listOf(merged)).filterNot { it.isEmpty() }.sortedBy { it.first }
     }
 
     sealed interface Validated {

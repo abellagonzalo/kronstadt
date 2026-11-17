@@ -76,4 +76,24 @@ class TextDocumentTest {
         val doc = TextDocument("a\nb")
         assertEquals("a\nxb", doc.replace(TextRange(pos(1, 0), pos(1, 0)), "x").text)
     }
+
+    @Test
+    fun `an empty line range inserts whole lines before that line, each ending with the separator`() {
+        val doc = TextDocument("a\r\nb\r\n")
+        assertEquals("a\r\nx\r\ny\r\nb\r\n", doc.replaceLines(1 until 1, listOf("x", "y"), "\r\n").text)
+    }
+
+    @Test
+    fun `removing lines up to the end of a file without a final newline also removes the terminator before them`() {
+        val doc = TextDocument("a\nb\nc")
+        assertEquals("a", doc.replaceLines(1..2, emptyList(), "\n").text)
+        assertEquals("", doc.replaceLines(0..2, emptyList(), "\n").text)
+    }
+
+    @Test
+    fun `inserting after the last line of a file without a final newline puts the separator before the new lines`() {
+        val doc = TextDocument("a\nb")
+        assertEquals("a\nb\nx", doc.replaceLines(2 until 2, listOf("x"), "\n").text)
+        assertEquals("a\nx", doc.replaceLines(1..1, listOf("x"), "\n").text)
+    }
 }
