@@ -12,6 +12,7 @@ import kronstadt.core.domain.SymbolTree
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.TextRange
 import kronstadt.core.domain.Validation
+import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.core.port.FileStore
 import kronstadt.core.port.HashedDocument
@@ -48,13 +49,15 @@ public class Edit(
         return writeLock.withLock {
             val readiness = intelligence.awaitReady(readinessTimeout)
             if (readiness is Readiness.NotReady) return@withLock EditResult.NotReady(readiness.phase, readiness.elapsed)
-            val file = when (val located = locate(operation.file, symbolPath)) {
-                is Located.File -> located.file
-                is Located.Failed -> return@withLock failed(located.failure)
-                is Located.NotReady -> return@withLock EditResult.NotReady(located.phase, located.elapsed)
+            intelligence.session { session ->
+                val file = when (val located = locate(session, operation.file, symbolPath)) {
+                    is Located.File -> located.file
+                    is Located.Failed -> return@session failed(located.failure)
+                    is Located.NotReady -> return@session EditResult.NotReady(located.phase, located.elapsed)
+                }
+                val read = files.readHashed(file) ?: return@session failed(OperationFailure.FileNotFound(operation.file ?: files.display(file)))
+                replace(ShadowWorkspace(session), file, read, symbol, symbolPath, operation.code)
             }
-            val read = files.readHashed(file) ?: return@withLock failed(OperationFailure.FileNotFound(operation.file ?: files.display(file)))
-            ShadowWorkspace.use(intelligence) { shadow -> replace(shadow, file, read, symbol, symbolPath, operation.code) }
         }
     }
 
@@ -68,14 +71,14 @@ public class Edit(
      * The file the Operation targets. Without one, the Symbol Path is resolved project-wide only to find its file;
      * it is resolved again in the Shadow Workspace, against the text the Edit is based on.
      */
-    private suspend fun locate(path: String?, symbolPath: SymbolPath): Located {
+    private suspend fun locate(session: AnalysisSession, path: String?, symbolPath: SymbolPath): Located {
         if (path != null) {
             val file = files.resolve(path) ?: return Located.Failed(OperationFailure.OutsideProject(path))
             if (!AnalysedFile.isKotlin(file)) return Located.Failed(OperationFailure.NotKotlin(path))
             return Located.File(file)
         }
         val symbol = symbolPath.toString()
-        return when (val resolution = resolver.resolve(null, symbolPath)) {
+        return when (val resolution = resolver.resolve(session, null, symbolPath)) {
             is SymbolResolver.Resolution.Found -> Located.File(resolution.file)
             is SymbolResolver.Resolution.Ambiguous -> Located.Failed(OperationFailure.Ambiguous(symbol, null, resolution.candidates))
             is SymbolResolver.Resolution.NotFound -> Located.Failed(OperationFailure.NotFound(symbol, null, resolution.suggestions))
@@ -132,7 +135,7 @@ public class Edit(
             WriteResult.Written -> Unit
             WriteResult.ChangedOnDisk -> return EditResult.ChangedOnDisk(files.display(file))
         }
-        shadow.saved(file, edited)
+        shadow.writtenBack(file, edited)
         val resulting = editedTree.nodes.filter { node ->
             val (first, last) = SymbolSpan.lines(edited, node.symbol)
             first >= span.firstLine && last <= lastNewLine

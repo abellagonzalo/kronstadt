@@ -235,7 +235,7 @@ class ReadSymbolWithoutFileTest {
         listOf("Config", "com.example.a/Config", "Box", "Confgi", "local").forEach { path ->
             val intelligence = intelligence()
             read(path, intelligence)
-            assertEquals(emptySet(), intelligence.openDocuments, path)
+            intelligence.assertOneSessionClosedEverything(path)
         }
     }
 

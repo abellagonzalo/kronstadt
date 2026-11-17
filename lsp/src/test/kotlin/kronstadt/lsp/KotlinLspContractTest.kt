@@ -133,11 +133,7 @@ class KotlinLspContractTest {
     private fun spans(): Pair<TextDocument, List<CodeSymbol>> = runBlocking {
         val file = project.resolve("src/main/kotlin/fixture/Spans.kt")
         val document = TextDocument(Files.readString(file))
-        try {
-            document to lsp.documentSymbols(file, document)
-        } finally {
-            lsp.closeDocument(file)
-        }
+        document to lsp.session { it.documentSymbols(file, document) }
     }
 
     private fun List<CodeSymbol>.find(vararg names: String): CodeSymbol =
@@ -338,17 +334,15 @@ class KotlinLspContractTest {
         val file = project.resolve("src/main/kotlin/fixture/alpha/Shape.kt")
         val disk = TextDocument(Files.readString(file))
         val broken = TextDocument(disk.text.replace("class Shape(val sides: Int)", "class Shape(val sides: Int) {\n    fun name(): Int = \"x\"\n}"))
-        try {
-            assertEquals(emptyList(), lsp.diagnostics(file, disk).filter { it.severity == Severity.ERROR })
+        lsp.session { session ->
+            assertEquals(emptyList(), session.diagnostics(file, disk).filter { it.severity == Severity.ERROR })
 
-            val errors = lsp.diagnostics(file, broken).filter { it.severity == Severity.ERROR }
+            val errors = session.diagnostics(file, broken).filter { it.severity == Severity.ERROR }
             assertEquals(1, errors.size, "diagnostics: $errors")
             assertEquals(Position(3, 22), errors.single().range.start, "diagnostics: $errors")
             assertNotNull(errors.single().code, "diagnostics: $errors")
 
-            assertEquals(emptyList(), lsp.diagnostics(file, disk).filter { it.severity == Severity.ERROR })
-        } finally {
-            repeat(3) { lsp.closeDocument(file) }
+            assertEquals(emptyList(), session.diagnostics(file, disk).filter { it.severity == Severity.ERROR })
         }
     }
 
@@ -507,13 +501,10 @@ class KotlinLspContractTest {
         val file = project.resolve("src/main/kotlin/fixture/Definitions.kt")
         val broken = TextDocument(Files.readString(file).replace("area(1.0, 2.0)", "nope(1.0, 2.0)"))
         val name = broken.positionOf(broken.text.indexOf("nope"))
-        try {
-            assertEquals(emptyList(), lsp.definition(file, broken, name))
-            val diagnostic = lsp.diagnostics(file, broken).single { name in it.range }
+        lsp.session { session ->
+            assertEquals(emptyList(), session.definition(file, broken, name))
+            val diagnostic = session.diagnostics(file, broken).single { name in it.range }
             assertEquals("UNRESOLVED_REFERENCE", diagnostic.code)
-        } finally {
-            lsp.closeDocument(file)
-            lsp.closeDocument(file)
         }
     }
 }

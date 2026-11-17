@@ -180,7 +180,7 @@ class ReadSymbolTest {
             val intelligence = FakeCodeIntelligence(listOf(runner, topRun))
             readSymbol(nested, intelligence = intelligence)("src/A.kt", path)
             assertEquals(1, intelligence.analysed.size)
-            assertEquals(emptySet(), intelligence.openDocuments, path)
+            intelligence.assertOneSessionClosedEverything(path)
         }
     }
 

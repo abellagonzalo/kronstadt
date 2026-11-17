@@ -5,6 +5,7 @@ import kronstadt.core.domain.SymbolPath
 import kronstadt.core.domain.SymbolTree
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.packageName
+import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.core.port.FileStore
 import java.nio.file.Path
@@ -16,7 +17,7 @@ public data class SymbolCandidate(val path: String, val file: String)
 /**
  * Resolves a Symbol Path to exactly one Symbol (ADR 0002), in a given file or, without one, project-wide.
  *
- * Every tool that accepts a Symbol Path resolves it here. Each file analysed is closed again before this returns.
+ * Every tool that accepts a Symbol Path resolves it here, analysing files in the tool call's [AnalysisSession].
  */
 internal class SymbolResolver(
     private val files: FileStore,
@@ -34,14 +35,14 @@ internal class SymbolResolver(
     }
 
     /** Resolves [symbol] in [path]; without a [path], project-wide, narrowed to its package if it has one. */
-    suspend fun resolve(path: String?, symbol: SymbolPath): Resolution =
-        if (path == null) resolveProjectWide(symbol) else resolveInFile(path, symbol)
+    suspend fun resolve(session: AnalysisSession, path: String?, symbol: SymbolPath): Resolution =
+        if (path == null) resolveProjectWide(session, symbol) else resolveInFile(session, path, symbol)
 
     /** Syntax-only: answers from the file's `documentSymbol` tree without waiting for the project index. */
-    private suspend fun resolveInFile(path: String, symbol: SymbolPath): Resolution {
+    private suspend fun resolveInFile(session: AnalysisSession, path: String, symbol: SymbolPath): Resolution {
         val file = files.resolve(path) ?: return Resolution.OutsideProject(path)
         if (!AnalysedFile.isKotlin(file)) return Resolution.NotKotlin(path)
-        val analysed = AnalysedFile.of(files, intelligence, file) ?: return Resolution.FileNotFound(path)
+        val analysed = AnalysedFile.of(files, session, file) ?: return Resolution.FileNotFound(path)
         return when (val resolution = analysed.tree.resolve(symbol)) {
             is SymbolTree.Resolution.Found -> found(analysed, resolution.node)
             is SymbolTree.Resolution.Ambiguous -> Resolution.Ambiguous(resolution.candidates.map { candidate(analysed, it) })
@@ -54,14 +55,14 @@ internal class SymbolResolver(
      * through its own `documentSymbol` tree. Waits for a complete index first, since an incomplete one would make a
      * Symbol look missing.
      */
-    private suspend fun resolveProjectWide(symbol: SymbolPath): Resolution {
+    private suspend fun resolveProjectWide(session: AnalysisSession, symbol: SymbolPath): Resolution {
         val readiness = intelligence.awaitReady(readinessTimeout)
         if (readiness is Readiness.NotReady) return Resolution.NotReady(readiness.phase, readiness.elapsed)
         // Constructors and unnamed companions aren't indexed under those names; the class before them is.
         val query = symbol.segments.lastOrNull { it.name !in UNINDEXED_NAMES }?.name ?: return Resolution.NotFound(emptyList())
         val hits = intelligence.workspaceSymbols(query).filter { AnalysedFile.isKotlin(it.file) }
         val analysed = mutableMapOf<Path, AnalysedFile?>()
-        suspend fun analysedOrNull(file: Path) = analysed.getOrPut(file) { AnalysedFile.of(files, intelligence, file) }
+        suspend fun analysedOrNull(file: Path) = analysed.getOrPut(file) { AnalysedFile.of(files, session, file) }
 
         val matches = hits.filter { it.name == query }.map { it.file }.distinct().sorted().flatMap { file ->
             val candidate = analysedOrNull(file)?.takeIf { inPackage(it, symbol) } ?: return@flatMap emptyList()

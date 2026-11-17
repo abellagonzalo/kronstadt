@@ -19,11 +19,7 @@ public class ReadStructure(
             return ReadStructureResult.NotKotlin(path)
         }
         val document = files.read(file) ?: return ReadStructureResult.FileNotFound(path)
-        val symbols = try {
-            intelligence.documentSymbols(file, document)
-        } finally {
-            intelligence.closeDocument(file)
-        }
+        val symbols = intelligence.session { it.documentSymbols(file, document) }
         val shown = files.display(file)
         val text = StructureRenderer.render(shown, document, symbols, xml)
         return if (text.isEmpty()) ReadStructureResult.NoDeclarations(shown) else ReadStructureResult.Structure(text)

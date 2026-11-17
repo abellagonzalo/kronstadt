@@ -13,6 +13,7 @@ import kronstadt.core.domain.TextRange
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.seconds
 
@@ -140,7 +141,7 @@ class EditTest {
         edit(intelligence)(Replace(path, "Greeter/greet", "fun greet(): String =\n    \"hello\""))
 
         assertEquals(listOf("open A.kt v1", "change A.kt v2", "save A.kt", "close A.kt"), intelligence.events)
-        assertEquals(emptySet(), intelligence.openDocuments)
+        intelligence.assertOneSessionClosedEverything()
     }
 
     @Test
@@ -150,6 +151,20 @@ class EditTest {
         edit(intelligence)(Replace(path, "Greeter/greet", "fun greet(): String =\n    \"hello\""))
 
         assertEquals(listOf("open A.kt v1", "change A.kt v2", "close A.kt"), intelligence.events)
+        intelligence.assertOneSessionClosedEverything()
+    }
+
+    @Test
+    fun `an edit that fails with an exception still closes every document it opened`() = runTest {
+        val intelligence = FakeCodeIntelligence(
+            symbolsByText = mapOf(source to listOf(greeter(greet, other))),
+            beforeDiagnostics = { throw IllegalStateException("language server died") },
+        )
+
+        assertFailsWith<IllegalStateException> { edit(intelligence)(Replace(path, "Greeter/greet", "fun greet() = 1")) }
+
+        assertEquals(listOf("open A.kt v1", "close A.kt"), intelligence.events)
+        intelligence.assertOneSessionClosedEverything()
     }
 
     @Test
@@ -165,6 +180,7 @@ class EditTest {
         assertEquals(EditResult.ChangedOnDisk(path), result)
         assertEquals("$source// theirs\n", files.content(path))
         assertEquals(listOf("open A.kt v1", "change A.kt v2", "close A.kt"), intelligence.events)
+        intelligence.assertOneSessionClosedEverything()
     }
 
     @Test
@@ -179,7 +195,7 @@ class EditTest {
 
         assertEquals(EditResult.ValidationTimedOut, result)
         assertEquals(emptyList(), files.written)
-        assertEquals(emptySet(), intelligence.openDocuments)
+        intelligence.assertOneSessionClosedEverything()
     }
 
     @Test
@@ -223,7 +239,7 @@ class EditTest {
 
         assertEquals(EditResult.OperationFailed(0, OperationFailure.NotFound("Greeter/greeet", path, listOf(SymbolCandidate("greet", path), SymbolCandidate("Greeter", path)))), result)
         assertEquals(emptyList(), files.written)
-        assertEquals(emptySet(), intelligence.openDocuments)
+        intelligence.assertOneSessionClosedEverything()
     }
 
     @Test
@@ -238,7 +254,7 @@ class EditTest {
 
         assertIs<EditResult.Written>(result)
         assertEquals(hello, files.content(path))
-        assertEquals(emptySet(), intelligence.openDocuments)
+        intelligence.assertOneSessionClosedEverything()
     }
 
     @Test

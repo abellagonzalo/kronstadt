@@ -143,7 +143,7 @@ class FindSymbolTest {
         val intelligence = intelligence()
         FindSymbol(files, intelligence)("User")
         assertEquals(setOf(root.resolve(userKt), root.resolve(lookupKt)), intelligence.analysed.map { it.first }.toSet())
-        assertEquals(emptySet(), intelligence.openDocuments)
+        intelligence.assertOneSessionClosedEverything()
     }
 
     @OptIn(ExperimentalCoroutinesApi::class) // testTimeSource

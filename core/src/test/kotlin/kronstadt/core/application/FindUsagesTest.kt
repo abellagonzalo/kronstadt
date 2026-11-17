@@ -339,7 +339,7 @@ class FindUsagesTest {
 
         FindUsages(files, intelligence)("greet")
 
-        assertEquals(emptySet(), intelligence.openDocuments)
+        intelligence.assertOneSessionClosedEverything()
     }
 
     @Test

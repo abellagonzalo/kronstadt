@@ -35,7 +35,7 @@ class ReadStructureTest {
         val indexing = FakeCodeIntelligence(documentSymbols = listOf(symbol), notReadyPhase = "Indexing")
 
         assertIs<ReadStructureResult.Structure>(ReadStructure(files, indexing)("src/A.kt"))
-        assertEquals(emptySet(), indexing.openDocuments)
+        indexing.assertOneSessionClosedEverything()
     }
 
     @Test
@@ -45,7 +45,7 @@ class ReadStructureTest {
         val result = ReadStructure(files, empty)("build.gradle.kts")
 
         assertEquals(ReadStructureResult.NoDeclarations("build.gradle.kts"), result)
-        assertEquals(emptySet(), empty.openDocuments)
+        empty.assertOneSessionClosedEverything()
     }
 
     @Test

@@ -15,6 +15,7 @@ import kronstadt.core.domain.TextRange
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.seconds
 
@@ -100,6 +101,7 @@ class GetDefinitionTest {
         definitions: Map<Pair<Path, Position>, List<Definition>> = emptyMap(),
         notReadyPhase: String? = null,
         diagnosticsByText: Map<String, List<Diagnostic>> = emptyMap(),
+        beforeDiagnostics: suspend () -> Unit = {},
     ): Pair<FakeFileStore, FakeCodeIntelligence> {
         val files = FakeFileStore(
             root,
@@ -116,6 +118,7 @@ class GetDefinitionTest {
             index = index,
             definitions = definitions,
             diagnosticsByText = diagnosticsByText,
+            beforeDiagnostics = beforeDiagnostics,
         )
         return files to intelligence
     }
@@ -143,7 +146,7 @@ class GetDefinitionTest {
             """.trimMargin(),
             assertIs<GetDefinitionResult.Found>(result).text,
         )
-        assertEquals(emptySet(), intelligence.openDocuments)
+        intelligence.assertOneSessionClosedEverything()
     }
 
     @Test
@@ -159,7 +162,7 @@ class GetDefinitionTest {
             ),
             GetDefinition(files, intelligence)("welcome", "greeter"),
         )
-        assertEquals(emptySet(), intelligence.openDocuments)
+        intelligence.assertOneSessionClosedEverything()
     }
 
     @Test
@@ -187,7 +190,7 @@ class GetDefinitionTest {
                 "val greeter = Greeter(\"Hi\")",
             assertIs<GetDefinitionResult.Found>(result).text,
         )
-        assertEquals(emptySet(), intelligence.openDocuments)
+        intelligence.assertOneSessionClosedEverything()
     }
 
     @Test
@@ -244,7 +247,7 @@ class GetDefinitionTest {
             """.trimMargin(),
             assertIs<GetDefinitionResult.Found>(result).text,
         )
-        assertEquals(emptySet(), intelligence.openDocuments)
+        intelligence.assertOneSessionClosedEverything()
     }
 
     @Test
@@ -297,7 +300,16 @@ class GetDefinitionTest {
             GetDefinitionResult.Unresolved("Greeter", "welcome", 4, "UNRESOLVED_REFERENCE: Unresolved reference 'Greeter'."),
             GetDefinition(files, intelligence)("welcome", "Greeter"),
         )
-        assertEquals(emptySet(), intelligence.openDocuments)
+        intelligence.assertOneSessionClosedEverything()
+    }
+
+    @Test
+    fun `a lookup that fails with an exception still closes every document it opened`() = runTest {
+        val (files, intelligence) = project(beforeDiagnostics = { throw IllegalStateException("language server died") })
+
+        assertFailsWith<IllegalStateException> { GetDefinition(files, intelligence)("welcome", "Greeter") }
+
+        intelligence.assertOneSessionClosedEverything()
     }
 
     @Test
@@ -334,7 +346,7 @@ class GetDefinitionTest {
                 "// greet in /elsewhere/Gen.kt, L10 (outside the project: read-only, not addressable)",
             assertIs<GetDefinitionResult.Found>(result).text,
         )
-        assertEquals(emptySet(), intelligence.openDocuments)
+        intelligence.assertOneSessionClosedEverything()
     }
 
     @Test

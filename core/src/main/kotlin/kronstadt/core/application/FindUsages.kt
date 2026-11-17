@@ -2,8 +2,10 @@ package kronstadt.core.application
 
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolPath
+import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.core.port.FileStore
+import java.nio.file.Path
 import kotlin.time.Duration
 
 /**
@@ -26,7 +28,12 @@ public class FindUsages(
             files.read(resolved) ?: return FindUsagesResult.FileNotFound(path)
             resolved
         }
-        val declaration = when (val resolution = resolver.resolve(null, symbolPath)) {
+        return intelligence.session { session -> usages(session, symbol, symbolPath, fileFilter) }
+    }
+
+    /** Resolves the Symbol and lists its Usages, analysing every file in the tool call's one [session]. */
+    private suspend fun usages(session: AnalysisSession, symbol: String, symbolPath: SymbolPath, fileFilter: Path?): FindUsagesResult {
+        val declaration = when (val resolution = resolver.resolve(session, null, symbolPath)) {
             is SymbolResolver.Resolution.Found -> resolution
             is SymbolResolver.Resolution.Ambiguous -> return FindUsagesResult.Ambiguous(symbol, resolution.candidates)
             is SymbolResolver.Resolution.NotFound -> return FindUsagesResult.NotFound(symbol, resolution.suggestions)
@@ -35,11 +42,8 @@ public class FindUsages(
             is SymbolResolver.Resolution.FileNotFound, is SymbolResolver.Resolution.NotKotlin,
             is SymbolResolver.Resolution.OutsideProject -> error("project-wide resolution reported $resolution")
         }
-        val usagesAndImports = try {
-            intelligence.references(declaration.file, declaration.document, declaration.node.symbol.selectionRange.start)
-        } finally {
-            intelligence.closeDocument(declaration.file)
-        }.filter { files.resolve(it.file.toString()) == it.file && (fileFilter == null || it.file == fileFilter) }
+        val usagesAndImports = session.references(declaration.file, declaration.document, declaration.node.symbol.selectionRange.start)
+            .filter { files.resolve(it.file.toString()) == it.file && (fileFilter == null || it.file == fileFilter) }
         var imports = 0
         // Only text is needed to tell imports apart; trees are fetched for the files shown.
         val withUsages = usagesAndImports.groupBy { it.file }.entries
@@ -67,7 +71,7 @@ public class FindUsages(
             append(count(withUsages.sumOf { (_, usages) -> usages.size }, "usage")).append(" in ").append(count(withUsages.size, "file"))
             if (imports > 0) append(" (+").append(count(imports, "import")).append(')')
             shown.forEach { (file, usages) ->
-                val analysed = AnalysedFile.of(files, intelligence, file) ?: return@forEach
+                val analysed = AnalysedFile.of(files, session, file) ?: return@forEach
                 append('\n').append(files.display(file))
                 usages.groupBy { usage ->
                     analysed.tree.nodes.lastOrNull { usage.range.start in it.symbol.range }

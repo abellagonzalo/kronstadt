@@ -15,7 +15,7 @@ import kotlin.time.Duration
  */
 public class ReadSymbol(
     private val files: FileStore,
-    intelligence: CodeIntelligence,
+    private val intelligence: CodeIntelligence,
     readinessTimeout: Duration = Readiness.DEFAULT_TIMEOUT,
 ) {
     private val resolver = SymbolResolver(files, intelligence, readinessTimeout)
@@ -26,7 +26,7 @@ public class ReadSymbol(
         if (path != null && symbolPath.packageName != null) {
             return ReadSymbolResult.InvalidPath(symbol, "a package prefix is only for paths without a file; drop it or the file")
         }
-        val found = when (val resolution = resolver.resolve(path, symbolPath)) {
+        val found = when (val resolution = intelligence.session { resolver.resolve(it, path, symbolPath) }) {
             is SymbolResolver.Resolution.Found -> resolution
             is SymbolResolver.Resolution.Ambiguous -> return ReadSymbolResult.Ambiguous(symbol, path?.let(::shown), resolution.candidates)
             is SymbolResolver.Resolution.NotFound -> return ReadSymbolResult.NotFound(symbol, path?.let(::shown), resolution.suggestions)

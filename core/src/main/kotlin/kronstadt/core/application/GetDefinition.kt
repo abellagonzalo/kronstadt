@@ -9,6 +9,7 @@ import kronstadt.core.domain.SymbolSpan
 import kronstadt.core.domain.SymbolTree
 import kronstadt.core.domain.TextRange
 import kronstadt.core.domain.packageName
+import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.core.port.FileStore
 import kotlin.time.Duration
@@ -33,7 +34,19 @@ public class GetDefinition(
         // Definitions come from the index even when the Symbol's file is given.
         val readiness = intelligence.awaitReady(readinessTimeout)
         if (readiness is Readiness.NotReady) return GetDefinitionResult.NotReady(readiness.phase, readiness.elapsed)
-        val found = when (val resolution = resolver.resolve(file, symbolPath)) {
+        return intelligence.session { session -> definitions(session, symbol, symbolPath, name, at, file) }
+    }
+
+    /** Resolves the Symbol, then [name] in it, analysing every file in the tool call's one [session]. */
+    private suspend fun definitions(
+        session: AnalysisSession,
+        symbol: String,
+        symbolPath: SymbolPath,
+        name: String,
+        at: String?,
+        file: String?,
+    ): GetDefinitionResult {
+        val found = when (val resolution = resolver.resolve(session, file, symbolPath)) {
             is SymbolResolver.Resolution.Found -> resolution
             is SymbolResolver.Resolution.Ambiguous -> return GetDefinitionResult.Ambiguous(symbol, file, resolution.candidates)
             is SymbolResolver.Resolution.NotFound -> return GetDefinitionResult.NotFound(symbol, file, resolution.suggestions)
@@ -60,18 +73,10 @@ public class GetDefinition(
         val names = identifier(name).findAll(document.text, scope.first).map { it.range }.takeWhile { it.last <= scope.last }.toList()
         val nameRange = names.singleOrNull() ?: return notExactlyOnce(name, names)
         val position = document.positionOf(nameRange.first)
-        val definitions = try {
-            intelligence.definition(found.file, document, position)
-        } finally {
-            intelligence.closeDocument(found.file)
-        }
+        val definitions = session.definition(found.file, document, position)
         if (definitions.isEmpty()) {
             val range = TextRange(position, document.positionOf(nameRange.last + 1))
-            val diagnostic = try {
-                intelligence.diagnostics(found.file, document)
-            } finally {
-                intelligence.closeDocument(found.file)
-            }.firstOrNull { it.range.start < range.end && range.start < it.range.end }
+            val diagnostic = session.diagnostics(found.file, document).firstOrNull { it.range.start < range.end && range.start < it.range.end }
             return GetDefinitionResult.Unresolved(
                 name,
                 found.tree.canonicalPath(found.node).toString(),
@@ -81,7 +86,7 @@ public class GetDefinition(
         }
         val text = definitions.map { definition ->
             when (definition) {
-                is Definition.InSource -> sourceTarget(definition, name)
+                is Definition.InSource -> sourceTarget(session, definition, name)
                 is Definition.InLibrary -> libraryTarget(definition, name)
             }
         }.joinToString("\n\n")
@@ -107,7 +112,7 @@ public class GetDefinition(
      * A declaration in a source file: a project Symbol, a local, or something in a file Kronstadt can't address (not
      * Kotlin, or outside the project), shown with the line it is on. [name] stands in for a name that can't be read.
      */
-    private suspend fun sourceTarget(definition: Definition.InSource, name: String): String {
+    private suspend fun sourceTarget(session: AnalysisSession, definition: Definition.InSource, name: String): String {
         val location = definition.location
         val file = location.file
         val line = location.range.start.line
@@ -118,7 +123,7 @@ public class GetDefinition(
             return "// ${document?.slice(location.range) ?: name} in $shown, L${line + 1} (not Kotlin: read-only, not addressable)" +
                 (document?.let { "\n" + it.line(line).trim() } ?: "")
         }
-        val analysed = AnalysedFile.of(files, intelligence, file) ?: return "// $name in $shown, L${line + 1} (file not found)"
+        val analysed = AnalysedFile.of(files, session, file) ?: return "// $name in $shown, L${line + 1} (file not found)"
         val node = analysed.tree.nodes.lastOrNull { it.symbol.selectionRange.start == location.range.start }
             ?: return local(analysed, location.range, shown)
         val canonical = analysed.tree.canonicalPath(node).toString()

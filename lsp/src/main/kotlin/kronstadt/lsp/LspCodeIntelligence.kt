@@ -2,6 +2,7 @@ package kronstadt.lsp
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -16,6 +17,7 @@ import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextDocument
+import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
 import org.eclipse.lsp4j.ClientCapabilities
 import org.eclipse.lsp4j.ConfigurationParams
@@ -79,69 +81,22 @@ public class LspCodeIntelligence private constructor(
 ) : CodeIntelligence, AutoCloseable {
 
     /**
-     * [users] counts the calls that analysed this document and haven't closed it yet; read tools run concurrently.
-     * A [retained] document stays open after its last close, for as long as calls find the disk unchanged since
-     * Kronstadt wrote it (see [saveDocument]).
+     * [holders] counts the sessions that analysed this document and haven't ended yet; read tools run sessions
+     * concurrently. A [retained] document stays open after its last holder ended, for as long as sessions find the
+     * disk unchanged since Kronstadt wrote it (see [Session.writtenBack]).
      */
-    private data class OpenDocument(val version: Int, val text: String, val users: Int, val retained: Boolean = false)
+    private data class OpenDocument(val version: Int, val text: String, val holders: Int, val retained: Boolean = false)
 
     private val syncLock = Mutex()
     private val openDocuments = mutableMapOf<String, OpenDocument>()
 
-    override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> {
-        val uri = LspMapping.uri(file)
-        sync(uri, document)
-        val result = request { server.textDocumentService.documentSymbol(DocumentSymbolParams(TextDocumentIdentifier(uri))) }
-        return LspMapping.documentSymbols(result)
-    }
-
-    override suspend fun closeDocument(file: Path) {
-        val uri = LspMapping.uri(file)
-        syncLock.withLock {
-            val open = openDocuments[uri] ?: return@withLock
-            if (open.users > 1 || open.retained) {
-                openDocuments[uri] = open.copy(users = maxOf(open.users - 1, 0))
-            } else {
-                openDocuments.remove(uri)
-                server.textDocumentService.didClose(DidCloseTextDocumentParams(TextDocumentIdentifier(uri)))
-            }
-        }
-    }
-
-    /**
-     * Pulls `textDocument/diagnostic` for [document]. Read tools may sync the same file meanwhile (they don't take the
-     * write lock), so if its text changed while the request ran, the answer may describe other text: pull again.
-     */
-    override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> {
-        val uri = LspMapping.uri(file)
-        sync(uri, document)
-        repeat(MAX_DIAGNOSTIC_PULLS) {
-            val version = syncLock.withLock { openDocuments[uri]?.version }
-            val report = request { server.textDocumentService.diagnostic(DocumentDiagnosticParams(TextDocumentIdentifier(uri))) }
-            val unchanged = syncLock.withLock {
-                val open = openDocuments[uri]
-                open != null && open.version == version && open.text == document.text
-            }
-            if (unchanged) return LspMapping.diagnostics(report)
-            syncAgain(uri, document)
-        }
-        throw IllegalStateException("${file.fileName} kept changing while its diagnostics were pulled")
-    }
-
-    /**
-     * Sends `didSave` and retains the document: kotlin-lsp 271.2085.0 doesn't reread a file on `didSave`/`didClose`,
-     * so closing it would leave `workspace/symbol` on the old text until its file watcher catches up (ADR 0003). Open,
-     * the written text is what the index answers from. It stays open while calls read that same text from disk; the
-     * first call that reads other text (an outside change) syncs it and its close hands the file back to the watcher.
-     * A read tool may have synced the file meanwhile (it doesn't take the write lock), so [document] is put back first.
-     */
-    override suspend fun saveDocument(file: Path, document: TextDocument) {
-        val uri = LspMapping.uri(file)
-        syncAgain(uri, document)
-        syncLock.withLock {
-            val open = openDocuments[uri] ?: return@withLock
-            server.textDocumentService.didSave(DidSaveTextDocumentParams(TextDocumentIdentifier(uri)))
-            openDocuments[uri] = open.copy(retained = true)
+    /** Ending the session closes its documents even if the caller was cancelled: a leaked document goes stale (ADR 0003). */
+    override suspend fun <T> session(block: suspend (AnalysisSession) -> T): T {
+        val session = Session()
+        try {
+            return block(session)
+        } finally {
+            withContext(NonCancellable) { session.end() }
         }
     }
 
@@ -150,33 +105,152 @@ public class LspCodeIntelligence private constructor(
         return LspMapping.workspaceSymbols(result)
     }
 
-    override suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation> {
-        val uri = LspMapping.uri(file)
-        sync(uri, document)
-        val params = ReferenceParams(
-            TextDocumentIdentifier(uri),
-            org.eclipse.lsp4j.Position(position.line, position.character),
-            ReferenceContext(false),
-        )
-        return LspMapping.locations(request { server.textDocumentService.references(params) })
-    }
+    override suspend fun awaitReady(timeout: Duration): Readiness = readiness.awaitReady(timeout)
 
-    /**
-     * kotlin-lsp 271.2085.0 points into a library's sources jar when Gradle has one (`jar:` URIs), and at class files
-     * otherwise, including the JDK's (`jrt:` URIs). A sources-jar entry is read here, with its Symbols: kotlin-lsp
-     * answers `documentSymbol` for a jar URI without it being opened. Other URIs are dropped.
-     */
-    override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> {
-        val uri = LspMapping.uri(file)
-        sync(uri, document)
-        val params = DefinitionParams(TextDocumentIdentifier(uri), org.eclipse.lsp4j.Position(position.line, position.character))
-        return LspMapping.definitionLocations(request { server.textDocumentService.definition(params) }).mapNotNull { (target, range) ->
-            when (val parsed = LspMapping.definitionTarget(target)) {
-                is DefinitionTarget.Local -> Definition.InSource(SourceLocation(parsed.file, range))
-                is DefinitionTarget.Jar -> Definition.InLibrary(parsed.jar.fileName.toString(), parsed.entry, range, librarySource(target, parsed))
-                is DefinitionTarget.Jdk -> Definition.InLibrary("JDK ${parsed.module}", parsed.entry, range, source = null)
-                null -> null
+    /** The documents one tool call holds open: its first analysis of a file counts it as one more holder. */
+    private inner class Session : AnalysisSession {
+        /** Guarded by [syncLock], like [openDocuments]. */
+        private val held = mutableSetOf<String>()
+        private var ended = false
+
+        override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> {
+            val uri = LspMapping.uri(file)
+            sync(uri, document)
+            val result = request { server.textDocumentService.documentSymbol(DocumentSymbolParams(TextDocumentIdentifier(uri))) }
+            return LspMapping.documentSymbols(result)
+        }
+
+        /**
+         * Pulls `textDocument/diagnostic` for [document]. Other sessions may sync the same file meanwhile (read tools
+         * don't take the write lock), so if its text changed while the request ran, the answer may describe other
+         * text: pull again.
+         */
+        override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> {
+            val uri = LspMapping.uri(file)
+            sync(uri, document)
+            repeat(MAX_DIAGNOSTIC_PULLS) {
+                val version = syncLock.withLock { openDocuments[uri]?.version }
+                val report = request { server.textDocumentService.diagnostic(DocumentDiagnosticParams(TextDocumentIdentifier(uri))) }
+                val unchanged = syncLock.withLock {
+                    val open = openDocuments[uri]
+                    open != null && open.version == version && open.text == document.text
+                }
+                if (unchanged) return LspMapping.diagnostics(report)
+                syncAgain(uri, document)
             }
+            throw IllegalStateException("${file.fileName} kept changing while its diagnostics were pulled")
+        }
+
+        /**
+         * Sends `didSave` and retains the document: kotlin-lsp 271.2085.0 doesn't reread a file on `didSave`/`didClose`,
+         * so closing it would leave `workspace/symbol` on the old text until its file watcher catches up (ADR 0003).
+         * Open, the written text is what the index answers from. It stays open while sessions read that same text from
+         * disk; the first session that reads other text (an outside change) syncs it, and closes it when it ends,
+         * handing the file back to the watcher. Another session may have synced the file meanwhile (read tools don't
+         * take the write lock), so [document] is put back first.
+         */
+        override suspend fun writtenBack(file: Path, document: TextDocument) {
+            val uri = LspMapping.uri(file)
+            syncAgain(uri, document)
+            syncLock.withLock {
+                val open = openDocuments[uri] ?: return@withLock
+                server.textDocumentService.didSave(DidSaveTextDocumentParams(TextDocumentIdentifier(uri)))
+                openDocuments[uri] = open.copy(retained = true)
+            }
+        }
+
+        override suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation> {
+            val uri = LspMapping.uri(file)
+            sync(uri, document)
+            val params = ReferenceParams(
+                TextDocumentIdentifier(uri),
+                org.eclipse.lsp4j.Position(position.line, position.character),
+                ReferenceContext(false),
+            )
+            return LspMapping.locations(request { server.textDocumentService.references(params) })
+        }
+
+        /**
+         * kotlin-lsp 271.2085.0 points into a library's sources jar when Gradle has one (`jar:` URIs), and at class files
+         * otherwise, including the JDK's (`jrt:` URIs). A sources-jar entry is read here, with its Symbols: kotlin-lsp
+         * answers `documentSymbol` for a jar URI without it being opened. Other URIs are dropped.
+         */
+        override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> {
+            val uri = LspMapping.uri(file)
+            sync(uri, document)
+            val params = DefinitionParams(TextDocumentIdentifier(uri), org.eclipse.lsp4j.Position(position.line, position.character))
+            return LspMapping.definitionLocations(request { server.textDocumentService.definition(params) }).mapNotNull { (target, range) ->
+                when (val parsed = LspMapping.definitionTarget(target)) {
+                    is DefinitionTarget.Local -> Definition.InSource(SourceLocation(parsed.file, range))
+                    is DefinitionTarget.Jar -> Definition.InLibrary(parsed.jar.fileName.toString(), parsed.entry, range, librarySource(target, parsed))
+                    is DefinitionTarget.Jdk -> Definition.InLibrary("JDK ${parsed.module}", parsed.entry, range, source = null)
+                    null -> null
+                }
+            }
+        }
+
+        /**
+         * Gives up this session's hold on each document; one no session holds, and not retained, is closed. The table is
+         * settled first and every close is attempted, so a failing `didClose` (the server is gone) leaves no bookkeeping
+         * behind; the first failure is rethrown after the rest were tried.
+         */
+        suspend fun end() = syncLock.withLock {
+            ended = true
+            val closing = held.filter { uri ->
+                val open = openDocuments[uri] ?: return@filter false
+                if (open.holders > 1 || open.retained) {
+                    openDocuments[uri] = open.copy(holders = maxOf(open.holders - 1, 0))
+                    false
+                } else {
+                    openDocuments.remove(uri)
+                    true
+                }
+            }
+            held.clear()
+            val failures = closing.mapNotNull { uri ->
+                runCatching { server.textDocumentService.didClose(DidCloseTextDocumentParams(TextDocumentIdentifier(uri))) }.exceptionOrNull()
+            }
+            failures.firstOrNull()?.let { throw it }
+        }
+
+        /** Counts this session as a holder only once the notification went out, so a failed one leaves no hold to give up. */
+        private suspend fun sync(uri: String, document: TextDocument) = syncLock.withLock {
+            check(!ended) { "analysis session used after it ended" }
+            val open = openDocuments[uri]
+            val holders = (open?.holders ?: 0) + if (uri in held) 0 else 1
+            when {
+                open == null -> {
+                    server.textDocumentService.didOpen(DidOpenTextDocumentParams(TextDocumentItem(uri, "kotlin", 1, document.text)))
+                    openDocuments[uri] = OpenDocument(1, document.text, holders)
+                }
+                open.text != document.text -> {
+                    val version = open.version + 1
+                    server.textDocumentService.didChange(
+                        DidChangeTextDocumentParams(
+                            VersionedTextDocumentIdentifier(uri, version),
+                            listOf(TextDocumentContentChangeEvent(document.text)),
+                        ),
+                    )
+                    openDocuments[uri] = OpenDocument(version, document.text, holders)
+                }
+                else -> openDocuments[uri] = open.copy(holders = holders)
+            }
+            held += uri
+        }
+
+        /** Puts [document]'s text back without counting another holder: this session already holds the document. */
+        private suspend fun syncAgain(uri: String, document: TextDocument) = syncLock.withLock {
+            check(!ended) { "analysis session used after it ended" }
+            val open = openDocuments[uri] ?: return@withLock
+            if (open.text == document.text) return@withLock
+            val version = open.version + 1
+            server.textDocumentService.didChange(
+                DidChangeTextDocumentParams(
+                    VersionedTextDocumentIdentifier(uri, version),
+                    listOf(TextDocumentContentChangeEvent(document.text)),
+                ),
+            )
+            openDocuments[uri] = open.copy(version = version, text = document.text)
         }
     }
 
@@ -192,43 +266,6 @@ public class LspCodeIntelligence private constructor(
         } ?: return null
         val symbols = request { server.textDocumentService.documentSymbol(DocumentSymbolParams(TextDocumentIdentifier(uri))) }
         return LibrarySource(TextDocument(text), LspMapping.documentSymbols(symbols))
-    }
-
-    override suspend fun awaitReady(timeout: Duration): Readiness = readiness.awaitReady(timeout)
-
-    private suspend fun sync(uri: String, document: TextDocument) = syncLock.withLock {
-        val open = openDocuments[uri]
-        when {
-            open == null -> {
-                server.textDocumentService.didOpen(DidOpenTextDocumentParams(TextDocumentItem(uri, "kotlin", 1, document.text)))
-                openDocuments[uri] = OpenDocument(1, document.text, users = 1)
-            }
-            open.text != document.text -> {
-                val version = open.version + 1
-                server.textDocumentService.didChange(
-                    DidChangeTextDocumentParams(
-                        VersionedTextDocumentIdentifier(uri, version),
-                        listOf(TextDocumentContentChangeEvent(document.text)),
-                    ),
-                )
-                openDocuments[uri] = OpenDocument(version, document.text, open.users + 1)
-            }
-            else -> openDocuments[uri] = open.copy(users = open.users + 1)
-        }
-    }
-
-    /** Puts [document]'s text back without counting another user: the caller already holds the document open. */
-    private suspend fun syncAgain(uri: String, document: TextDocument) = syncLock.withLock {
-        val open = openDocuments[uri] ?: return@withLock
-        if (open.text == document.text) return@withLock
-        val version = open.version + 1
-        server.textDocumentService.didChange(
-            DidChangeTextDocumentParams(
-                VersionedTextDocumentIdentifier(uri, version),
-                listOf(TextDocumentContentChangeEvent(document.text)),
-            ),
-        )
-        openDocuments[uri] = open.copy(version = version, text = document.text)
     }
 
     private suspend fun <T> request(call: () -> CompletableFuture<T>): T = awaitAlive(process, requestTimeout, call())
@@ -296,6 +333,10 @@ public class LspCodeIntelligence private constructor(
             server.initialized(InitializedParams())
             return LspCodeIntelligence(process, server, requestTimeout, readiness, serverVersion)
         }
+
+        /** An adapter over an already initialized [server] running as [process]; for tests with a stubbed server. */
+        internal fun connected(process: Process, server: LanguageServer, requestTimeout: Duration): LspCodeIntelligence =
+            LspCodeIntelligence(process, server, requestTimeout, ReadinessTracker(), serverVersion = null)
 
         /**
          * Awaits [future], but fails fast if the language server process dies (otherwise lsp4j would leave the

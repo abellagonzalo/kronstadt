@@ -12,12 +12,15 @@ import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextDocument
+import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.core.port.ContentHash
 import kronstadt.core.port.FileStore
 import kronstadt.core.port.HashedDocument
 import kronstadt.core.port.WriteResult
 import java.nio.file.Path
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlin.time.Duration
 
 /** Files in memory, keyed by project-relative path. A hash is the text itself, so any change changes it. */
@@ -64,8 +67,10 @@ class FakeFileStore(private val root: Path, files: Map<String, String>) : FileSt
  * [beforeDiagnostics]. References are [references], and definitions [definitions], for the file and the exact position
  * asked about, else none.
  *
- * Documents are modelled like the language server sees them: the first analysis opens a document at version 1, an
- * analysis of different text changes it to the next version, and each analysis must be paired with a close.
+ * Documents are modelled like the language server sees them: a session's first analysis of a file opens it at
+ * version 1 (unless another session holds it), an analysis of different text changes it to the next version, and a
+ * file is closed once no session holds it. Keeping written files open after Write-back is the lsp adapter's business,
+ * not modelled here. Using a session after it ended fails.
  */
 class FakeCodeIntelligence(
     private val documentSymbols: List<CodeSymbol> = emptyList(),
@@ -86,12 +91,38 @@ class FakeCodeIntelligence(
     /** What the language server was told, in order: `open <file> v1`, `change <file> v2`, `save <file>`, `close <file>`. */
     val events = mutableListOf<String>()
 
-    private data class Open(val version: Int, val text: String, val users: Int)
+    /** Every session opened so far, in order. */
+    val sessions = mutableListOf<SessionLog>()
+
+    /**
+     * One session: the files it [held] (analysed at least once), the ones it [closed] as their last holder, and
+     * whether it has [ended]. With one session at a time, a session that ended closed everything it held.
+     */
+    class SessionLog {
+        val held = mutableSetOf<Path>()
+        val closed = mutableSetOf<Path>()
+        var ended = false
+    }
+
+    private data class Open(val version: Int, val text: String, val holders: Int)
 
     private val open = mutableMapOf<Path, Open>()
 
-    /** Documents analysed and not closed since. */
+    /** Documents some session analysed and that aren't closed yet. */
     val openDocuments: Set<Path> get() = open.keys
+
+    /**
+     * What ADR 0003 asks of one tool call: it opened at most one session, the session ended, and it closed every
+     * document it opened, so nothing is left open. [message] names the case in a failure.
+     */
+    fun assertOneSessionClosedEverything(message: String? = null) {
+        assertTrue(sessions.size <= 1, "${message.orEmpty()} opened ${sessions.size} sessions")
+        sessions.forEach { session ->
+            assertTrue(session.ended, "${message.orEmpty()} session never ended")
+            assertEquals(session.held, session.closed, message)
+        }
+        assertEquals(emptySet(), openDocuments, message)
+    }
 
     private val phase = MutableStateFlow(notReadyPhase)
 
@@ -104,30 +135,12 @@ class FakeCodeIntelligence(
         return phase.value?.let { Readiness.NotReady(it, elapsed = timeout) } ?: Readiness.Ready
     }
 
-    override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> {
-        analysed += file to document
-        sync(file, document)
-        return symbolsByText[document.text] ?: symbolsByFile[file] ?: documentSymbols
-    }
-
-    override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> {
-        sync(file, document)
-        beforeDiagnostics()
-        delay(diagnosticsDelay)
-        return diagnosticsByText[document.text].orEmpty()
-    }
-
-    override suspend fun saveDocument(file: Path, document: TextDocument) {
-        if (file in open) events += "save ${file.fileName}"
-    }
-
-    override suspend fun closeDocument(file: Path) {
-        val current = open[file] ?: return
-        if (current.users > 1) {
-            open[file] = current.copy(users = current.users - 1)
-        } else {
-            open.remove(file)
-            events += "close ${file.fileName}"
+    override suspend fun <T> session(block: suspend (AnalysisSession) -> T): T {
+        val session = Session(SessionLog().also { sessions += it })
+        try {
+            return block(session)
+        } finally {
+            session.end()
         }
     }
 
@@ -136,23 +149,59 @@ class FakeCodeIntelligence(
         return index?.filter { it.name.contains(query, ignoreCase = true) } ?: workspaceSymbols
     }
 
-    override suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation> {
-        sync(file, document)
-        return references[file to position].orEmpty()
-    }
+    private inner class Session(private val log: SessionLog) : AnalysisSession {
+        override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> {
+            analysed += file to document
+            sync(file, document)
+            return symbolsByText[document.text] ?: symbolsByFile[file] ?: documentSymbols
+        }
 
-    override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> {
-        sync(file, document)
-        return definitions[file to position].orEmpty()
-    }
+        override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> {
+            sync(file, document)
+            beforeDiagnostics()
+            delay(diagnosticsDelay)
+            return diagnosticsByText[document.text].orEmpty()
+        }
 
-    private fun sync(file: Path, document: TextDocument) {
-        val current = open[file]
-        open[file] = when {
-            current == null -> Open(1, document.text, 1).also { events += "open ${file.fileName} v1" }
-            current.text != document.text -> Open(current.version + 1, document.text, current.users + 1)
-                .also { events += "change ${file.fileName} v${it.version}" }
-            else -> current.copy(users = current.users + 1)
+        override suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation> {
+            sync(file, document)
+            return references[file to position].orEmpty()
+        }
+
+        override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> {
+            sync(file, document)
+            return definitions[file to position].orEmpty()
+        }
+
+        override suspend fun writtenBack(file: Path, document: TextDocument) {
+            check(!log.ended) { "session used after it ended" }
+            if (file in open) events += "save ${file.fileName}"
+        }
+
+        fun end() {
+            log.ended = true
+            log.held.forEach { file ->
+                val current = open.getValue(file)
+                if (current.holders > 1) {
+                    open[file] = current.copy(holders = current.holders - 1)
+                } else {
+                    open.remove(file)
+                    events += "close ${file.fileName}"
+                    log.closed.add(file)
+                }
+            }
+        }
+
+        private fun sync(file: Path, document: TextDocument) {
+            check(!log.ended) { "session used after it ended" }
+            val current = open[file]
+            val holders = (current?.holders ?: 0) + if (log.held.add(file)) 1 else 0
+            open[file] = when {
+                current == null -> Open(1, document.text, holders).also { events += "open ${file.fileName} v1" }
+                current.text != document.text -> Open(current.version + 1, document.text, holders)
+                    .also { events += "change ${file.fileName} v${it.version}" }
+                else -> current.copy(holders = holders)
+            }
         }
     }
 }

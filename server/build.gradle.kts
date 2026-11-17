@@ -10,6 +10,7 @@ dependencies {
     implementation(project(":workspace"))
     implementation(libs.mcp.server)
     implementation(libs.coroutines.core)
+    testImplementation(libs.coroutines.test)
 }
 
 application {

@@ -38,13 +38,15 @@ public class FindSymbol(
         // Files are analysed lazily, in rank order, only until one result more than the limit is known.
         val analysed = mutableMapOf<Path, AnalysedFile?>()
         val matches = mutableListOf<Pair<Path, FoundSymbol>>()
-        for (hit in hits) {
-            if (matches.size > limit) break
-            val file = analysed.getOrPut(hit.file) { AnalysedFile.of(files, intelligence, hit.file) } ?: continue
-            val node = nodeAt(file.tree, hit) ?: continue
-            val (first, last) = SymbolSpan.lines(file.document, node.symbol)
-            val found = FoundSymbol(node.symbol.kind, file.tree.canonicalPath(node).toString(), first + 1, last + 1)
-            if (matches.none { (f, s) -> f == hit.file && s == found }) matches += hit.file to found
+        intelligence.session { session ->
+            for (hit in hits) {
+                if (matches.size > limit) break
+                val file = analysed.getOrPut(hit.file) { AnalysedFile.of(files, session, hit.file) } ?: continue
+                val node = nodeAt(file.tree, hit) ?: continue
+                val (first, last) = SymbolSpan.lines(file.document, node.symbol)
+                val found = FoundSymbol(node.symbol.kind, file.tree.canonicalPath(node).toString(), first + 1, last + 1)
+                if (matches.none { (f, s) -> f == hit.file && s == found }) matches += hit.file to found
+            }
         }
         if (matches.isEmpty()) return FindSymbolResult.NoMatches(query, kind)
         val shown = matches.take(limit)
