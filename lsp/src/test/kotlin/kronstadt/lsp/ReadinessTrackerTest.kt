@@ -58,13 +58,42 @@ class ReadinessTrackerTest {
         }
         val start = testTimeSource.markNow()
         assertEquals(Readiness.Ready, tracker.awaitReady(90.seconds))
-        assertEquals(10.seconds, start.elapsedNow())
+        assertEquals(10.seconds + ReadinessTracker.SETTLE, start.elapsedNow())
     }
 
     @Test
     fun `answers immediately when ready, even with no time left to wait`() = runTest {
         val tracker = tracker()
         tracker.importState("FINISHED")
+        assertEquals(Readiness.Ready, tracker.awaitReady(0.seconds))
+    }
+
+    @Test
+    fun `is not ready in the gap between two progress runs, until the settle period has passed`() = runTest {
+        // kotlin-lsp, after a re-import: Indexing ends, and the next Indexing begins milliseconds later.
+        val tracker = tracker()
+        tracker.importState("FINISHED")
+        tracker.progressBegin("t1", "Indexing")
+        tracker.progressEnd("t1")
+        assertEquals(Readiness.NotReady("Indexing", 0.seconds), tracker.awaitReady(0.seconds))
+        launch {
+            delay(ReadinessTracker.SETTLE / 2)
+            tracker.progressBegin("t2", "Indexing")
+            delay(3.seconds)
+            tracker.progressEnd("t2")
+        }
+        val start = testTimeSource.markNow()
+        assertEquals(Readiness.Ready, tracker.awaitReady(90.seconds))
+        assertEquals(ReadinessTracker.SETTLE / 2 + 3.seconds + ReadinessTracker.SETTLE, start.elapsedNow())
+    }
+
+    @Test
+    fun `is ready once the settle period after the last progress has passed`() = runTest {
+        val tracker = tracker()
+        tracker.importState("FINISHED")
+        tracker.progressBegin("t1", "Indexing")
+        tracker.progressEnd("t1")
+        delay(ReadinessTracker.SETTLE)
         assertEquals(Readiness.Ready, tracker.awaitReady(0.seconds))
     }
 

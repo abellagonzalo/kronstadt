@@ -3,6 +3,7 @@ package kronstadt.lsp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -114,6 +115,9 @@ public class LspCodeIntelligence private constructor(
     }
 
     override suspend fun awaitReady(timeout: Duration): Readiness = readiness.awaitReady(timeout)
+
+    /** The readiness signals kotlin-lsp sends from here on; see [ReadinessTracker.signals]. */
+    internal val readinessSignals: SharedFlow<ReadinessSignal> get() = readiness.signals
 
     /** The documents one tool call holds open: its first analysis of a file counts it as one more holder. */
     private inner class Session : AnalysisSession {
