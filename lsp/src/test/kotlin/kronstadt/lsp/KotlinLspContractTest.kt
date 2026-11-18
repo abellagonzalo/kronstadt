@@ -9,6 +9,7 @@ import kronstadt.core.application.Edit
 import kronstadt.core.application.EditResult
 import kronstadt.core.application.EditedSymbol
 import kronstadt.core.application.FileMatches
+import kronstadt.core.application.FileRenamed
 import kronstadt.core.application.FindSymbol
 import kronstadt.core.application.FindSymbolResult
 import kronstadt.core.application.FindUsages
@@ -20,14 +21,22 @@ import kronstadt.core.application.InsertAfter
 import kronstadt.core.application.Problem
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.ReadSymbolResult
+import kronstadt.core.application.RenameResult
+import kronstadt.core.application.RenameSymbol
+import kronstadt.core.application.RenamedFile
 import kronstadt.core.application.Replace
 import kronstadt.core.application.SymbolCandidate
 import kronstadt.core.domain.CodeSymbol
+import kronstadt.core.domain.FileChange
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
+import kronstadt.core.domain.Rename
+import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.TextDocument
+import kronstadt.core.domain.TextEdit
+import kronstadt.core.domain.TextRange
 import kronstadt.workspace.LocalFileStore
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeAll
@@ -531,5 +540,91 @@ class KotlinLspContractTest {
             "package fixture.alpha\n\nimport kotlin.time.Duration\n\n/** Renamed. */\nclass Polygon(val sides: Int)\n\n$code\n",
             Files.readString(project.resolve(path)),
         )
+    }
+
+    // kt_rename_symbol: the shape of kotlin-lsp's rename answer, and the use case end to end.
+
+    @Test
+    @Order(21)
+    fun `rename edits files never opened, and a class named like its file also renames the file, last`() = runBlocking {
+        val shape = project.resolve("src/main/kotlin/fixture/beta/Shape.kt")
+        val check = project.resolve("src/test/kotlin/fixture/ShapesCheck.kt")
+        val document = TextDocument(Files.readString(shape))
+        val name = Position(2, 6)
+
+        lsp.session { session ->
+            assertEquals(RenamePreparation.Renameable(TextRange(name, Position(2, 11)), "Shape"), session.prepareRename(shape, document, name))
+            assertEquals(
+                Rename.Changes(
+                    listOf(
+                        FileChange.Edited(
+                            check,
+                            listOf(
+                                TextEdit(TextRange(Position(2, 20), Position(2, 25)), "Polygon"),
+                                TextEdit(TextRange(Position(6, 19), Position(6, 24)), "Polygon"),
+                            ),
+                        ),
+                        FileChange.Edited(shape, listOf(TextEdit(TextRange(name, Position(2, 11)), "Polygon"))),
+                        FileChange.Moved(shape, shape.resolveSibling("Polygon.kt")),
+                    ),
+                ),
+                session.rename(shape, document, name, "Polygon"),
+            )
+        }
+        // Nothing is applied.
+        assertEquals(document.text, Files.readString(shape))
+    }
+
+    @Test
+    @Order(22)
+    fun `prepare-rename refuses a keyword, and rename refuses a library declaration prepare-rename let through`() = runBlocking {
+        val file = project.resolve("src/main/kotlin/fixture/Shapes.kt")
+        val document = TextDocument(Files.readString(file))
+        val keyword = Position(5, 0)
+        val string = document.positionOf(document.text.indexOf("String): Int = text.toInt() *"))
+
+        lsp.session { session ->
+            assertEquals(RenamePreparation.Refused("This element cannot be renamed"), session.prepareRename(file, document, keyword))
+            assertIs<RenamePreparation.Renameable>(session.prepareRename(file, document, string))
+            assertEquals(Rename.Refused("This element cannot be renamed"), session.rename(file, document, string, "Text"))
+        }
+    }
+
+    @Test
+    @Order(23)
+    fun `kt_rename_symbol renames across main and test sources, and moves a class's file`() = runBlocking<Unit> {
+        val shapes = "src/main/kotlin/fixture/Shapes.kt"
+        val check = "src/test/kotlin/fixture/ShapesCheck.kt"
+
+        val parse = RenameSymbol(files, lsp)("Calculator/parse(String)", "parseText")
+
+        assertEquals(
+            RenameResult.Renamed(
+                "parseText",
+                // The fixture's test source has two errors of its own: beta's Shape has no 'sides'.
+                listOf(RenamedFile(shapes, usages = 0), RenamedFile(check, usages = 1, preexistingErrors = 2)),
+            ),
+            parse,
+        )
+        assertTrue(Files.readString(project.resolve(shapes)).contains("fun parseText(text: String): Int"))
+        assertTrue(Files.readString(project.resolve(check)).contains("Calculator(\"c\").parseText(\"2\")"))
+
+        val shape = RenameSymbol(files, lsp)("fixture.beta/Shape", "Polygon")
+
+        val moved = "src/main/kotlin/fixture/beta/Polygon.kt"
+        assertEquals(
+            RenameResult.Renamed(
+                "Polygon",
+                listOf(
+                    RenamedFile("src/main/kotlin/fixture/beta/Shape.kt", usages = 0),
+                    RenamedFile(check, usages = 1, imports = 1, preexistingErrors = 2),
+                ),
+                fileRenamed = FileRenamed("src/main/kotlin/fixture/beta/Shape.kt", moved),
+            ),
+            shape,
+        )
+        assertTrue(Files.notExists(project.resolve("src/main/kotlin/fixture/beta/Shape.kt")))
+        assertEquals("package fixture.beta\n\nclass Polygon(val radius: Double)\n", Files.readString(project.resolve(moved)))
+        assertTrue(Files.readString(project.resolve(check)).contains("import fixture.beta.Polygon"))
     }
 }

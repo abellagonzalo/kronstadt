@@ -4,11 +4,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.FileLayout
+import kronstadt.core.domain.Position
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SymbolPath
 import kronstadt.core.domain.SymbolSpan
 import kronstadt.core.domain.SymbolTree
 import kronstadt.core.domain.TextDocument
+import kronstadt.core.domain.TextEdit
 import kronstadt.core.domain.Validation
 import kronstadt.core.domain.packageName
 import kronstadt.core.port.AnalysisSession
@@ -42,6 +44,9 @@ internal class ShadowWorkspace(
         var current: TextDocument = base.document
         val edited = mutableListOf<IntRange>()
         var isEdited = false
+
+        /** Where Write-back moves the file to, if it is renamed. */
+        var movedTo: Path? = null
     }
 
     /** In the order the Edit first touched them. */
@@ -148,6 +153,31 @@ internal class ShadowWorkspace(
         target.edited += (kept + listOf(merged)).filterNot { it.isEmpty() }.sortedBy { it.first }
     }
 
+    /**
+     * Applies [edits] to [file]'s current text at once, each against the text before any of them and none overlapping;
+     * the lines they touch count as edited. [file] must have been touched (see [current]).
+     */
+    fun applyEdits(file: Path, edits: List<TextEdit>) {
+        for (edit in edits.sortedByDescending { it.range.start }) {
+            val document = checkNotNull(touched[file]) { "$file was never touched in this Shadow Workspace" }.current
+            val lines = edit.range.start.line..edit.range.end.line
+            val linesStart = document.offsetOf(Position(lines.first, 0))
+            val linesEnd = document.offsetOf(Position(lines.last, Int.MAX_VALUE))
+            val text = document.text
+            val spliced = text.substring(linesStart, document.offsetOf(edit.range.start)) + edit.newText +
+                text.substring(document.offsetOf(edit.range.end), linesEnd)
+            replaceLines(file, lines, spliced.lines())
+        }
+    }
+
+    /** Write-back moves [file] to [target], loading it from disk on first touch. False if there's no such file. */
+    suspend fun move(file: Path, target: Path): Boolean {
+        val moved = touch(file) ?: return false
+        moved.movedTo = target
+        moved.isEdited = true
+        return true
+    }
+
     sealed interface Validated {
         /** No errors were introduced; what each touched file looks like now, in the order the Edit touched them. */
         data class Passed(val files: List<EditedFile>) : Validated
@@ -157,16 +187,22 @@ internal class ShadowWorkspace(
 
     /**
      * Errors the Edit introduced, across every touched file: each file's base diagnostics against its current text's,
-     * preferring those on its edited lines. All diagnostics share one [validationTimeout].
+     * preferring those on its edited lines. A file's diagnostics depend on the other files' text, so every base is pulled
+     * while all files are at their base, and every current one only once all files are at their current text. [inBase]
+     * rewrites a base diagnostic's message as it would read after the Edit (e.g. with a renamed Symbol's new name), so a
+     * message that merely quotes the change isn't taken for a new error. All diagnostics share one [validationTimeout].
      */
-    suspend fun validate(): Validated {
-        val edited = touched.filterValues { it.isEdited }
-        val diagnostics = withTimeoutOrNull(validationTimeout) {
-            edited.map { (file, it) -> session.diagnostics(file, it.base.document) to session.diagnostics(file, it.current) }
+    suspend fun validate(inBase: (String) -> String = { it }): Validated {
+        val edited = touched.filterValues { it.isEdited }.entries.toList()
+        val pulled = withTimeoutOrNull(validationTimeout) {
+            val before = edited.map { (file, it) -> session.diagnostics(file, it.base.document).map { d -> d.copy(message = inBase(d.message)) } }
+            // Analysing every current text first is what changes every file to it.
+            val trees = edited.map { (file, it) -> SymbolTree(session.documentSymbols(file, it.current)) }
+            val after = edited.map { (file, it) -> session.diagnostics(file, it.current) }
+            Triple(before, trees, after)
         } ?: return Validated.TimedOut
-        val checked = edited.entries.zip(diagnostics) { (file, touched), (before, after) ->
-            Checked(file, touched, SymbolTree(session.documentSymbols(file, touched.current)), before, after)
-        }
+        val (before, trees, after) = pulled
+        val checked = edited.mapIndexed { i, (file, touched) -> Checked(file, touched, trees[i], before[i], after[i]) }
         val newErrors = checked.flatMap { file -> file.newErrors.map(file::problem) }
         if (newErrors.isNotEmpty()) return Validated.Rejected(newErrors)
         return Validated.Passed(checked.map { it.report() })
@@ -223,27 +259,44 @@ internal class ShadowWorkspace(
         /** [file] changed on disk since it was read; nothing was written. */
         data class ChangedOnDisk(val file: String) : WriteBack
 
+        /** [file] would be moved onto [target], which exists; nothing was written. */
+        data class TargetExists(val file: String, val target: String) : WriteBack
+
         /** [written] are on disk, then writing [failed] failed with [reason]; the rest weren't written (no rollback). */
         data class Partial(val written: List<String>, val failed: String, val reason: String) : WriteBack
     }
 
     /**
-     * Write-back of every edited file, all-or-nothing as far as it can be: every hash is checked before anything is
-     * written, then each file is written, then the code intelligence is told each written file is saved. A write that
-     * fails after others succeeded leaves those on disk (ADR 0003, Consequences); one that fails first throws.
+     * Write-back of every edited file, all-or-nothing as far as it can be: every hash, and that no file is moved onto an
+     * existing one, is checked before anything is written; then each file is written (a moved one at its new path, its
+     * old one deleted), then the code intelligence is told each file written in place is saved. A write that fails after
+     * others succeeded leaves those on disk (ADR 0003, Consequences); one that fails first throws.
      */
     suspend fun writeBack(): WriteBack {
         val edited = touched.filterValues { it.isEdited }
         for ((file, it) in edited) {
             if (files.readHashed(file)?.hash != it.base.hash) return WriteBack.ChangedOnDisk(files.display(file))
+            val target = it.movedTo ?: continue
+            if (files.read(target) != null) return WriteBack.TargetExists(files.display(file), files.display(target))
         }
         val written = mutableListOf<Path>()
         try {
             for ((file, it) in edited) {
+                val target = it.movedTo
                 val reason = try {
-                    when (files.writeIfUnchanged(file, it.base.hash, it.current)) {
+                    val result = if (target == null) {
+                        files.writeIfUnchanged(file, it.base.hash, it.current)
+                    } else {
+                        files.moveIfUnchanged(file, it.base.hash, target, it.current)
+                    }
+                    when (result) {
                         WriteResult.Written -> null
                         WriteResult.ChangedOnDisk -> if (written.isEmpty()) return WriteBack.ChangedOnDisk(files.display(file)) else CHANGED_ON_DISK
+                        WriteResult.TargetExists -> if (written.isEmpty()) {
+                            return WriteBack.TargetExists(files.display(file), files.display(checkNotNull(target)))
+                        } else {
+                            TARGET_EXISTS
+                        }
                     }
                 } catch (e: CancellationException) {
                     throw e
@@ -257,12 +310,14 @@ internal class ShadowWorkspace(
             }
             return WriteBack.Written
         } finally {
-            written.forEach { session.writtenBack(it, touched.getValue(it).current) }
+            // A moved file is gone from where the code intelligence has it open; closing it hands it to the file watcher.
+            written.filter { touched.getValue(it).movedTo == null }.forEach { session.writtenBack(it, touched.getValue(it).current) }
         }
     }
 
     private companion object {
         const val MAX_WARNINGS = 5
         const val CHANGED_ON_DISK = "changed on disk since read"
+        const val TARGET_EXISTS = "its new path already exists"
     }
 }

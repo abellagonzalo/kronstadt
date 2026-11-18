@@ -14,6 +14,8 @@ import kronstadt.core.domain.LibrarySource
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
+import kronstadt.core.domain.Rename
+import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextDocument
@@ -34,11 +36,15 @@ import org.eclipse.lsp4j.InitializeParams
 import org.eclipse.lsp4j.InitializedParams
 import org.eclipse.lsp4j.MessageActionItem
 import org.eclipse.lsp4j.MessageParams
+import org.eclipse.lsp4j.PrepareRenameParams
 import org.eclipse.lsp4j.ProgressParams
 import org.eclipse.lsp4j.ReferenceContext
 import org.eclipse.lsp4j.ReferenceParams
 import org.eclipse.lsp4j.PublishDiagnosticsParams
 import org.eclipse.lsp4j.RegistrationParams
+import org.eclipse.lsp4j.RenameCapabilities
+import org.eclipse.lsp4j.RenameParams
+import org.eclipse.lsp4j.ResourceOperationKind
 import org.eclipse.lsp4j.ShowMessageRequestParams
 import org.eclipse.lsp4j.TextDocumentClientCapabilities
 import org.eclipse.lsp4j.TextDocumentContentChangeEvent
@@ -51,8 +57,10 @@ import org.eclipse.lsp4j.WorkDoneProgressBegin
 import org.eclipse.lsp4j.WorkDoneProgressCreateParams
 import org.eclipse.lsp4j.WorkDoneProgressEnd
 import org.eclipse.lsp4j.WorkspaceClientCapabilities
+import org.eclipse.lsp4j.WorkspaceEditCapabilities
 import org.eclipse.lsp4j.WorkspaceFolder
 import org.eclipse.lsp4j.WorkspaceSymbolParams
+import org.eclipse.lsp4j.jsonrpc.ResponseErrorException
 import org.eclipse.lsp4j.jsonrpc.services.JsonNotification
 import org.eclipse.lsp4j.launch.LSPLauncher
 import org.eclipse.lsp4j.services.LanguageClient
@@ -186,6 +194,33 @@ public class LspCodeIntelligence private constructor(
                     is DefinitionTarget.Jdk -> Definition.InLibrary("JDK ${parsed.module}", parsed.entry, range, source = null)
                     null -> null
                 }
+            }
+        }
+
+        /** kotlin-lsp 271.2085.0 refuses with an error response, e.g. "This element cannot be renamed", rather than null. */
+        override suspend fun prepareRename(file: Path, document: TextDocument, position: Position): RenamePreparation {
+            val uri = LspMapping.uri(file)
+            sync(uri, document)
+            val params = PrepareRenameParams(TextDocumentIdentifier(uri), org.eclipse.lsp4j.Position(position.line, position.character))
+            return try {
+                LspMapping.prepareRename(request { server.textDocumentService.prepareRename(params) }, position)
+            } catch (e: ResponseErrorException) {
+                RenamePreparation.Refused(e.responseError.message)
+            }
+        }
+
+        /**
+         * kotlin-lsp 271.2085.0 answers with `documentChanges`: one minimal text edit per reference, in files it never opened
+         * too, and a file rename after the edits when a class is named like its file; it refuses with an error response.
+         */
+        override suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String): Rename {
+            val uri = LspMapping.uri(file)
+            sync(uri, document)
+            val params = RenameParams(TextDocumentIdentifier(uri), org.eclipse.lsp4j.Position(position.line, position.character), newName)
+            return try {
+                LspMapping.rename(request { server.textDocumentService.rename(params) })
+            } catch (e: ResponseErrorException) {
+                Rename.Refused(e.responseError.message)
             }
         }
 
@@ -361,12 +396,20 @@ public class LspCodeIntelligence private constructor(
             capabilities = ClientCapabilities().apply {
                 // Makes kotlin-lsp report its import and indexing as `$/progress`, which readiness depends on.
                 window = WindowClientCapabilities().apply { workDoneProgress = true }
-                workspace = WorkspaceClientCapabilities().apply { workspaceFolders = true }
+                workspace = WorkspaceClientCapabilities().apply {
+                    workspaceFolders = true
+                    // Rename answers in document changes, with a file rename when a class is named like its file.
+                    workspaceEdit = WorkspaceEditCapabilities().apply {
+                        documentChanges = true
+                        resourceOperations = listOf(ResourceOperationKind.Rename)
+                    }
+                }
                 textDocument = TextDocumentClientCapabilities().apply {
                     // Without this, servers return a flat list and we lose class -> member nesting.
                     documentSymbol = DocumentSymbolCapabilities().apply { hierarchicalDocumentSymbolSupport = true }
                     // Validation pulls diagnostics for exactly the text it sent, instead of waiting for a push.
                     diagnostic = DiagnosticCapabilities()
+                    rename = RenameCapabilities().apply { prepareSupport = true }
                 }
             }
         }

@@ -112,4 +112,35 @@ class LocalFileStoreTest {
             store.kotlinFiles().map(store::display),
         )
     }
+
+    @Test
+    fun `a move writes the new file whole with the old one's permissions, and deletes the old one`() = runBlocking {
+        val file = project.resolve("Shape.kt").apply { writeText("class Shape\n") }
+        val permissions = PosixFilePermissions.fromString("rwxr-x---")
+        Files.setPosixFilePermissions(file, permissions)
+        val read = assertNotNull(store.readHashed(file))
+        val target = project.resolve("Polygon.kt")
+
+        assertEquals(WriteResult.Written, store.moveIfUnchanged(file, read.hash, target, TextDocument("class Polygon\n")))
+
+        assertEquals("class Polygon\n", target.readText())
+        assertEquals(permissions, Files.getPosixFilePermissions(target))
+        assertEquals(listOf("Polygon.kt"), project.listDirectoryEntries().map { it.name }, "the old file and no temp file are left")
+    }
+
+    @Test
+    fun `a move never overwrites an existing file, nor moves a file that changed since the read`() = runBlocking {
+        val file = project.resolve("Shape.kt").apply { writeText("class Shape\n") }
+        val target = project.resolve("Polygon.kt").apply { writeText("class Theirs\n") }
+        val read = assertNotNull(store.readHashed(file))
+
+        assertEquals(WriteResult.TargetExists, store.moveIfUnchanged(file, read.hash, target, TextDocument("class Polygon\n")))
+        assertEquals("class Theirs\n", target.readText())
+        assertEquals("class Shape\n", file.readText())
+
+        target.deleteExisting()
+        file.writeText("class Changed\n")
+        assertEquals(WriteResult.ChangedOnDisk, store.moveIfUnchanged(file, read.hash, target, TextDocument("class Polygon\n")))
+        assertEquals(listOf("Shape.kt"), project.listDirectoryEntries().map { it.name })
+    }
 }

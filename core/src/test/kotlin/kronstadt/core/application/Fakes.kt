@@ -9,9 +9,12 @@ import kronstadt.core.domain.Definition
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
+import kronstadt.core.domain.Rename
+import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextDocument
+import kronstadt.core.domain.TextRange
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.core.port.ContentHash
@@ -59,6 +62,16 @@ class FakeFileStore(
         return WriteResult.Written
     }
 
+    override suspend fun moveIfUnchanged(file: Path, basedOn: ContentHash, target: Path, document: TextDocument): WriteResult {
+        if (files[key(file)] != basedOn.value) return WriteResult.ChangedOnDisk
+        if (key(target) in files) return WriteResult.TargetExists
+        if (key(target) in failingWrites) throw IOException("No space left on device")
+        files.remove(key(file))
+        files[key(target)] = document.text
+        written += key(target) to document.text
+        return WriteResult.Written
+    }
+
     override fun display(file: Path): String = key(file)
 
     override suspend fun kotlinFiles(): List<Path> =
@@ -78,7 +91,8 @@ class FakeFileStore(
  *
  * Documents are modelled like the language server sees them: a session's first analysis of a file opens it at
  * version 1 (unless another session holds it), an analysis of different text changes it to the next version, and a
- * file is closed once no session holds it. Keeping written files open after Write-back is the lsp adapter's business,
+ * file is closed once no session holds it. A rename at a file and position is [renames] for it, given the new name; one
+ * at a position in [renameRefusals], or anywhere else, is refused (by prepare-rename and by rename alike). Keeping written files open after Write-back is the lsp adapter's business,
  * not modelled here. Using a session after it ended fails.
  */
 class FakeCodeIntelligence(
@@ -93,6 +107,8 @@ class FakeCodeIntelligence(
     private val beforeDiagnostics: suspend () -> Unit = {},
     private val references: Map<Pair<Path, Position>, List<SourceLocation>> = emptyMap(),
     private val definitions: Map<Pair<Path, Position>, List<Definition>> = emptyMap(),
+    private val renames: Map<Pair<Path, Position>, (newName: String) -> Rename> = emptyMap(),
+    private val renameRefusals: Map<Pair<Path, Position>, String> = emptyMap(),
 ) : CodeIntelligence {
     val analysed = mutableListOf<Pair<Path, TextDocument>>()
     val searched = mutableListOf<String>()
@@ -182,6 +198,18 @@ class FakeCodeIntelligence(
             return definitions[file to position].orEmpty()
         }
 
+        override suspend fun prepareRename(file: Path, document: TextDocument, position: Position): RenamePreparation {
+            sync(file, document)
+            renameRefusals[file to position]?.let { return RenamePreparation.Refused(it) }
+            if (file to position !in renames) return RenamePreparation.Refused(CANNOT_RENAME)
+            return RenamePreparation.Renameable(TextRange(position, position), placeholder = "")
+        }
+
+        override suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String): Rename {
+            sync(file, document)
+            return renames[file to position]?.invoke(newName) ?: Rename.Refused(CANNOT_RENAME)
+        }
+
         override suspend fun writtenBack(file: Path, document: TextDocument) {
             check(!log.ended) { "session used after it ended" }
             if (file in open) events += "save ${file.fileName}"
@@ -212,5 +240,9 @@ class FakeCodeIntelligence(
                 else -> current.copy(holders = holders)
             }
         }
+    }
+
+    private companion object {
+        const val CANNOT_RENAME = "This element cannot be renamed"
     }
 }

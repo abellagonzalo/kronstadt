@@ -132,6 +132,7 @@ public class Edit(
                     is ShadowWorkspace.Validated.Passed -> when (val writeBack = shadow.writeBack()) {
                         ShadowWorkspace.WriteBack.Written -> EditResult.Written(validated.files)
                         is ShadowWorkspace.WriteBack.ChangedOnDisk -> EditResult.ChangedOnDisk(writeBack.file)
+                        is ShadowWorkspace.WriteBack.TargetExists -> error("an Edit moves no file, yet Write-back found ${writeBack.file} moved")
                         is ShadowWorkspace.WriteBack.Partial ->
                             EditResult.PartiallyWritten(writeBack.written, writeBack.failed, writeBack.reason)
                     }

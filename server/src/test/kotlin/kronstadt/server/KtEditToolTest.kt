@@ -17,11 +17,14 @@ import kronstadt.core.application.FindUsages
 import kronstadt.core.application.GetDefinition
 import kronstadt.core.application.ReadStructure
 import kronstadt.core.application.ReadSymbol
+import kronstadt.core.application.RenameSymbol
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Definition
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
+import kronstadt.core.domain.Rename
+import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextDocument
@@ -56,6 +59,7 @@ class KtEditToolTest {
             FindUsages(files, intelligence),
             GetDefinition(files, intelligence),
             Edit(files, intelligence),
+            RenameSymbol(files, intelligence),
         ).registerOn(server)
     }
 
@@ -111,6 +115,8 @@ private class EmptyIntelligence : CodeIntelligence {
         override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> = emptyList()
         override suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation> = emptyList()
         override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> = emptyList()
+        override suspend fun prepareRename(file: Path, document: TextDocument, position: Position) = RenamePreparation.Refused("unsupported")
+        override suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String) = Rename.Refused("unsupported")
         override suspend fun writtenBack(file: Path, document: TextDocument) = Unit
     })
 

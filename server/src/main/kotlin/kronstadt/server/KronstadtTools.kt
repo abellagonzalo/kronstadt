@@ -36,6 +36,8 @@ import kronstadt.core.application.ReadStructure
 import kronstadt.core.application.ReadStructureResult
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.ReadSymbolResult
+import kronstadt.core.application.RenameResult
+import kronstadt.core.application.RenameSymbol
 import kronstadt.core.application.Replace
 import kronstadt.core.application.SymbolCandidate
 import kronstadt.core.domain.SymbolKind
@@ -52,6 +54,7 @@ internal class KronstadtTools(
     private val findUsages: FindUsages,
     private val getDefinition: GetDefinition,
     private val edit: Edit,
+    private val renameSymbol: RenameSymbol,
 ) {
     fun registerOn(server: Server) {
         server.addTool(
@@ -266,6 +269,34 @@ internal class KronstadtTools(
                 required = listOf("operations"),
             ),
         ) { request -> handle(request) { edit(it) } }
+
+        server.addTool(
+            name = "kt_rename_symbol",
+            description = "Renames a Kotlin Symbol and every Usage of it, across files, modules, main and test " +
+                "source, through the language server, so Usages a text search would miss follow too. The changes " +
+                "are validated against the compiler before anything is written: if they add compiler errors to any " +
+                "changed file, nothing is written and the errors are listed; otherwise every changed file is written, " +
+                "or none is. A class named like its file also renames the file (refused if the new file exists). " +
+                "The result lists each changed file with its Usages and imports, any file rename, any unused imports the " +
+                "language server removed, and the Symbol's new canonical path. A rename is its own call, never an " +
+                "Operation of a kt_edit batch. Prefer it over kt_edit or text edits to rename anything.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    stringProperty(
+                        "symbol",
+                        "Symbol Path of the Symbol to rename, as kt_read_symbol takes it, e.g. 'OrderController/create' or " +
+                            "'com.example.a/Config'.",
+                    )
+                    stringProperty("newName", "The new name: a Kotlin identifier, e.g. 'placeOrder', or a name in backticks.")
+                    stringProperty(
+                        "file",
+                        "Optional path to the Symbol's .kt/.kts file, absolute or relative to the project root. Without it " +
+                            "the Symbol Path is resolved across the project.",
+                    )
+                },
+                required = listOf("symbol", "newName"),
+            ),
+        ) { request -> handle(request) { renameSymbol(it) } }
     }
 
     private suspend fun edit(args: JsonObject): CallToolResult {
@@ -295,7 +326,8 @@ internal class KronstadtTools(
                     EditIn(file, symbol, old, operation.string("new") ?: return missing("'new'"), imports)
                 }
                 else -> return error(
-                    "Operation $index: unsupported type '$type'; use replace, insert_before, insert_after, delete or edit_in. Nothing written.",
+                    "Operation $index: unsupported type '$type'; use replace, insert_before, insert_after, delete or edit_in, and " +
+                        "kt_rename_symbol for renames, on its own. Nothing written.",
                 )
             }
         }
@@ -320,6 +352,74 @@ internal class KronstadtTools(
             is EditResult.OperationFailed -> error("Operation ${result.index}: ${failure(result.failure)} Nothing written.")
         }
     }
+
+    private suspend fun renameSymbol(args: JsonObject): CallToolResult {
+        val symbol = args.string("symbol")?.takeIf { it.isNotBlank() } ?: return error("Missing required argument: symbol")
+        val newName = args.string("newName") ?: return error("Missing required argument: newName")
+        val file = args.string("file")?.takeIf { it.isNotBlank() }
+        return when (val result = renameSymbol(symbol, newName, file)) {
+            is RenameResult.Renamed -> text(renamed(symbol, newName, result))
+            is RenameResult.Unresolved -> error("${failure(result.failure)} Nothing written.")
+            is RenameResult.InvalidName -> error("'${result.name}' is not a Kotlin identifier; pass a plain name, or one in backticks. Nothing written.")
+            is RenameResult.CannotRename -> error("Cannot rename ${result.symbol}: ${result.reason}. Nothing written.")
+            is RenameResult.TargetExists -> error(
+                "The rename would rename ${result.file} to ${result.target}, which already exists; nothing written. " +
+                    "Pick another name, or move that file first.",
+            )
+            is RenameResult.Rejected -> error(
+                buildString {
+                    val count = result.newErrors.size
+                    append("Rename rejected: $count new error${if (count == 1) "" else "s"}; nothing written.\n")
+                    result.newErrors.forEach { append(problem(it, withFile = true)) }
+                    append("fix what makes the new name clash and retry")
+                },
+            )
+            is RenameResult.ChangedOnDisk -> error("${result.file} changed on disk since read; re-read and retry")
+            is RenameResult.PartiallyWritten -> error(
+                "Write-back failed part-way: writing ${result.failed} failed (${result.reason}). " +
+                    "Already written, not rolled back: ${result.written.joinToString()}. " +
+                    "Nothing else was written; re-read these files before retrying.",
+            )
+            RenameResult.ValidationTimedOut -> error("validation timed out; nothing written")
+            is RenameResult.NotReady -> notReady(result.phase, result.elapsed)
+        }
+    }
+
+    /**
+     * A summary line with the new path, as kt_find_usages counts (`3 usages in 2 files (+1 import)`), then each changed
+     * file with its usages and new warnings, then any file rename and removed imports.
+     */
+    private fun renamed(symbol: String, newName: String, result: RenameResult.Renamed) = buildString {
+        fun count(n: Int, noun: String) = if (n == 1) "1 $noun" else "$n ${noun}s"
+        val usages = result.files.sumOf { it.usages }
+        val imports = result.files.sumOf { it.imports }
+        append("Renamed ").append(symbol).append(" to ").append(newName).append(": ")
+        append(count(usages, "usage")).append(" in ").append(count(result.files.count { it.usages > 0 }, "file"))
+        if (imports > 0) append(" (+").append(count(imports, "import")).append(')')
+        append(", and the declaration. New path: ")
+        append(result.newPath ?: "unknown (several Symbols match it now; use kt_read_structure)").append('\n')
+        result.files.forEachIndexed { index, file ->
+            val parts = listOfNotNull(
+                "declaration".takeIf { index == 0 },
+                file.usages.takeIf { it > 0 }?.let { count(it, "usage") },
+                file.imports.takeIf { it > 0 }?.let { count(it, "import") },
+            ).ifEmpty { listOf("unused imports removed") }
+            append("  ").append(file.file).append(": ").append(parts.joinToString(", ")).append('\n')
+            if (file.newWarnings.isNotEmpty()) {
+                append("  New warnings:\n")
+                file.newWarnings.forEach { append("  ").append(problem(it, withFile = false)) }
+                if (file.moreWarnings > 0) append("    (${file.moreWarnings} more)\n")
+            }
+            if (file.preexistingErrors > 0) {
+                append("    ${file.preexistingErrors} error${if (file.preexistingErrors == 1) " was" else "s were"} already in the file.\n")
+            }
+        }
+        result.fileRenamed?.let { append("File renamed: ").append(it.from).append(" -> ").append(it.to).append('\n') }
+        if (result.importsRemoved.isNotEmpty()) {
+            append("Unused imports kotlin-lsp removed:\n")
+            result.importsRemoved.forEach { append("  ").append(it.file).append(": ").append(it.import).append('\n') }
+        }
+    }.trimEnd()
 
     /** One file's outcome: the Symbols the edit left, then new warnings and the errors it already had. */
     private fun written(file: EditedFile) = buildString {

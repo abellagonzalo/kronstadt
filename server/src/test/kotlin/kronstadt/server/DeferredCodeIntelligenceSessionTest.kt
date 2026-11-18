@@ -12,6 +12,8 @@ import kronstadt.core.domain.Definition
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
+import kronstadt.core.domain.Rename
+import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextDocument
@@ -82,6 +84,8 @@ private class RecordingIntelligence : CodeIntelligence {
 
                 override suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation> = emptyList()
                 override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> = emptyList()
+                override suspend fun prepareRename(file: Path, document: TextDocument, position: Position) = RenamePreparation.Refused("unsupported")
+                override suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String) = Rename.Refused("unsupported")
                 override suspend fun writtenBack(file: Path, document: TextDocument) {
                     events += "written back ${file.fileName}"
                 }

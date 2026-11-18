@@ -13,6 +13,7 @@ backed by JetBrains' [kotlin-lsp](https://github.com/Kotlin/kotlin-lsp) (see ADR
 | `kt_find_usages` | ✅ | Every Usage of a Symbol in main and test source, grouped by file and by the canonical Symbol Path containing it; imports only counted, at most 100 Usages in whole files, `file` shows one file |
 | `kt_get_definition` | ✅ | Where a name used inside a Symbol is declared (`at` picks one occurrence): a project declaration's KDoc and declaration without the body, a local's enclosing Symbol, or a library's fully qualified name, jar and KDoc and declaration, read-only |
 | `kt_edit` | ✅ | An ordered batch of Operations (`replace`, `insert_before`, `insert_after`, `delete`, `edit_in` on a Symbol or a whole file), possibly across files, each optionally listing `imports` to add; validated once and written all-or-nothing, only if it adds no compiler errors |
+| `kt_rename_symbol` | ✅ | Renames a Symbol and every reference across files and modules through kotlin-lsp, and the file of a class named like it (never onto an existing file); validated and written all-or-nothing like `kt_edit`; reports each changed file's references, imports kotlin-lsp removed and the new canonical path |
 
 ## Architecture
 
@@ -71,7 +72,7 @@ Options:
 - `--readiness-timeout <seconds>`: how long tools that need the index wait for kotlin-lsp to finish importing and
   indexing. Defaults to `$KRONSTADT_READINESS_TIMEOUT`, else 90.
 
-kotlin-lsp starts as soon as Kronstadt does and imports the project in the background. `kt_find_symbol`, `kt_find_usages` and `kt_get_definition` wait until
+kotlin-lsp starts as soon as Kronstadt does and imports the project in the background. `kt_find_symbol`, `kt_find_usages`, `kt_get_definition`, `kt_edit` and `kt_rename_symbol` wait until
 the import has finished and no indexing is in progress, also after a later re-import. If that takes longer than the
 readiness timeout, it fails with a retry error rather than returning partial results.
 

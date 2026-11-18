@@ -21,6 +21,13 @@ public interface FileStore {
      */
     public suspend fun writeIfUnchanged(file: Path, basedOn: ContentHash, document: TextDocument): WriteResult
 
+    /**
+     * Write-back of a renamed file: writes [document] to [target] and deletes [file], but only if [file] still hashes to
+     * [basedOn] and [target] doesn't exist (an existing file is never overwritten). The new file gets [file]'s
+     * permissions and appears whole, through a temp file and a rename.
+     */
+    public suspend fun moveIfUnchanged(file: Path, basedOn: ContentHash, target: Path, document: TextDocument): WriteResult
+
     /** Path as it should be shown to the agent: relative to the project root. */
     public fun display(file: Path): String
 
@@ -37,6 +44,9 @@ public data class HashedDocument(val document: TextDocument, val hash: ContentHa
 public sealed interface WriteResult {
     public data object Written : WriteResult
 
-    /** The file no longer hashes to what the write was based on (or is gone); nothing was written. */
+    /** The file's content no longer matches the hash it was read with; nothing was written. */
     public data object ChangedOnDisk : WriteResult
+
+    /** A move's target already exists; nothing was written. */
+    public data object TargetExists : WriteResult
 }

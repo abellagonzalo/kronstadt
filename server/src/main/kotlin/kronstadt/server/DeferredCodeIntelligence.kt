@@ -13,6 +13,8 @@ import kronstadt.core.domain.Definition
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
+import kronstadt.core.domain.Rename
+import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextDocument
@@ -93,6 +95,12 @@ internal class DeferredCodeIntelligence(private val delegate: Deferred<Result<Co
 
         override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> =
             open().definition(file, document, position)
+
+        override suspend fun prepareRename(file: Path, document: TextDocument, position: Position): RenamePreparation =
+            open().prepareRename(file, document, position)
+
+        override suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String): Rename =
+            open().rename(file, document, position, newName)
 
         /** Only an analysis opens documents, so with nothing analysed yet there is nothing to tell. */
         override suspend fun writtenBack(file: Path, document: TextDocument) {

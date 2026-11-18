@@ -8,8 +8,10 @@ import kronstadt.core.port.FileStore
 import kronstadt.core.port.HashedDocument
 import kronstadt.core.port.WriteResult
 import java.io.IOException
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
@@ -62,6 +64,32 @@ public class LocalFileStore(projectRoot: Path) : FileStore {
             } finally {
                 Files.deleteIfExists(temp)
             }
+            WriteResult.Written
+        }
+
+    /**
+     * Checks the hash, writes a temp file next to [target] with [file]'s permissions and moves it to [target] without
+     * replacing anything, then deletes [file]. A crash in between leaves both files, never a half-written one.
+     */
+    override suspend fun moveIfUnchanged(file: Path, basedOn: ContentHash, target: Path, document: TextDocument): WriteResult =
+        withContext(Dispatchers.IO) {
+            val current = readBytes(file)
+            if (current == null || hash(current) != basedOn) return@withContext WriteResult.ChangedOnDisk
+            if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) return@withContext WriteResult.TargetExists
+            val temp = Files.createTempFile(target.parent, ".${target.fileName}.", ".kronstadt")
+            try {
+                Files.write(temp, document.text.encodeToByteArray())
+                if (Files.getFileAttributeView(file, PosixFileAttributeView::class.java) != null) {
+                    Files.setPosixFilePermissions(temp, Files.getPosixFilePermissions(file))
+                }
+                // Without REPLACE_EXISTING, a target that appeared since the check fails the move instead of being replaced.
+                Files.move(temp, target)
+            } catch (_: FileAlreadyExistsException) {
+                return@withContext WriteResult.TargetExists
+            } finally {
+                Files.deleteIfExists(temp)
+            }
+            Files.delete(file)
             WriteResult.Written
         }
 

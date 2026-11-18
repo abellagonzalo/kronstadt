@@ -5,6 +5,8 @@ import kronstadt.core.domain.Definition
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
+import kronstadt.core.domain.Rename
+import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextDocument
@@ -61,6 +63,18 @@ public interface AnalysisSession {
      * order; several for e.g. `expect`/`actual`, none for a keyword, a literal or an unresolved name.
      */
     public suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition>
+
+    /**
+     * Whether the name at [position] in [document] (the content of [file]) can be renamed; refused e.g. for a keyword
+     * or a library declaration.
+     */
+    public suspend fun prepareRename(file: Path, document: TextDocument, position: Position): RenamePreparation
+
+    /**
+     * What renaming the Symbol whose name is at [position] in [document] (the content of [file]) to [newName] changes,
+     * across files, including ones never opened, and any file rename; nothing is applied.
+     */
+    public suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String): Rename
 
     /** Write-back has happened: [document] is now [file]'s content on disk. */
     public suspend fun writtenBack(file: Path, document: TextDocument)

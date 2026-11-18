@@ -2,11 +2,15 @@ package kronstadt.lsp
 
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Diagnostic
+import kronstadt.core.domain.FileChange
 import kronstadt.core.domain.Position
+import kronstadt.core.domain.Rename
+import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
+import kronstadt.core.domain.TextEdit
 import kronstadt.core.domain.TextRange
 import org.eclipse.lsp4j.DiagnosticSeverity
 import org.eclipse.lsp4j.DocumentDiagnosticReport
@@ -16,13 +20,19 @@ import org.eclipse.lsp4j.LocationLink
 import org.eclipse.lsp4j.SymbolInformation
 import org.eclipse.lsp4j.WorkspaceSymbol
 import org.eclipse.lsp4j.jsonrpc.messages.Either
+import org.eclipse.lsp4j.jsonrpc.messages.Either3
 import java.net.URI
 import java.net.URLDecoder
 import java.nio.file.Path
 import org.eclipse.lsp4j.Diagnostic as LspDiagnostic
 import org.eclipse.lsp4j.Position as LspPosition
+import org.eclipse.lsp4j.PrepareRenameDefaultBehavior
+import org.eclipse.lsp4j.PrepareRenameResult
 import org.eclipse.lsp4j.Range as LspRange
+import org.eclipse.lsp4j.RenameFile
 import org.eclipse.lsp4j.SymbolKind as LspSymbolKind
+import org.eclipse.lsp4j.TextEdit as LspTextEdit
+import org.eclipse.lsp4j.WorkspaceEdit
 
 /** Pure conversions between lsp4j types and Kronstadt's domain. Keeps protocol types out of `core`. */
 internal object LspMapping {
@@ -152,6 +162,56 @@ internal object LspMapping {
         result.isLeft -> result.left.orEmpty().filterNotNull().map { it.uri to range(it.range) }
         else -> result.right.orEmpty().filterNotNull().map { it.targetUri to range(it.targetSelectionRange ?: it.targetRange) }
     }
+
+    /**
+     * kotlin-lsp's answer to `prepareRename` at [position]: a range, with or without a placeholder, or "default behaviour"
+     * (the word at the position); null means it can't be renamed.
+     */
+    fun prepareRename(result: Either3<LspRange, PrepareRenameResult, PrepareRenameDefaultBehavior>?, position: Position): RenamePreparation =
+        when {
+            result == null -> RenamePreparation.Refused("This element cannot be renamed")
+            result.isFirst -> RenamePreparation.Renameable(range(result.first), placeholder = "")
+            result.isSecond -> RenamePreparation.Renameable(range(result.second.range), result.second.placeholder.orEmpty())
+            else -> RenamePreparation.Renameable(TextRange(position, position), placeholder = "")
+        }
+
+    /**
+     * kotlin-lsp's answer to `rename`, in its order: `documentChanges` if given (text edits and file renames), else
+     * `changes`. Refused if it would create or delete a file, edit with a snippet, or touch a URI that isn't a file.
+     */
+    fun rename(edit: WorkspaceEdit?): Rename {
+        if (edit == null) return Rename.Changes(emptyList())
+        fun file(uri: String) = localPath(uri)
+        val documentChanges = edit.documentChanges
+            ?: return Rename.Changes(
+                edit.changes.orEmpty().map { (uri, edits) ->
+                    FileChange.Edited(file(uri) ?: return Rename.Refused("kotlin-lsp would change $uri"), edits.map(::textEdit))
+                },
+            )
+        return Rename.Changes(
+            documentChanges.map { change ->
+                if (change.isLeft) {
+                    val document = change.left
+                    val path = file(document.textDocument.uri) ?: return Rename.Refused("kotlin-lsp would change ${document.textDocument.uri}")
+                    FileChange.Edited(
+                        path,
+                        document.edits.map { if (it.isLeft) textEdit(it.left) else return Rename.Refused("kotlin-lsp answered with a snippet edit") },
+                    )
+                } else {
+                    when (val operation = change.right) {
+                        is RenameFile -> FileChange.Moved(
+                            file(operation.oldUri) ?: return Rename.Refused("kotlin-lsp would move ${operation.oldUri}"),
+                            file(operation.newUri) ?: return Rename.Refused("kotlin-lsp would move a file to ${operation.newUri}"),
+                        )
+                        else -> return Rename.Refused("kotlin-lsp would ${operation.kind} a file")
+                    }
+                }
+            },
+        )
+    }
+
+    /** An LSP text edit as Kronstadt's. */
+    fun textEdit(edit: LspTextEdit): TextEdit = TextEdit(range(edit.range), edit.newText)
 
     fun uri(file: Path): String = file.toUri().toString()
 }
