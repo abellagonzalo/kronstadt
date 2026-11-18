@@ -93,10 +93,7 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
     val server = Server(
         Implementation(name = "kronstadt", version = VERSION),
         ServerOptions(capabilities = ServerCapabilities(tools = ServerCapabilities.Tools(listChanged = false))),
-        instructions = "Kronstadt gives symbol-level access to the Kotlin project at ${files.root}. " +
-            "Prefer kt_find_symbol over grep to locate declarations, kt_find_usages over grep to find where a Symbol is " +
-            "used, kt_get_definition over grep to find where a name is declared, and kt_read_structure and kt_read_symbol " +
-            "over reading whole files.",
+        instructions = serverInstructions(files.root),
     )
     val intelligence = DeferredCodeIntelligence(languageServer)
     // One per instance: write tools run one at a time (ADR 0003).

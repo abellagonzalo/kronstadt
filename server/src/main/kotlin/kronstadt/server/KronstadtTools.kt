@@ -5,6 +5,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
+import java.nio.file.Path
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -157,7 +158,8 @@ internal class KronstadtTools(
                 "local variable or parameter gives the Symbol it is local to and its declaration line. A library or JDK " +
                 "declaration gives its fully qualified name, jar, and KDoc and declaration from the sources jar; it is " +
                 "read-only. Several definitions (e.g. expect/actual) are each shown. A keyword, literal or unresolved " +
-                "name is reported as such, with the compiler's error if any. Waits for indexing.",
+                "name is reported as such, with the compiler's error if any. Waits for indexing. Prefer this over grep: " +
+                "it resolves the name the compiler sees, not same-named text.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
                     stringProperty(
@@ -209,7 +211,8 @@ internal class KronstadtTools(
                 "after the last, and either every file is written or none is (a write failing part-way is reported). " +
                 "Intermediate states may not compile. A Symbol Path without a file is looked up on disk, so to " +
                 "target a Symbol an earlier Operation created or " +
-                "renamed, pass its file. The result lists each written file.",
+                "renamed, pass its file. The result lists each written file. Prefer this over Edit and other text " +
+                "edits of Kotlin files: nothing is written that fails Validation.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
                     putJsonObject("operations") {
@@ -670,3 +673,16 @@ internal class KronstadtTools(
 
     private fun JsonObject.int(key: String): Int? = (this[key] as? JsonPrimitive)?.intOrNull
 }
+
+/**
+ * The MCP server instructions: which of the tools [KronstadtTools] registers to use instead of the agent's built-in
+ * Read, grep and Edit for Kotlin, and to retry rather than fall back when kotlin-lsp is still indexing.
+ */
+internal fun serverInstructions(root: Path): String = """
+    Kronstadt gives symbol-level access to the Kotlin project at $root. For Kotlin code, use it instead of the built-in tools:
+    - Read a file: kt_read_structure for its skeleton, then kt_read_symbol for one declaration, instead of Read.
+    - Search: kt_find_symbol to locate declarations and kt_find_usages to find where a Symbol is used, instead of grep.
+    - Navigate: kt_get_definition to find where a name used inside a Symbol is declared.
+    - Change code: kt_edit (replace, insert_before, insert_after, delete or edit_in by Symbol Path; edit_in on a whole file for text outside any Symbol) and kt_rename_symbol, instead of Edit.
+    If a tool fails because kotlin-lsp is still indexing, retry it; don't fall back to the built-in tools.
+""".trimIndent()

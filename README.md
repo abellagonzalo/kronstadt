@@ -65,6 +65,18 @@ tested against kotlin-lsp 271.2085.0 and warns on stderr when the server reports
 claude mcp add kronstadt -- /path/to/kronstadt/server/build/install/kronstadt/bin/kronstadt
 ```
 
+Allow Kronstadt's tools so agents don't stop at a permission prompt and fall back to the built-in tools. In
+`.claude/settings.json`:
+
+```json
+{ "permissions": { "allow": ["mcp__kronstadt__*"] } }
+```
+
+If Kronstadt comes bundled in a Claude Code plugin, the rule is `mcp__plugin_<plugin>_<server>__*` instead.
+
+The server's instructions tell agents which tool to use instead of `Read`, `grep` and `Edit` for Kotlin, and to retry
+rather than fall back while kotlin-lsp is still indexing.
+
 Options:
 - `--project-root <dir>`: project or worktree to serve (default: current directory, i.e. where Claude Code runs).
 - `--language-server "<command>"`: which kotlin-lsp to run. Defaults to `$KRONSTADT_LANGUAGE_SERVER`, else
