@@ -190,15 +190,16 @@ internal class ShadowWorkspace(
      * preferring those on its edited lines. A file's diagnostics depend on the other files' text, so every base is pulled
      * while all files are at their base, and every current one only once all files are at their current text. [inBase]
      * rewrites a base diagnostic's message as it would read after the Edit (e.g. with a renamed Symbol's new name), so a
-     * message that merely quotes the change isn't taken for a new error. All diagnostics share one [validationTimeout].
+     * message that merely quotes the change isn't taken for a new error. Diagnostics the build never reports (see
+     * [Validation.isSpurious]) are left out of both. All diagnostics share one [validationTimeout].
      */
     suspend fun validate(inBase: (String) -> String = { it }): Validated {
         val edited = touched.filterValues { it.isEdited }.entries.toList()
         val pulled = withTimeoutOrNull(validationTimeout) {
-            val before = edited.map { (file, it) -> session.diagnostics(file, it.base.document).map { d -> d.copy(message = inBase(d.message)) } }
+            val before = edited.map { (file, it) -> relevant(file, session.diagnostics(file, it.base.document)).map { d -> d.copy(message = inBase(d.message)) } }
             // Analysing every current text first is what changes every file to it.
             val trees = edited.map { (file, it) -> SymbolTree(session.documentSymbols(file, it.current)) }
-            val after = edited.map { (file, it) -> session.diagnostics(file, it.current) }
+            val after = edited.map { (file, it) -> relevant(file, session.diagnostics(file, it.current)) }
             Triple(before, trees, after)
         } ?: return Validated.TimedOut
         val (before, trees, after) = pulled
@@ -207,6 +208,8 @@ internal class ShadowWorkspace(
         if (newErrors.isNotEmpty()) return Validated.Rejected(newErrors)
         return Validated.Passed(checked.map { it.report() })
     }
+
+    private fun relevant(file: Path, diagnostics: List<Diagnostic>) = diagnostics.filterNot { Validation.isSpurious(file, it) }
 
     /** One edited file during Validation, with its current [tree] and diagnostics [before] and [after] the Edit. */
     private inner class Checked(

@@ -134,6 +134,43 @@ class EditTest {
         assertEquals(EditResult.Rejected(listOf(Problem(path, "greet", 5, unresolved, "\"hello\""))), result)
     }
 
+    /** What kotlin-lsp reports for a declaration without visibility or return type, as explicit-API mode wants (#48). */
+    private fun explicitApi(line: Int, char: Int) = listOf(
+        error(line, char, "Visibility must be specified in explicit API mode.", "NO_EXPLICIT_VISIBILITY_IN_API_MODE"),
+        error(line, char, "Return type must be specified in explicit API mode.", "NO_EXPLICIT_RETURN_TYPE_IN_API_MODE"),
+    )
+
+    /** Explicit-API errors on `other` before the Edit, and on `greet` too after it. */
+    private val explicitApiEverywhere = mapOf(source to explicitApi(6, 4), hello to explicitApi(3, 4) + explicitApi(6, 4))
+
+    @Test
+    fun `in a test source set, explicit-API errors neither block an edit nor count as already there, since the build never reports them`() = runTest {
+        for (testPath in listOf("src/test/kotlin/a/A.kt", "src/jvmTest/kotlin/a/A.kt", "src/integrationTest/kotlin/a/A.kt")) {
+            val files = FakeFileStore(root, mapOf(testPath to source))
+
+            val result = edit(intelligence(diagnosticsByText = explicitApiEverywhere), files)(
+                Replace(testPath, "Greeter/greet", "fun greet(): String =\n    \"hello\""),
+            )
+
+            assertEquals(hello, files.content(testPath), testPath)
+            assertEquals(0, assertIs<EditResult.Written>(result, testPath).files.single().preexistingErrors, testPath)
+        }
+    }
+
+    @Test
+    fun `in a main source set, an explicit-API error the edit adds still rejects it`() = runTest {
+        for (mainPath in listOf("src/main/kotlin/a/A.kt", "src/jvmMain/kotlin/a/A.kt", "src/A.kt")) {
+            val files = FakeFileStore(root, mapOf(mainPath to source))
+
+            val result = edit(intelligence(diagnosticsByText = explicitApiEverywhere), files)(
+                Replace(mainPath, "Greeter/greet", "fun greet(): String =\n    \"hello\""),
+            )
+
+            assertEquals(2, assertIs<EditResult.Rejected>(result, mainPath).newErrors.size, mainPath)
+            assertEquals(source, files.content(mainPath), mainPath)
+        }
+    }
+
     @Test
     fun `the Shadow Workspace opens the file as read, changes it, saves it after Write-back and closes it`() = runTest {
         val intelligence = intelligence()

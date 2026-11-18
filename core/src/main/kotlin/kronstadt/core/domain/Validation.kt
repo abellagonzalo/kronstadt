@@ -1,5 +1,6 @@
 package kronstadt.core.domain
 
+import java.nio.file.Path
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -7,6 +8,18 @@ import kotlin.time.Duration.Companion.seconds
 public object Validation {
     /** How long an Edit waits for diagnostics before it is rejected unwritten. */
     public val DEFAULT_TIMEOUT: Duration = 15.seconds
+
+    /**
+     * Whether [diagnostic] in [file] is one the build never reports, so Validation ignores it. Gradle applies explicit-API
+     * mode to main sources only, but kotlin-lsp reports its diagnostics in every source set: those in a test source set
+     * (`src/test`, or `src/<name>Test` such as `jvmTest` or `integrationTest`) are spurious (#48).
+     */
+    public fun isSpurious(file: Path, diagnostic: Diagnostic): Boolean {
+        if (diagnostic.code !in EXPLICIT_API_CODES) return false
+        // The innermost `src`, so a project kept under some `src/test` directory still has main sources.
+        val sourceSet = file.zipWithNext().lastOrNull { (dir, _) -> dir.toString() == "src" }?.second?.toString() ?: return false
+        return sourceSet == "test" || sourceSet.endsWith("Test")
+    }
 
     /**
      * The [severity] diagnostics in [after] that weren't in [before]. Positions shift when code changes, so they are
@@ -22,4 +35,6 @@ public object Validation {
     }
 
     private fun key(diagnostic: Diagnostic) = diagnostic.code to diagnostic.message
+
+    private val EXPLICIT_API_CODES = setOf("NO_EXPLICIT_VISIBILITY_IN_API_MODE", "NO_EXPLICIT_RETURN_TYPE_IN_API_MODE")
 }

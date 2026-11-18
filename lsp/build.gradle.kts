@@ -25,7 +25,9 @@ val contractTest by tasks.registering(Test::class) {
     classpath = sourceSets.test.get().runtimeClasspath
     useJUnitPlatform { includeTags("contract") }
     systemProperty("kronstadt.fixture", layout.projectDirectory.dir("src/test/fixture").asFile.absolutePath)
+    systemProperty("kronstadt.explicitApiFixture", layout.projectDirectory.dir("src/test/fixture-explicit-api").asFile.absolutePath)
     inputs.dir("src/test/fixture")
+    inputs.dir("src/test/fixture-explicit-api")
     outputs.upToDateWhen { false }
     testLogging { events("passed", "failed", "skipped") }
 }
