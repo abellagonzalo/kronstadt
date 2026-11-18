@@ -16,6 +16,7 @@ import kronstadt.core.application.FindUsagesResult
 import kronstadt.core.application.FoundSymbol
 import kronstadt.core.application.GetDefinition
 import kronstadt.core.application.GetDefinitionResult
+import kronstadt.core.application.InsertAfter
 import kronstadt.core.application.Problem
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.ReadSymbolResult
@@ -506,5 +507,29 @@ class KotlinLspContractTest {
             val diagnostic = session.diagnostics(file, broken).single { name in it.range }
             assertEquals("UNRESOLVED_REFERENCE", diagnostic.code)
         }
+    }
+
+    // kt_edit imports: an Operation's imports reach Validation with its code.
+
+    @Test
+    @Order(20)
+    fun `kt_edit adds the imports an Operation lists, so code that needs them validates in the same Edit`() = runBlocking<Unit> {
+        val path = "src/main/kotlin/fixture/alpha/Shape.kt"
+        val before = Files.readString(project.resolve(path))
+        val code = "fun timeout(): Duration = Duration.ZERO"
+
+        val without = Edit(files, lsp)(InsertAfter(path, "Polygon", code))
+        assertIs<EditResult.Rejected>(without, "$without")
+        assertEquals(before, Files.readString(project.resolve(path)))
+
+        val result = Edit(files, lsp)(InsertAfter(path, "Polygon", code, imports = listOf("kotlin.time.Duration")))
+
+        val written = assertIs<EditResult.Written>(result, "$result").files.single()
+        assertEquals(listOf(EditedSymbol("timeout", 8, 8)), written.symbols)
+        assertEquals(emptyList(), written.newWarnings)
+        assertEquals(
+            "package fixture.alpha\n\nimport kotlin.time.Duration\n\n/** Renamed. */\nclass Polygon(val sides: Int)\n\n$code\n",
+            Files.readString(project.resolve(path)),
+        )
     }
 }

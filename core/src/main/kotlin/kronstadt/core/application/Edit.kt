@@ -1,10 +1,12 @@
 package kronstadt.core.application
 
 import kronstadt.core.domain.FileLayout
+import kronstadt.core.domain.ImportDirective
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolPath
 import kronstadt.core.domain.TextDocument
+import kronstadt.core.domain.addingImports
 import kronstadt.core.domain.Validation
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
@@ -18,26 +20,57 @@ public sealed interface Operation {
 
     /** Null only for an [EditIn] on a whole file. */
     public val symbol: String?
+
+    /**
+     * Import directives, e.g. `a.b.C`, to add to the Operation's file once it is applied, if the file lacks them.
+     * Nothing else about the file's imports changes.
+     */
+    public val imports: List<String>
 }
 
 /** Replaces the whole Symbol Span of [symbol] with [code] (ADR 0004); nothing of the old span is kept. */
-public data class Replace(override val file: String?, override val symbol: String, val code: String) : Operation
+public data class Replace(
+    override val file: String?,
+    override val symbol: String,
+    val code: String,
+    override val imports: List<String> = emptyList(),
+) : Operation
 
 /** Adds [code] before the Symbol Span of [symbol] (above its KDoc and annotations), as a sibling at its indentation, one blank line above it. */
-public data class InsertBefore(override val file: String?, override val symbol: String, val code: String) : Operation
+public data class InsertBefore(
+    override val file: String?,
+    override val symbol: String,
+    val code: String,
+    override val imports: List<String> = emptyList(),
+) : Operation
 
 /** Adds [code] after the Symbol Span of [symbol], as a sibling at its indentation, one blank line below it. */
-public data class InsertAfter(override val file: String?, override val symbol: String, val code: String) : Operation
+public data class InsertAfter(
+    override val file: String?,
+    override val symbol: String,
+    val code: String,
+    override val imports: List<String> = emptyList(),
+) : Operation
 
 /** Removes the whole Symbol Span of [symbol] and one blank line next to it, below if there is one, else above. */
-public data class Delete(override val file: String?, override val symbol: String) : Operation
+public data class Delete(
+    override val file: String?,
+    override val symbol: String,
+    override val imports: List<String> = emptyList(),
+) : Operation
 
 /**
  * Replaces the one occurrence of [old], exactly as written, whitespace included, inside the Symbol Span of [symbol],
  * or anywhere in [file] when there is no [symbol], with [new] as written: no re-indentation, no fuzzy matching. Only
  * the line breaks in [new] become the file's.
  */
-public data class EditIn(override val file: String?, override val symbol: String?, val old: String, val new: String) : Operation {
+public data class EditIn(
+    override val file: String?,
+    override val symbol: String?,
+    val old: String,
+    val new: String,
+    override val imports: List<String> = emptyList(),
+) : Operation {
     init {
         require(symbol != null || file != null) { "edit_in needs a symbol, a file, or both" }
         require(old.isNotEmpty()) { "edit_in needs a non-empty 'old'" }
@@ -78,6 +111,11 @@ public class Edit(
             }
             symbolPath
         }
+        val imports = operations.mapIndexed { index, operation ->
+            operation.imports.map { raw ->
+                ImportDirective.parse(raw).getOrElse { return EditResult.OperationFailed(index, OperationFailure.InvalidImport(raw)) }
+            }
+        }
         return writeLock.withLock {
             val readiness = intelligence.awaitReady(readinessTimeout)
             if (readiness is Readiness.NotReady) return@withLock EditResult.NotReady(readiness.phase, readiness.elapsed)
@@ -85,7 +123,7 @@ public class Edit(
                 val shadow = ShadowWorkspace(files, session, resolver, validationTimeout)
                 operations.zip(paths).forEachIndexed { index, (operation, symbolPath) ->
                     when (val applied = apply(session, shadow, operation, symbolPath)) {
-                        Applied.Done -> Unit
+                        is Applied.Done -> addImports(shadow, applied.file, imports[index])
                         is Applied.Failed -> return@session EditResult.OperationFailed(index, applied.failure)
                         is Applied.NotReady -> return@session EditResult.NotReady(applied.phase, applied.elapsed)
                     }
@@ -105,7 +143,8 @@ public class Edit(
     }
 
     private sealed interface Applied {
-        data object Done : Applied
+        /** Applied to [file]. */
+        data class Done(val file: Path) : Applied
         data class Failed(val failure: OperationFailure) : Applied
         data class NotReady(val phase: String, val elapsed: Duration) : Applied
     }
@@ -164,7 +203,7 @@ public class Edit(
                 shadow.replaceLines(file, lines, emptyList())
             }
         }
-        return Applied.Done
+        return Applied.Done(file)
     }
 
     /** An [EditIn] on a whole file: its span is the whole text, and only the lines the occurrence is on change. */
@@ -181,7 +220,14 @@ public class Edit(
             is Splice.NotExactlyOnce ->
                 return Applied.Failed(OperationFailure.NotExactlyOnce(operation.old, null, files.display(file), splice.count, splice.lines))
         }
-        return Applied.Done
+        return Applied.Done(file)
+    }
+
+    /** Adds those of [imports] that [file] lacks to its current text (see [addingImports]); never removes or reorders any. */
+    private suspend fun addImports(shadow: ShadowWorkspace, file: Path, imports: List<ImportDirective>) {
+        val document = checkNotNull(shadow.current(file)) { "$file was applied to, so it is in the Shadow Workspace" }
+        val splice = document.addingImports(imports) ?: return
+        shadow.replaceLines(file, splice.lines, splice.newLines)
     }
 
     /** [EditIn]'s change to a document: whole [lines] (0-based) to replace with [newLines]. */
@@ -337,4 +383,7 @@ public sealed interface OperationFailure {
     public data class FileNotFound(val path: String) : OperationFailure
     public data class NotKotlin(val path: String) : OperationFailure
     public data class OutsideProject(val path: String) : OperationFailure
+
+    /** [import] isn't one import directive: a dotted name, optionally ending in `.*` or `as Alias`. */
+    public data class InvalidImport(val import: String) : OperationFailure
 }

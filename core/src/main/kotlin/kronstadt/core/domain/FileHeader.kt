@@ -9,28 +9,131 @@ package kronstadt.core.domain
  * the name and a trailing `;` are allowed.
  */
 public val TextDocument.packageName: String
-    get() = PackageHeader(text).read()
+    get() = FileHeader.of(text).packageName
 
-private class PackageHeader(private val text: String) {
+/**
+ * What a Kotlin file's header holds, read as in the Kotlin grammar: file annotations, the package directive, then the
+ * import list. Anything after the last import directive is the body.
+ */
+internal class FileHeader(
+    val packageName: String,
+    /** Offset just past the package directive, else past the last file annotation or the shebang line; null if none. */
+    val preambleEnd: Int?,
+    /** The import directives in order, with the offsets of `import` and of the directive's end. */
+    val imports: List<ScannedImport>,
+) {
+    class ScannedImport(val directive: ImportDirective, val start: Int, val end: Int)
+
+    companion object {
+        fun of(text: String): FileHeader = HeaderScanner(text).header()
+
+        /** [text] as one import directive, with or without `import` and a trailing `;`; null if it is anything else. */
+        fun directive(text: String): ImportDirective? = HeaderScanner(text).directive()
+    }
+}
+
+private class HeaderScanner(private val text: String) {
     private var i = 0
 
-    fun read(): String {
+    fun header(): FileHeader {
         if (peek() == '\uFEFF') i++
-        if (text.startsWith("#!", i)) skipLine()
+        var preambleEnd: Int? = null
+        if (text.startsWith("#!", i)) {
+            skipLine()
+            preambleEnd = i
+        }
         skipWhitespace()
         while (peek() == '@') {
-            if (!skipFileAnnotation()) return ""
+            if (!skipFileAnnotation()) return FileHeader("", preambleEnd, emptyList())
+            preambleEnd = i
             skipWhitespace()
         }
-        if (!keyword("package")) return ""
-        val segments = mutableListOf<String>()
-        do {
-            if (segments.isNotEmpty()) i++ // '.'
+        var packageName = ""
+        if (keyword("package")) {
+            val segments = mutableListOf<String>()
+            do {
+                if (segments.isNotEmpty()) i++ // '.'
+                skipWhitespace()
+                segments += identifier()
+                preambleEnd = i
+                skipWhitespace()
+            } while (peek() == '.')
+            if (peek() == ';') {
+                i++
+                preambleEnd = i
+            }
+            packageName = segments.joinToString(".")
             skipWhitespace()
-            segments += identifier()
+        }
+        val imports = mutableListOf<FileHeader.ScannedImport>()
+        while (true) {
+            val start = i
+            if (!keyword("import")) break
+            val directive = importBody() ?: break
+            imports += FileHeader.ScannedImport(directive, start, i)
             skipWhitespace()
-        } while (peek() == '.')
-        return segments.joinToString(".")
+            if (peek() == ';') {
+                i++
+                skipWhitespace()
+            }
+        }
+        return FileHeader(packageName, preambleEnd, imports)
+    }
+
+    fun directive(): ImportDirective? {
+        skipWhitespace()
+        keyword("import")
+        val directive = importBody() ?: return null
+        skipWhitespace()
+        if (peek() == ';') i++
+        skipWhitespace()
+        return directive.takeIf { i == text.length }
+    }
+
+    /**
+     * The directive after `import`: a dotted name, then `.*` or `as Alias`. [i] ends just past it; null, with [i]
+     * anywhere, if it is malformed.
+     */
+    private fun importBody(): ImportDirective? {
+        val written = mutableListOf<String>()
+        val names = mutableListOf<String>()
+        var end: Int
+        while (true) {
+            skipWhitespace()
+            if (peek() == '*' && names.isNotEmpty()) {
+                i++
+                written += "*"
+                names += "*"
+                end = i
+                break
+            }
+            val start = i
+            val name = identifier()
+            if (name.isEmpty()) return null
+            written += text.substring(start, i)
+            names += name
+            end = i
+            skipWhitespace()
+            if (peek() != '.') break
+            i++
+        }
+        var alias: Pair<String, String>? = null
+        if (names.last() != "*") {
+            skipWhitespace()
+            if (keyword("as")) {
+                skipWhitespace()
+                val start = i
+                val name = identifier()
+                if (name.isEmpty()) return null
+                alias = text.substring(start, i) to name
+                end = i
+            }
+        }
+        i = end
+        return ImportDirective(
+            text = written.joinToString(".") + alias?.let { " as ${it.first}" }.orEmpty(),
+            key = names.joinToString(".") + alias?.let { " as ${it.second}" }.orEmpty(),
+        )
     }
 
     private fun peek(): Char? = text.getOrNull(i)

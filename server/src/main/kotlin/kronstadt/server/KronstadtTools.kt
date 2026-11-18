@@ -7,6 +7,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
@@ -195,6 +196,9 @@ internal class KronstadtTools(
                 "changes one line of a large Symbol cheaply. " +
                 "With a file and no symbol, 'edit_in' works on the whole file: the only way to change text outside " +
                 "any Symbol, such as the package line, file annotations or imports. " +
+                "Any Operation may list 'imports' its code needs: each missing one is added to the target's file, " +
+                "sorted in among the others (or in a new block after the package line); none is ever removed or " +
+                "reordered, and nothing is imported unless asked. " +
                 "Files are written only if the Edit adds no compiler errors to them; otherwise nothing is written and " +
                 "the new errors are listed. " +
                 "An Edit is an ordered batch of Operations, possibly across files: each resolves against the code the " +
@@ -243,6 +247,15 @@ internal class KronstadtTools(
                                         "must occur exactly once in the target.",
                                 )
                                 stringProperty("new", "For 'edit_in', the text to put in place of 'old', as written; may be empty.")
+                                putJsonObject("imports") {
+                                    put("type", "array")
+                                    putJsonObject("items") { put("type", "string") }
+                                    put(
+                                        "description",
+                                        "Optional imports the code needs, e.g. 'kotlin.time.Duration', 'a.b.*' or 'a.b.C as D', " +
+                                            "added to the target's file if missing and validated with the Edit.",
+                                    )
+                                }
                             }
                             putJsonArray("required") {
                                 add("type")
@@ -265,15 +278,21 @@ internal class KronstadtTools(
             val file = operation.string("file")?.takeIf { it.isNotBlank() }
             fun missing(what: String) = error("Operation $index: missing $what, which '$type' needs. Nothing written.")
             val code = operation.string("code")
+            val notStrings = error("Operation $index: 'imports' must be an array of strings. Nothing written.")
+            val imports = when (val raw = operation["imports"]) {
+                null, JsonNull -> emptyList()
+                is JsonArray -> raw.map { element -> (element as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return notStrings }
+                else -> return notStrings
+            }
             when (type) {
-                "replace" -> Replace(file, symbol ?: return missing("'symbol'"), code ?: return missing("'code'"))
-                "insert_before" -> InsertBefore(file, symbol ?: return missing("'symbol'"), code ?: return missing("'code'"))
-                "insert_after" -> InsertAfter(file, symbol ?: return missing("'symbol'"), code ?: return missing("'code'"))
-                "delete" -> Delete(file, symbol ?: return missing("'symbol'"))
+                "replace" -> Replace(file, symbol ?: return missing("'symbol'"), code ?: return missing("'code'"), imports)
+                "insert_before" -> InsertBefore(file, symbol ?: return missing("'symbol'"), code ?: return missing("'code'"), imports)
+                "insert_after" -> InsertAfter(file, symbol ?: return missing("'symbol'"), code ?: return missing("'code'"), imports)
+                "delete" -> Delete(file, symbol ?: return missing("'symbol'"), imports)
                 "edit_in" -> {
                     if (symbol == null && file == null) return missing("a 'symbol', a 'file', or both")
                     val old = operation.string("old")?.takeIf { it.isNotEmpty() } ?: return missing("a non-empty 'old'")
-                    EditIn(file, symbol, old, operation.string("new") ?: return missing("'new'"))
+                    EditIn(file, symbol, old, operation.string("new") ?: return missing("'new'"), imports)
                 }
                 else -> return error(
                     "Operation $index: unsupported type '$type'; use replace, insert_before, insert_after, delete or edit_in. Nothing written.",
@@ -361,6 +380,9 @@ internal class KronstadtTools(
         is OperationFailure.FileNotFound -> "file not found: ${failure.path}."
         is OperationFailure.NotKotlin -> "not a Kotlin file: ${failure.path}. kt_edit only supports .kt and .kts files."
         is OperationFailure.OutsideProject -> "path is outside the project root: ${failure.path}."
+        is OperationFailure.InvalidImport ->
+            "'${failure.import}' is not an import directive; give a dotted name, optionally ending in '.*' or 'as Alias', " +
+                "e.g. 'kotlin.time.Duration'."
     }
 
     private suspend fun readStructure(args: JsonObject): CallToolResult {
