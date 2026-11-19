@@ -40,9 +40,8 @@ import kronstadt.core.application.ReadSymbolResult
 import kronstadt.core.application.RenameResult
 import kronstadt.core.application.RenameSymbol
 import kronstadt.core.application.Replace
-import kronstadt.core.application.SymbolCandidate
+import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolKind
-import kotlin.time.Duration
 
 /**
  * MCP adapter: tool schemas plus thin handlers that parse arguments, call a use case, and turn its result
@@ -353,7 +352,7 @@ internal class KronstadtTools(
                     "Nothing else was written; re-read these files before retrying.",
             )
             EditResult.ValidationTimedOut -> error("validation timed out; nothing written")
-            is EditResult.NotReady -> notReady(result.phase, result.elapsed)
+            is EditResult.NotReady -> notReady(result.readiness)
             is EditResult.OperationFailed -> error("Operation ${result.index}: ${failure(result.failure)} Nothing written.")
         }
     }
@@ -364,7 +363,7 @@ internal class KronstadtTools(
         val file = args.string("file")?.takeIf { it.isNotBlank() }
         return when (val result = renameSymbol(symbol, newName, file)) {
             is RenameResult.Renamed -> text(renamed(symbol, newName, result))
-            is RenameResult.Unresolved -> error("${failure(result.failure)} Nothing written.")
+            is RenameResult.LookupFailed -> error("${sentence(describe(result.failure, "kt_rename_symbol"))} Nothing written.")
             is RenameResult.InvalidName -> error("'${result.name}' is not a Kotlin identifier; pass a plain name, or one in backticks. Nothing written.")
             is RenameResult.CannotRename -> error("Cannot rename ${result.symbol}: ${result.reason}. Nothing written.")
             is RenameResult.TargetExists -> error(
@@ -386,7 +385,7 @@ internal class KronstadtTools(
                     "Nothing else was written; re-read these files before retrying.",
             )
             RenameResult.ValidationTimedOut -> error("validation timed out; nothing written")
-            is RenameResult.NotReady -> notReady(result.phase, result.elapsed)
+            is RenameResult.NotReady -> notReady(result.readiness)
         }
     }
 
@@ -454,22 +453,7 @@ internal class KronstadtTools(
     }
 
     private fun failure(failure: OperationFailure): String = when (failure) {
-        is OperationFailure.InvalidPath -> "invalid Symbol Path '${failure.symbol}': ${failure.reason}."
-        is OperationFailure.Ambiguous ->
-            "'${failure.symbol}' matches ${failure.candidates.size} symbols${failure.file.inFile()}; pass one of" +
-                (if (failure.file == null) " these paths with its file" else "") + ":\n" +
-                candidates(failure.candidates, withFiles = failure.file == null) + "\n"
-        is OperationFailure.NotFound -> "no symbol '${failure.symbol}'${failure.file.inFile()}." + when {
-            failure.suggestions.isNotEmpty() -> " Close names:\n" + candidates(failure.suggestions, withFiles = failure.file == null) + "\n"
-            failure.file != null -> " Use kt_read_structure to list its declarations."
-            else -> " Use kt_find_symbol to search by partial name."
-        }
-        is OperationFailure.TooManyDeclarations -> tooManyDeclarations(failure.symbol, failure.name) + "."
-        is OperationFailure.OutOfSync ->
-            "index out of sync for ${failure.symbol} in ${failure.file}: its name is not where kotlin-lsp says; retry."
-        is OperationFailure.SharedLine ->
-            "${failure.symbol} shares line ${failure.line} of ${failure.file} with other code, so it has no whole-line " +
-                "span; replace the enclosing symbol instead."
+        is OperationFailure.LookupFailed -> sentence(describe(failure.failure, "kt_edit"))
         is OperationFailure.RemovedEarlier ->
             "'${failure.symbol}' in ${failure.file} was removed or renamed by an earlier Operation of this Edit; target " +
                 "what that Operation left." +
@@ -487,9 +471,6 @@ internal class KronstadtTools(
                     failure.lines.joinToString("\n") { "  L${it.line}: ${it.source}" } + "\n"
             }
         }
-        is OperationFailure.FileNotFound -> "file not found: ${failure.path}."
-        is OperationFailure.NotKotlin -> "not a Kotlin file: ${failure.path}. kt_edit only supports .kt and .kts files."
-        is OperationFailure.OutsideProject -> "path is outside the project root: ${failure.path}."
         is OperationFailure.InvalidImport ->
             "'${failure.import}' is not an import directive; give a dotted name, optionally ending in '.*' or 'as Alias', " +
                 "e.g. 'kotlin.time.Duration'."
@@ -501,9 +482,7 @@ internal class KronstadtTools(
         return when (val result = readStructure(path, xml)) {
             is ReadStructureResult.Structure -> text(result.text)
             is ReadStructureResult.NoDeclarations -> text("No declarations found in ${result.path}.")
-            is ReadStructureResult.FileNotFound -> error("File not found: ${result.path}")
-            is ReadStructureResult.NotKotlin -> error("Not a Kotlin file: ${result.path}. kt_read_structure only supports .kt and .kts files.")
-            is ReadStructureResult.OutsideProject -> error("Path is outside the project root: ${result.path}")
+            is ReadStructureResult.LookupFailed -> error(describe(result.failure, "kt_read_structure"))
         }
     }
 
@@ -542,7 +521,7 @@ internal class KronstadtTools(
                     },
             )
             is FindSymbolResult.InvalidQuery -> error(result.reason)
-            is FindSymbolResult.NotReady -> notReady(result.phase, result.elapsed)
+            is FindSymbolResult.NotReady -> notReady(result.readiness)
         }
     }
 
@@ -551,32 +530,8 @@ internal class KronstadtTools(
         val symbol = args.string("symbol") ?: return error("Missing required argument: symbol")
         return when (val result = readSymbol(path, symbol)) {
             is ReadSymbolResult.Found -> text(result.text)
-            is ReadSymbolResult.InvalidPath -> error("Invalid Symbol Path '${result.symbol}': ${result.reason}")
-            is ReadSymbolResult.Ambiguous -> error(
-                "'${result.symbol}' matches ${result.candidates.size} symbols${result.file.inFile()}; pass one of" +
-                    (if (result.file == null) " these paths with its file" else "") + ":\n" +
-                    candidates(result.candidates, withFiles = result.file == null),
-            )
-            is ReadSymbolResult.NotFound -> error(
-                "No symbol '${result.symbol}'${result.file.inFile()}." + when {
-                    result.suggestions.isNotEmpty() ->
-                        " Close names:\n" + candidates(result.suggestions, withFiles = result.file == null)
-                    result.file != null -> " Use kt_read_structure to list its declarations."
-                    else -> " Use kt_find_symbol to search by partial name."
-                },
-            )
-            is ReadSymbolResult.TooManyDeclarations -> error(tooManyDeclarations(result.symbol, result.name))
-            is ReadSymbolResult.NotReady -> notReady(result.phase, result.elapsed)
-            is ReadSymbolResult.OutOfSync -> error(
-                "index out of sync for ${result.symbol} in ${result.file}: its name is not where kotlin-lsp says; nothing returned, retry",
-            )
-            is ReadSymbolResult.SharedLine -> error(
-                "${result.symbol} shares line ${result.line} of ${result.file} with other code, so it has no whole-line " +
-                    "span; read the enclosing symbol instead",
-            )
-            is ReadSymbolResult.FileNotFound -> error("File not found: ${result.path}")
-            is ReadSymbolResult.NotKotlin -> error("Not a Kotlin file: ${result.path}. kt_read_symbol only supports .kt and .kts files.")
-            is ReadSymbolResult.OutsideProject -> error("Path is outside the project root: ${result.path}")
+            is ReadSymbolResult.LookupFailed -> error(describe(result.failure, "kt_read_symbol"))
+            is ReadSymbolResult.NotReady -> notReady(result.readiness)
         }
     }
 
@@ -590,24 +545,8 @@ internal class KronstadtTools(
                     (if (result.imports > 0) " other than ${result.imports} import${if (result.imports == 1) "" else "s"}" else "") +
                     " (searched ${result.searchedFiles} file${if (result.searchedFiles == 1) "" else "s"})",
             )
-            is FindUsagesResult.InvalidPath -> error("Invalid Symbol Path '${result.symbol}': ${result.reason}")
-            is FindUsagesResult.Ambiguous -> error(
-                "'${result.symbol}' matches ${result.candidates.size} symbols; tell them apart with a package prefix or a " +
-                    "signature, e.g. 'com.example/Greeter/greet(String)':\n" + candidates(result.candidates, withFiles = true),
-            )
-            is FindUsagesResult.NotFound -> error(
-                "No symbol '${result.symbol}'." +
-                    if (result.suggestions.isNotEmpty()) " Close names:\n" + candidates(result.suggestions, withFiles = true)
-                    else " Use kt_find_symbol to search by partial name.",
-            )
-            // kt_find_usages takes no file for the Symbol itself, so there is nothing to pass instead.
-            is FindUsagesResult.TooManyDeclarations -> error(
-                tooManyDeclarations(result.symbol, result.name, remedy = "kt_find_usages takes no file to look in instead"),
-            )
-            is FindUsagesResult.NotReady -> notReady(result.phase, result.elapsed)
-            is FindUsagesResult.FileNotFound -> error("File not found: ${result.path}")
-            is FindUsagesResult.NotKotlin -> error("Not a Kotlin file: ${result.path}. kt_find_usages only supports .kt and .kts files.")
-            is FindUsagesResult.OutsideProject -> error("Path is outside the project root: ${result.path}")
+            is FindUsagesResult.LookupFailed -> error(describe(result.failure, "kt_find_usages"))
+            is FindUsagesResult.NotReady -> notReady(result.readiness)
         }
     }
 
@@ -636,42 +575,10 @@ internal class KronstadtTools(
                     },
                 )
             }
-            is GetDefinitionResult.InvalidPath -> error("Invalid Symbol Path '${result.symbol}': ${result.reason}")
-            is GetDefinitionResult.Ambiguous -> error(
-                "'${result.symbol}' matches ${result.candidates.size} symbols${result.file.inFile()}; pass one of" +
-                    (if (result.file == null) " these paths with its file" else "") + ":\n" +
-                    candidates(result.candidates, withFiles = result.file == null),
-            )
-            is GetDefinitionResult.NotFound -> error(
-                "No symbol '${result.symbol}'${result.file.inFile()}." + when {
-                    result.suggestions.isNotEmpty() ->
-                        " Close names:\n" + candidates(result.suggestions, withFiles = result.file == null)
-                    result.file != null -> " Use kt_read_structure to list its declarations."
-                    else -> " Use kt_find_symbol to search by partial name."
-                },
-            )
-            is GetDefinitionResult.TooManyDeclarations -> error(tooManyDeclarations(result.symbol, result.name))
-            is GetDefinitionResult.NotReady -> notReady(result.phase, result.elapsed)
-            is GetDefinitionResult.FileNotFound -> error("File not found: ${result.path}")
-            is GetDefinitionResult.NotKotlin -> error("Not a Kotlin file: ${result.path}. kt_get_definition only supports .kt and .kts files.")
-            is GetDefinitionResult.OutsideProject -> error("Path is outside the project root: ${result.path}")
+            is GetDefinitionResult.LookupFailed -> error(describe(result.failure, "kt_get_definition"))
+            is GetDefinitionResult.NotReady -> notReady(result.readiness)
         }
     }
-
-    /**
-     * The index stops at a maximum number of results, so a common name can't be resolved without a file: a package
-     * prefix or enclosing declaration doesn't help, since the index is searched by the name alone. [remedy] says what the
-     * agent can do instead.
-     */
-    private fun tooManyDeclarations(symbol: String, name: String, remedy: String = "pass its file") =
-        "'$symbol' can't be resolved without a file: so many declarations are named '$name', dependencies' included, " +
-            "that $INDEX_STOPS and may not list them all; $remedy"
-
-    private fun String?.inFile() = this?.let { " in $it" } ?: ""
-
-    /** One candidate per line; resolved project-wide, each with the file to pass along with its path. */
-    private fun candidates(candidates: List<SymbolCandidate>, withFiles: Boolean) =
-        candidates.joinToString("\n") { if (withFiles) "  ${it.path} — ${it.file}" else "  ${it.path}" }
 
     /** Infrastructure failures (language server down, timeouts) become tool errors instead of protocol errors. */
     private suspend fun handle(request: CallToolRequest, block: suspend (JsonObject) -> CallToolResult): CallToolResult =
@@ -683,8 +590,9 @@ internal class KronstadtTools(
             error("${e::class.simpleName}: ${e.message}")
         }
 
-    private fun notReady(phase: String, elapsed: Duration) =
-        error("kotlin-lsp still indexing (phase $phase, ${elapsed.inWholeSeconds} s elapsed); nothing returned/written, retry")
+    private fun notReady(readiness: Readiness.NotReady) = error(
+        "kotlin-lsp still indexing (phase ${readiness.phase}, ${readiness.elapsed.inWholeSeconds} s elapsed); nothing returned/written, retry",
+    )
 
     private fun text(s: String) = CallToolResult(content = listOf(TextContent(s)))
 
@@ -703,9 +611,6 @@ internal class KronstadtTools(
 
     private fun JsonObject.int(key: String): Int? = (this[key] as? JsonPrimitive)?.intOrNull
 }
-
-/** Why a search may be incomplete, as the tools tell the agent. */
-private const val INDEX_STOPS = "the project index stops at a maximum number of results"
 
 /**
  * The MCP server instructions: which of the tools [KronstadtTools] registers to use instead of the agent's built-in

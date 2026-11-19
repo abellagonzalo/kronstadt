@@ -4,6 +4,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Position
+import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextRange
@@ -144,7 +145,7 @@ class ReadSymbolWithoutFileTest {
 
     @Test
     fun `same-named classes in two packages are ambiguous, and each candidate names its file`() = runTest {
-        val result = assertIs<ReadSymbolResult.Ambiguous>(read("Config"))
+        val result = assertIs<LookupFailure.Ambiguous>(read("Config").lookupFailure())
         assertEquals(null, result.file)
         assertEquals(listOf(SymbolCandidate("Config", alphaKt), SymbolCandidate("Config", betaKt)), result.candidates)
     }
@@ -158,32 +159,32 @@ class ReadSymbolWithoutFileTest {
 
     @Test
     fun `a package prefix anchors at the top level and matches the whole package exactly`() = runTest {
-        assertIs<ReadSymbolResult.NotFound>(read("com.example.web/create"))
-        assertIs<ReadSymbolResult.NotFound>(read("com.example/Config"))
-        assertIs<ReadSymbolResult.NotFound>(read("example.a/Config"))
+        assertIs<LookupFailure.NotFound>(read("com.example.web/create").lookupFailure())
+        assertIs<LookupFailure.NotFound>(read("com.example/Config").lookupFailure())
+        assertIs<LookupFailure.NotFound>(read("example.a/Config").lookupFailure())
     }
 
     @Test
     fun `a wrong package suggests the Symbol where it really is`() = runTest {
-        val result = assertIs<ReadSymbolResult.NotFound>(read("com.example.c/Config"))
+        val result = assertIs<LookupFailure.NotFound>(read("com.example.c/Config").lookupFailure())
         assertEquals(listOf(SymbolCandidate("Config", alphaKt), SymbolCandidate("Config", betaKt)), result.suggestions)
     }
 
     @Test
     fun `the package comes from the header, not from a comment above it`() = runTest {
         assertEquals("// Widget in $widgetKt, L6-6", assertIs<ReadSymbolResult.Found>(read("com.example.g/Widget")).text.lines().first())
-        assertIs<ReadSymbolResult.NotFound>(read("x.y/Widget"))
+        assertIs<LookupFailure.NotFound>(read("x.y/Widget").lookupFailure())
     }
 
     @Test
     fun `a default-package file isn't matched by a package line in its body`() = runTest {
-        assertIs<ReadSymbolResult.NotFound>(read("other.pkg/Template"))
+        assertIs<LookupFailure.NotFound>(read("other.pkg/Template").lookupFailure())
     }
 
     @Test
     fun `waits for the index, then fails with not ready and searches nothing`() = runTest {
         val intelligence = intelligence(notReadyPhase = "Indexing")
-        assertEquals(ReadSymbolResult.NotReady("Indexing", 5.seconds), ReadSymbol(files, intelligence, 5.seconds)(null, "Config"))
+        assertEquals(ReadSymbolResult.NotReady(Readiness.NotReady("Indexing", 5.seconds)), ReadSymbol(files, intelligence, 5.seconds)(null, "Config"))
         assertEquals(emptyList(), intelligence.searched)
     }
 
@@ -204,10 +205,10 @@ class ReadSymbolWithoutFileTest {
     @Test
     fun `a miss suggests close names, with their files`() = runTest {
         // The index matches substrings only, so a typo is looked up by a prefix of the name.
-        val result = assertIs<ReadSymbolResult.NotFound>(read("Confgi"))
+        val result = assertIs<LookupFailure.NotFound>(read("Confgi").lookupFailure())
         assertEquals(null, result.file)
         assertEquals(listOf(SymbolCandidate("Config", alphaKt), SymbolCandidate("Config", betaKt)), result.suggestions)
-        assertEquals(emptyList(), assertIs<ReadSymbolResult.NotFound>(read("Unheard")).suggestions)
+        assertEquals(emptyList(), assertIs<LookupFailure.NotFound>(read("Unheard").lookupFailure()).suggestions)
     }
 
     @Test
@@ -215,11 +216,11 @@ class ReadSymbolWithoutFileTest {
         // Listed twice by the index, yet one Symbol.
         assertEquals("// Box in $boxKt, L3-10", assertIs<ReadSymbolResult.Found>(read("Box")).text.lines().first())
         // Listed by the index, but local declarations aren't addressable.
-        assertIs<ReadSymbolResult.NotFound>(read("pack/local"))
-        assertIs<ReadSymbolResult.NotFound>(read("local"))
+        assertIs<LookupFailure.NotFound>(read("pack/local").lookupFailure())
+        assertIs<LookupFailure.NotFound>(read("local").lookupFailure())
         // Indexed without its receiver, which the tree has.
         assertEquals("// String.shout in $boxKt, L12-12", assertIs<ReadSymbolResult.Found>(read("String.shout")).text.lines().first())
-        assertEquals(listOf(SymbolCandidate("String.shout", boxKt)), assertIs<ReadSymbolResult.NotFound>(read("shout")).suggestions)
+        assertEquals(listOf(SymbolCandidate("String.shout", boxKt)), assertIs<LookupFailure.NotFound>(read("shout").lookupFailure()).suggestions)
     }
 
     @Test
@@ -227,7 +228,7 @@ class ReadSymbolWithoutFileTest {
         assertEquals("// constructor() in $boxKt, L4-4", assertIs<ReadSymbolResult.Found>(read("Box/constructor()")).text.lines().first())
         assertEquals(
             listOf(SymbolCandidate("constructor(Int)", boxKt), SymbolCandidate("constructor()", boxKt)),
-            assertIs<ReadSymbolResult.Ambiguous>(read("com.example/Box/constructor")).candidates,
+            assertIs<LookupFailure.Ambiguous>(read("com.example/Box/constructor").lookupFailure()).candidates,
         )
     }
 
@@ -249,7 +250,7 @@ class ReadSymbolWithoutFileTest {
     @Test
     fun `a package prefix is only for paths without a file`() = runTest {
         val intelligence = intelligence()
-        assertIs<ReadSymbolResult.InvalidPath>(ReadSymbol(files, intelligence)(alphaKt, "com.example.a/Config"))
+        assertIs<LookupFailure.InvalidPath>(ReadSymbol(files, intelligence)(alphaKt, "com.example.a/Config").lookupFailure())
         assertEquals(emptyList(), intelligence.analysed)
     }
 
@@ -259,14 +260,14 @@ class ReadSymbolWithoutFileTest {
         // Capped at one result, the index returns one of the two Configs: resolving it would silently pick that one.
         val capped = intelligence(searchCap = 1)
 
-        assertEquals(ReadSymbolResult.TooManyDeclarations("Config", "Config"), read("Config", capped))
+        assertEquals(ReadSymbolResult.LookupFailed(LookupFailure.TooManyDeclarations("Config", "Config")), read("Config", capped))
         // The index is searched by the name alone, so a package prefix narrows nothing.
         assertEquals(
-            ReadSymbolResult.TooManyDeclarations("com.example.a/Config", "Config"),
+            ReadSymbolResult.LookupFailed(LookupFailure.TooManyDeclarations("com.example.a/Config", "Config")),
             read("com.example.a/Config", capped),
         )
         // A constructor is looked up through its class's name.
-        assertEquals(ReadSymbolResult.TooManyDeclarations("Box/constructor()", "Box"), read("Box/constructor()", capped))
+        assertEquals(ReadSymbolResult.LookupFailed(LookupFailure.TooManyDeclarations("Box/constructor()", "Box")), read("Box/constructor()", capped))
         // With a file, the index isn't asked.
         assertIs<ReadSymbolResult.Found>(ReadSymbol(files, capped)(alphaKt, "Config"))
         // A search that stops short of the cap is complete, so it resolves as before.

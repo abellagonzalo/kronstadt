@@ -1,10 +1,10 @@
 package kronstadt.core.application
 
-import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Suggestions
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.SymbolPath
 import kronstadt.core.domain.SymbolSearch
+import kronstadt.core.domain.SymbolSpan
 import kronstadt.core.domain.SymbolTree
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.packageName
@@ -12,71 +12,84 @@ import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.core.port.FileStore
 import java.nio.file.Path
-import kotlin.time.Duration
 
 /** A Symbol a path could mean: its canonical Symbol Path within [file], and [file] as shown to the agent. */
 public data class SymbolCandidate(val path: String, val file: String)
 
 /**
- * Resolves a Symbol Path to exactly one Symbol (ADR 0002), in a given file or, without one, project-wide.
+ * A Symbol Path as the agent passed it, parsed: [symbol] as written, its [path], and the [file] to look in, if any.
+ * Only [SymbolResolver.parse] makes one, so a package prefix never comes with a file.
+ */
+internal data class ParsedLookup(val symbol: String, val path: SymbolPath, val file: String?)
+
+/**
+ * The one lookup module every tool that accepts a Symbol Path goes through (ADR 0002): [parse] the path, [resolve] it
+ * to exactly one Symbol, in a given file or, without one, project-wide, then, if the tool needs it, its [span]. Each
+ * step answers a [LookupFailure] when it can't.
  *
- * Every tool that accepts a Symbol Path resolves it here, analysing files in the tool call's [AnalysisSession].
+ * It never waits for the project index: a tool that resolves project-wide awaits readiness once, up front.
  */
 internal class SymbolResolver(
     private val files: FileStore,
     private val intelligence: CodeIntelligence,
-    private val readinessTimeout: Duration,
 ) {
-    sealed interface Resolution {
-        data class Found(val file: Path, val document: TextDocument, val tree: SymbolTree, val node: SymbolTree.Node) : Resolution
-        data class Ambiguous(val candidates: List<SymbolCandidate>) : Resolution
-        data class NotFound(val suggestions: List<SymbolCandidate>) : Resolution
-
-        /** The index may have left out declarations named [name], so the path can't be resolved without a file. */
-        data class TooManyDeclarations(val name: String) : Resolution
-        data class NotReady(val phase: String, val elapsed: Duration) : Resolution
-        data class FileNotFound(val path: String) : Resolution
-        data class NotKotlin(val path: String) : Resolution
-        data class OutsideProject(val path: String) : Resolution
-    }
-
-    /** Resolves [symbol] in [path]; without a [path], project-wide, narrowed to its package if it has one. */
-    suspend fun resolve(session: AnalysisSession, path: String?, symbol: SymbolPath): Resolution =
-        if (path == null) resolveProjectWide(session, symbol) else resolveInFile(session, path, symbol)
-
-    /** Syntax-only: answers from the file's `documentSymbol` tree without waiting for the project index. */
-    private suspend fun resolveInFile(session: AnalysisSession, path: String, symbol: SymbolPath): Resolution {
-        val file = files.resolve(path) ?: return Resolution.OutsideProject(path)
-        if (!AnalysedFile.isKotlin(file)) return Resolution.NotKotlin(path)
-        return resolveIn(DocumentSource.disk(files, session), file, symbol) ?: Resolution.FileNotFound(path)
+    /** A resolved Symbol: its [node] in [file]'s [tree], analysed from [document]. */
+    data class Found(val file: Path, val document: TextDocument, val tree: SymbolTree, val node: SymbolTree.Node) {
+        val canonical: String get() = tree.canonicalPath(node).toString()
     }
 
     /**
-     * Resolves [symbol] in [file] as [source] has it: [Resolution.Found], [Resolution.Ambiguous] or
-     * [Resolution.NotFound]; null if [source] has no such file.
+     * Resolves [parsed] in its file or, without one, project-wide, narrowed to its package if it has one. Files are read
+     * from the disk, or from [source] if given (the Shadow Workspace); since the index only sees the disk, a project-wide
+     * lookup always reads the disk, and with a [source] is then resolved again in the file it found, as [source] has it.
      */
-    suspend fun resolveIn(source: DocumentSource, file: Path, symbol: SymbolPath): Resolution? {
-        val analysed = source.analysed(file) ?: return null
-        return when (val resolution = analysed.tree.resolve(symbol)) {
-            is SymbolTree.Resolution.Found -> found(analysed, resolution.node)
-            is SymbolTree.Resolution.Ambiguous -> Resolution.Ambiguous(resolution.candidates.map { candidate(analysed, it) })
-            is SymbolTree.Resolution.NotFound -> Resolution.NotFound(resolution.suggestions.map { candidate(analysed, it) })
+    suspend fun resolve(session: AnalysisSession, parsed: ParsedLookup, source: DocumentSource? = null): Outcome<Found> {
+        val file = if (parsed.file != null) {
+            files.classify(parsed.file).getOrElse { return Outcome.Failed(it) }
+        } else {
+            val found = resolveProjectWide(session, parsed).getOrElse { return Outcome.Failed(it) }
+            if (source == null) return Outcome.Ok(found)
+            found.file
         }
+        return resolveIn(source ?: DocumentSource.disk(files, session), file, parsed)
+            ?: Outcome.Failed(LookupFailure.FileNotFound(parsed.file ?: files.display(file)))
+    }
+
+    /** Resolves [parsed] in [file] as [source] has it; null if [source] has no such file. */
+    suspend fun resolveIn(source: DocumentSource, file: Path, parsed: ParsedLookup): Outcome<Found>? {
+        val analysed = source.analysed(file) ?: return null
+        val shown = files.display(file)
+        return when (val resolution = analysed.tree.resolve(parsed.path)) {
+            is SymbolTree.Resolution.Found -> Outcome.Ok(found(analysed, resolution.node))
+            is SymbolTree.Resolution.Ambiguous ->
+                Outcome.Failed(LookupFailure.Ambiguous(parsed.symbol, shown, resolution.candidates.map { candidate(analysed, it) }))
+            is SymbolTree.Resolution.NotFound ->
+                Outcome.Failed(LookupFailure.NotFound(parsed.symbol, shown, resolution.suggestions.map { candidate(analysed, it) }))
+        }
+    }
+
+    /** The Symbol Span of [found], whole lines a replace or delete acts on, unless its range can't be trusted. */
+    fun span(found: Found): Outcome<SymbolSpan> = when (val computation = SymbolSpan.of(found.document, found.node.symbol)) {
+        is SymbolSpan.Computation.Computed -> Outcome.Ok(computation.span)
+        SymbolSpan.Computation.OutOfSync -> Outcome.Failed(LookupFailure.OutOfSync(found.canonical, files.display(found.file)))
+        is SymbolSpan.Computation.SharedLine ->
+            Outcome.Failed(LookupFailure.SharedLine(found.canonical, files.display(found.file), computation.line + 1))
     }
 
     /**
      * `workspace/symbol` only supplies candidate files: kotlin-lsp's index is lossy, so each candidate is resolved
-     * through its own `documentSymbol` tree. Waits for a complete index first, since an incomplete one would make a
-     * Symbol look missing. A search that may have left out a symbol of that exact name resolves nothing.
+     * through its own `documentSymbol` tree. A search that may have left out a symbol of that exact name resolves nothing.
      */
-    private suspend fun resolveProjectWide(session: AnalysisSession, symbol: SymbolPath): Resolution {
-        val readiness = intelligence.awaitReady(readinessTimeout)
-        if (readiness is Readiness.NotReady) return Resolution.NotReady(readiness.phase, readiness.elapsed)
+    private suspend fun resolveProjectWide(session: AnalysisSession, parsed: ParsedLookup): Outcome<Found> {
+        val symbol = parsed.path
         // Constructors and unnamed companions aren't indexed under those names; the class before them is.
-        val query = symbol.segments.lastOrNull { it.name !in UNINDEXED_NAMES }?.name ?: return Resolution.NotFound(emptyList())
+        val query = symbol.segments.lastOrNull { it.name !in UNINDEXED_NAMES }?.name
+            ?: return Outcome.Failed(LookupFailure.NotFound(parsed.symbol, null, emptyList()))
         val search = intelligence.workspaceSymbols(query)
         // A file the index left out may declare the name too: resolving from the rest would pick one (ADR 0002).
-        if (search.completeness == SymbolSearch.Completeness.INCOMPLETE) return Resolution.TooManyDeclarations(query)
+        if (search.completeness == SymbolSearch.Completeness.INCOMPLETE) {
+            return Outcome.Failed(LookupFailure.TooManyDeclarations(parsed.symbol, query))
+        }
         val hits = search.symbols.filter { AnalysedFile.isKotlin(it.file) }
         val cache = mutableMapOf<Path, AnalysedFile?>()
         val analysed: suspend (Path) -> AnalysedFile? = { file -> cache.getOrPut(file) { AnalysedFile.of(files, session, file) } }
@@ -89,9 +102,11 @@ internal class SymbolResolver(
                 is SymbolTree.Resolution.NotFound -> emptyList()
             }
         }
-        if (matches.size == 1) return matches.single().let { (file, node) -> found(file, node) }
-        if (matches.isNotEmpty()) return Resolution.Ambiguous(matches.map { (file, node) -> candidate(file, node) })
-        return Resolution.NotFound(suggestionsProjectWide(symbol, query, hits, analysed))
+        if (matches.size == 1) return matches.single().let { (file, node) -> Outcome.Ok(found(file, node)) }
+        if (matches.isNotEmpty()) {
+            return Outcome.Failed(LookupFailure.Ambiguous(parsed.symbol, null, matches.map { (file, node) -> candidate(file, node) }))
+        }
+        return Outcome.Failed(LookupFailure.NotFound(parsed.symbol, null, suggestionsProjectWide(symbol, query, hits, analysed)))
     }
 
     /**
@@ -124,8 +139,7 @@ internal class SymbolResolver(
         return suggestions.take(Suggestions.MAX)
     }
 
-    private fun found(analysed: AnalysedFile, node: SymbolTree.Node) =
-        Resolution.Found(analysed.file, analysed.document, analysed.tree, node)
+    private fun found(analysed: AnalysedFile, node: SymbolTree.Node) = Found(analysed.file, analysed.document, analysed.tree, node)
 
     private fun candidate(analysed: AnalysedFile, node: SymbolTree.Node) =
         SymbolCandidate(analysed.tree.canonicalPath(node).toString(), files.display(analysed.file))
@@ -133,8 +147,31 @@ internal class SymbolResolver(
     private fun inPackage(analysed: AnalysedFile, symbol: SymbolPath) =
         symbol.packageName == null || analysed.document.packageName == symbol.packageName
 
-    private companion object {
-        val UNINDEXED_NAMES = setOf("constructor", "Companion")
-        const val MIN_PREFIX = 3
+    companion object {
+        private val UNINDEXED_NAMES = setOf("constructor", "Companion")
+        private const val MIN_PREFIX = 3
+
+        /**
+         * Parses [symbol], to be looked up in [file] or, without one, project-wide. A package prefix narrows a
+         * project-wide lookup only: with a file it is an [LookupFailure.InvalidPath].
+         */
+        fun parse(file: String?, symbol: String): Outcome<ParsedLookup> {
+            val path = SymbolPath.parse(symbol).getOrElse { return Outcome.Failed(LookupFailure.InvalidPath(symbol, it.message.orEmpty())) }
+            if (file != null && path.packageName != null) {
+                return Outcome.Failed(LookupFailure.InvalidPath(symbol, "a package prefix is only for paths without a file; drop it or the file"))
+            }
+            return Outcome.Ok(ParsedLookup(symbol, path, file))
+        }
     }
+}
+
+/**
+ * The Kotlin file in the project that the agent's [path] names, if it exists: the one place these checks run, in this
+ * order, for every tool that takes a file.
+ */
+internal suspend fun FileStore.classify(path: String): Outcome<Path> {
+    val file = resolve(path) ?: return Outcome.Failed(LookupFailure.OutsideProject(path))
+    if (!AnalysedFile.isKotlin(file)) return Outcome.Failed(LookupFailure.NotKotlin(path))
+    if (read(file) == null) return Outcome.Failed(LookupFailure.FileNotFound(path))
+    return Outcome.Ok(file)
 }

@@ -1,7 +1,6 @@
 package kronstadt.core.application
 
 import kronstadt.core.domain.Readiness
-import kronstadt.core.domain.SymbolPath
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.core.port.FileStore
@@ -15,34 +14,23 @@ import kotlin.time.Duration
 public class FindUsages(
     private val files: FileStore,
     private val intelligence: CodeIntelligence,
-    readinessTimeout: Duration = Readiness.DEFAULT_TIMEOUT,
+    private val readinessTimeout: Duration = Readiness.DEFAULT_TIMEOUT,
 ) {
-    private val resolver = SymbolResolver(files, intelligence, readinessTimeout)
+    private val resolver = SymbolResolver(files, intelligence)
 
     /** Finds every Usage of [symbol], resolved project-wide; with a [file], only the Usages in that file. */
     public suspend operator fun invoke(symbol: String, file: String? = null): FindUsagesResult {
-        val symbolPath = SymbolPath.parse(symbol).getOrElse { return FindUsagesResult.InvalidPath(symbol, it.message.orEmpty()) }
-        val fileFilter = file?.let { path ->
-            val resolved = files.resolve(path) ?: return FindUsagesResult.OutsideProject(path)
-            if (!AnalysedFile.isKotlin(resolved)) return FindUsagesResult.NotKotlin(path)
-            files.read(resolved) ?: return FindUsagesResult.FileNotFound(path)
-            resolved
-        }
-        return intelligence.session { session -> usages(session, symbol, symbolPath, fileFilter) }
+        // [file] filters the Usages; the Symbol itself is always resolved project-wide.
+        val parsed = SymbolResolver.parse(null, symbol).getOrElse { return FindUsagesResult.LookupFailed(it) }
+        val fileFilter = file?.let { path -> files.classify(path).getOrElse { return FindUsagesResult.LookupFailed(it) } }
+        val readiness = intelligence.awaitReady(readinessTimeout)
+        if (readiness is Readiness.NotReady) return FindUsagesResult.NotReady(readiness)
+        return intelligence.session { session -> usages(session, parsed, fileFilter) }
     }
 
     /** Resolves the Symbol and lists its Usages, analysing every file in the tool call's one [session]. */
-    private suspend fun usages(session: AnalysisSession, symbol: String, symbolPath: SymbolPath, fileFilter: Path?): FindUsagesResult {
-        val declaration = when (val resolution = resolver.resolve(session, null, symbolPath)) {
-            is SymbolResolver.Resolution.Found -> resolution
-            is SymbolResolver.Resolution.Ambiguous -> return FindUsagesResult.Ambiguous(symbol, resolution.candidates)
-            is SymbolResolver.Resolution.NotFound -> return FindUsagesResult.NotFound(symbol, resolution.suggestions)
-            is SymbolResolver.Resolution.NotReady -> return FindUsagesResult.NotReady(resolution.phase, resolution.elapsed)
-            is SymbolResolver.Resolution.TooManyDeclarations -> return FindUsagesResult.TooManyDeclarations(symbol, resolution.name)
-            // Only resolving in a given file reports these.
-            is SymbolResolver.Resolution.FileNotFound, is SymbolResolver.Resolution.NotKotlin,
-            is SymbolResolver.Resolution.OutsideProject -> error("project-wide resolution reported $resolution")
-        }
+    private suspend fun usages(session: AnalysisSession, parsed: ParsedLookup, fileFilter: Path?): FindUsagesResult {
+        val declaration = resolver.resolve(session, parsed).getOrElse { return FindUsagesResult.LookupFailed(it) }
         val usagesAndImports = session.references(declaration.file, declaration.document, declaration.node.symbol.selectionRange.start)
             .filter { files.resolve(it.file.toString()) == it.file && (fileFilter == null || it.file == fileFilter) }
         var imports = 0
@@ -58,7 +46,7 @@ public class FindUsages(
             }
         if (withUsages.isEmpty()) {
             val searched = if (fileFilter != null) 1 else files.kotlinFiles().size
-            return FindUsagesResult.NoUsages(declaration.tree.canonicalPath(declaration.node).toString(), searched, imports)
+            return FindUsagesResult.NoUsages(declaration.canonical, searched, imports)
         }
         // Whole files only; the first is shown even if it alone exceeds the cap.
         var budget = MAX_USAGES
@@ -118,18 +106,10 @@ public sealed interface FindUsagesResult {
 
     /** [symbol] (its canonical path) has no Usages in any of [searchedFiles] files, other than [imports] imports. */
     public data class NoUsages(val symbol: String, val searchedFiles: Int, val imports: Int = 0) : FindUsagesResult
-    public data class InvalidPath(val symbol: String, val reason: String) : FindUsagesResult
 
-    /** Resolved project-wide, so each candidate names its own file. */
-    public data class Ambiguous(val symbol: String, val candidates: List<SymbolCandidate>) : FindUsagesResult
-    public data class NotFound(val symbol: String, val suggestions: List<SymbolCandidate>) : FindUsagesResult
+    /** The Symbol, resolved project-wide, or the file to list Usages in, is not one. */
+    public data class LookupFailed(val failure: LookupFailure) : FindUsagesResult
 
-    /** So many declarations are named [name] that the index may not have listed them all. */
-    public data class TooManyDeclarations(val symbol: String, val name: String) : FindUsagesResult
-
-    /** The index was still incomplete after waiting [elapsed]. */
-    public data class NotReady(val phase: String, val elapsed: Duration) : FindUsagesResult
-    public data class FileNotFound(val path: String) : FindUsagesResult
-    public data class NotKotlin(val path: String) : FindUsagesResult
-    public data class OutsideProject(val path: String) : FindUsagesResult
+    /** The index was still incomplete after waiting. */
+    public data class NotReady(val readiness: Readiness.NotReady) : FindUsagesResult
 }

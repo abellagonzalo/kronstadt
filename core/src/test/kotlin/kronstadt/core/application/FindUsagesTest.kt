@@ -3,6 +3,7 @@ package kronstadt.core.application
 import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Position
+import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
@@ -270,13 +271,10 @@ class FindUsagesTest {
     }
 
     @Test
-    fun `rejects a file filter that isn't a Kotlin file in the project`() = runTest {
+    fun `a file filter the lookup module rejects is reported as its lookup failure`() = runTest {
         val (files, intelligence) = project(emptyMap())
-        val find = FindUsages(files, intelligence)
 
-        assertEquals(FindUsagesResult.OutsideProject("../elsewhere/A.kt"), find("greet", file = "../elsewhere/A.kt"))
-        assertEquals(FindUsagesResult.NotKotlin("README.md"), find("greet", file = "README.md"))
-        assertEquals(FindUsagesResult.FileNotFound("src/main/kotlin/Missing.kt"), find("greet", file = "src/main/kotlin/Missing.kt"))
+        assertEquals(FindUsagesResult.LookupFailed(LookupFailure.NotKotlin("README.md")), FindUsages(files, intelligence)("greet", file = "README.md"))
     }
 
     @Test
@@ -285,7 +283,7 @@ class FindUsagesTest {
 
         val result = FindUsages(files, intelligence, readinessTimeout = 5.seconds)("greet")
 
-        assertEquals(FindUsagesResult.NotReady("Indexing", 5.seconds), result)
+        assertEquals(FindUsagesResult.NotReady(Readiness.NotReady("Indexing", 5.seconds)), result)
     }
 
     @Test
@@ -296,7 +294,7 @@ class FindUsagesTest {
 
         val result = FindUsages(files, intelligence)("greet")
 
-        assertEquals(FindUsagesResult.Ambiguous("greet", listOf(SymbolCandidate("greet", greeterKt), SymbolCandidate("greet", otherKt))), result)
+        assertEquals(FindUsagesResult.LookupFailed(LookupFailure.Ambiguous("greet", null, listOf(SymbolCandidate("greet", greeterKt), SymbolCandidate("greet", otherKt)))), result)
     }
 
     @Test
@@ -305,7 +303,7 @@ class FindUsagesTest {
 
         val result = FindUsages(files, intelligence)("Greeter/gret")
 
-        assertEquals(FindUsagesResult.NotFound("Greeter/gret", listOf(SymbolCandidate("greet", greeterKt))), result)
+        assertEquals(FindUsagesResult.LookupFailed(LookupFailure.NotFound("Greeter/gret", null, listOf(SymbolCandidate("greet", greeterKt)))), result)
     }
 
     @Test

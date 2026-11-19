@@ -46,7 +46,7 @@ class ShadowWorkspaceTest {
         |""".trimMargin()
     private val sourceSymbols = listOf(function(source, "one", 2), function(source, "four", 4))
 
-    private fun path(text: String) = SymbolPath.parse(text).getOrThrow()
+    private fun path(text: String) = ParsedLookup(text, SymbolPath.parse(text).getOrThrow(), file = null)
 
     /** Runs [block] on a Shadow Workspace over [files], in one session that must close everything it opened. */
     private fun shadow(
@@ -54,7 +54,7 @@ class ShadowWorkspaceTest {
         intelligence: FakeCodeIntelligence,
         block: suspend ShadowWorkspace.() -> Unit,
     ) = runTest {
-        val resolver = SymbolResolver(files, intelligence, 30.seconds)
+        val resolver = SymbolResolver(files, intelligence)
         intelligence.session { session -> ShadowWorkspace(files, session, resolver, 15.seconds).block() }
         intelligence.assertOneSessionClosedEverything()
     }
@@ -79,7 +79,7 @@ class ShadowWorkspaceTest {
             assertEquals("two", found.canonical)
             assertEquals(2..2, found.span.firstLine..found.span.lastLine)
             assertIs<ShadowWorkspace.Lookup.RemovedEarlier>(resolve(root.resolve(a), path("one")))
-            assertIs<ShadowWorkspace.Lookup.NotFound>(resolve(root.resolve(a), path("three")))
+            assertIs<LookupFailure.NotFound>(assertIs<ShadowWorkspace.Lookup.Failed>(resolve(root.resolve(a), path("three"))).failure)
         }
     }
 

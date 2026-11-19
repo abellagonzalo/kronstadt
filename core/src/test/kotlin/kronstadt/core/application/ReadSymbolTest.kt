@@ -81,21 +81,21 @@ class ReadSymbolTest {
     fun `a leading slash anchors the path at the top level`() = runTest {
         val result = assertIs<ReadSymbolResult.Found>(read("/run"))
         assertEquals("// /run in src/A.kt, L13-13\nfun run(): Int = 3", result.text)
-        assertIs<ReadSymbolResult.NotFound>(read("/Nested"))
+        assertIs<LookupFailure.NotFound>(read("/Nested").lookupFailure())
     }
 
     @Test
     fun `a name shared by several Symbols fails and lists every candidate's canonical path`() = runTest {
-        val result = assertIs<ReadSymbolResult.Ambiguous>(read("run"))
+        val result = assertIs<LookupFailure.Ambiguous>(read("run").lookupFailure())
         assertEquals("src/A.kt", result.file)
         assertEquals(listOf("Runner/run", "Nested/run", "/run"), result.candidates.map { it.path })
     }
 
     @Test
     fun `matching is exact and case-sensitive, and a miss suggests close names`() = runTest {
-        assertEquals(listOf("Runner"), assertIs<ReadSymbolResult.NotFound>(read("runner")).suggestions.map { it.path })
-        assertEquals(listOf("Runner"), assertIs<ReadSymbolResult.NotFound>(read("Runer")).suggestions.map { it.path })
-        assertEquals(emptyList(), assertIs<ReadSymbolResult.NotFound>(read("Completely/Different")).suggestions.map { it.path })
+        assertEquals(listOf("Runner"), assertIs<LookupFailure.NotFound>(read("runner").lookupFailure()).suggestions.map { it.path })
+        assertEquals(listOf("Runner"), assertIs<LookupFailure.NotFound>(read("Runer").lookupFailure()).suggestions.map { it.path })
+        assertEquals(emptyList(), assertIs<LookupFailure.NotFound>(read("Completely/Different").lookupFailure()).suggestions.map { it.path })
     }
 
     private val overloads = """
@@ -119,13 +119,13 @@ class ReadSymbolTest {
         val result = assertIs<ReadSymbolResult.Found>(readOverload("parse( String,Int )"))
         assertEquals("// parse(String, Int) in src/A.kt, L4-4\n    fun parse(text: String, radix: Int): Int = text.toInt(radix)", result.text)
         assertIs<ReadSymbolResult.Found>(readOverload("Parser/merge(Map<String,Int>, List<Int>)"))
-        assertEquals(listOf("parse(String)", "parse(String, Int)"), assertIs<ReadSymbolResult.Ambiguous>(readOverload("parse")).candidates.map { it.path })
+        assertEquals(listOf("parse(String)", "parse(String, Int)"), assertIs<LookupFailure.Ambiguous>(readOverload("parse").lookupFailure()).candidates.map { it.path })
     }
 
     @Test
     fun `a signature is compared as text, without resolving types`() = runTest {
-        assertIs<ReadSymbolResult.NotFound>(readOverload("parse(kotlin.String)"))
-        assertIs<ReadSymbolResult.NotFound>(readOverload("Parser(String)"))
+        assertIs<LookupFailure.NotFound>(readOverload("parse(kotlin.String)").lookupFailure())
+        assertIs<LookupFailure.NotFound>(readOverload("Parser(String)").lookupFailure())
     }
 
     @Test
@@ -137,7 +137,7 @@ class ReadSymbolTest {
     fun `a malformed path is rejected before anything is read`() = runTest {
         val intelligence = FakeCodeIntelligence(listOf(parser))
         listOf("", "Parser//parse", "Parser/", "parse(String", "parse(String)x").forEach { path ->
-            assertIs<ReadSymbolResult.InvalidPath>(readSymbol(overloads, intelligence = intelligence)("src/A.kt", path), path)
+            assertIs<LookupFailure.InvalidPath>(readSymbol(overloads, intelligence = intelligence)("src/A.kt", path).lookupFailure(), path)
         }
         assertEquals(emptyList(), intelligence.analysed)
     }
@@ -145,7 +145,7 @@ class ReadSymbolTest {
     @Test
     fun `refuses with out of sync when the name is not where the analysis says`() = runTest {
         val stale = symbol("parse", SymbolKind.FUNCTION, range(1, 4, 1, 47), 1, 12, parameterTypes = "String", type = "(String): Int")
-        assertIs<ReadSymbolResult.OutOfSync>(readSymbol(overloads, stale)("src/A.kt", "parse"))
+        assertIs<LookupFailure.OutOfSync>(readSymbol(overloads, stale)("src/A.kt", "parse").lookupFailure())
     }
 
     @Test
@@ -154,15 +154,15 @@ class ReadSymbolTest {
         val width = symbol("width", SymbolKind.PROPERTY, range(0, 10, 0, 24), 0, 14)
         val box = symbol("Box", SymbolKind.CLASS, range(0, 0, 0, 42), 0, 6, children = listOf(width))
         val read = readSymbol(source, box)
-        assertEquals(1, assertIs<ReadSymbolResult.SharedLine>(read("src/A.kt", "Box/width")).line)
-        assertIs<ReadSymbolResult.SharedLine>(read("src/A.kt", "Box"))
+        assertEquals(1, assertIs<LookupFailure.SharedLine>(read("src/A.kt", "Box/width").lookupFailure()).line)
+        assertIs<LookupFailure.SharedLine>(read("src/A.kt", "Box").lookupFailure())
     }
 
     @Test
     fun `code between two block comments after the Symbol still counts as sharing its line`() = runTest {
         val source = "fun a() = 1 /* x */ ; val b = 2 /* y */\n"
         val a = symbol("a", SymbolKind.FUNCTION, range(0, 0, 0, 11), 0, 4, parameterTypes = "", type = "(): Int")
-        assertIs<ReadSymbolResult.SharedLine>(readSymbol(source, a)("src/A.kt", "a"))
+        assertIs<LookupFailure.SharedLine>(readSymbol(source, a)("src/A.kt", "a").lookupFailure())
     }
 
     @Test
@@ -188,14 +188,12 @@ class ReadSymbolTest {
     fun `answers while the index is still being built, without waiting`() = runTest {
         val intelligence = FakeCodeIntelligence(listOf(runner, topRun), notReadyPhase = "Indexing")
         assertIs<ReadSymbolResult.Found>(readSymbol(nested, intelligence = intelligence)("src/A.kt", "Runner"))
+        assertEquals(0, intelligence.readinessAwaits)
     }
 
     @Test
-    fun `reports missing files, non-Kotlin files, and paths escaping the project`() = runTest {
-        val read = readSymbol(nested, runner)
-        assertIs<ReadSymbolResult.FileNotFound>(read("src/Missing.kt", "Runner"))
-        assertIs<ReadSymbolResult.NotKotlin>(read("README.md", "Runner"))
-        assertIs<ReadSymbolResult.OutsideProject>(read("../other/B.kt", "Runner"))
+    fun `a file the lookup module rejects is reported as its lookup failure`() = runTest {
+        assertEquals(ReadSymbolResult.LookupFailed(LookupFailure.NotKotlin("README.md")), readSymbol(nested, runner)("README.md", "Runner"))
     }
 
     @Test
@@ -254,9 +252,9 @@ class ReadSymbolTest {
 
     @Test
     fun `the receiver is part of the name, so leaving it out misses and suggests the extension`() = runTest {
-        assertEquals(listOf("String.shout"), assertIs<ReadSymbolResult.NotFound>(readExtension("shout")).suggestions.map { it.path })
-        assertIs<ReadSymbolResult.NotFound>(readExtension("Int.shout"))
-        assertIs<ReadSymbolResult.NotFound>(readExtension("CharSequence.firstChar"))
+        assertEquals(listOf("String.shout"), assertIs<LookupFailure.NotFound>(readExtension("shout").lookupFailure()).suggestions.map { it.path })
+        assertIs<LookupFailure.NotFound>(readExtension("Int.shout").lookupFailure())
+        assertIs<LookupFailure.NotFound>(readExtension("CharSequence.firstChar").lookupFailure())
     }
 
     private val sized = """
@@ -283,12 +281,12 @@ class ReadSymbolTest {
         assertEquals("// Sized/size in src/A.kt, L2-2", assertIs<ReadSymbolResult.Found>(readSized("Sized/size")).text.lines().first())
         assertEquals("// size(Int) in src/A.kt, L4-4", assertIs<ReadSymbolResult.Found>(readSized("size(Int)")).text.lines().first())
         assertEquals("// size() in src/A.kt, L8-8", assertIs<ReadSymbolResult.Found>(readSized("size()")).text.lines().first())
-        assertIs<ReadSymbolResult.NotFound>(readSized("Sized/size()"))
+        assertIs<LookupFailure.NotFound>(readSized("Sized/size()").lookupFailure())
     }
 
     @Test
     fun `the preference only settles a tie inside one declaration, never between unrelated ones`() = runTest {
-        assertEquals(listOf("Sized/size", "size()"), assertIs<ReadSymbolResult.Ambiguous>(readSized("size")).candidates.map { it.path })
+        assertEquals(listOf("Sized/size", "size()"), assertIs<LookupFailure.Ambiguous>(readSized("size").lookupFailure()).candidates.map { it.path })
     }
 
     @Test
@@ -318,7 +316,7 @@ class ReadSymbolTest {
         val read = readSymbol(source, hidden)
 
         listOf("counter/get", "get", "set", "Hidden/counter/set", "outer/local", "local").forEach { path ->
-            assertEquals(emptyList(), assertIs<ReadSymbolResult.NotFound>(read("src/A.kt", path), path).suggestions.map { it.path }, path)
+            assertEquals(emptyList(), assertIs<LookupFailure.NotFound>(read("src/A.kt", path).lookupFailure(), path).suggestions.map { it.path }, path)
         }
         assertEquals("// counter in src/A.kt, L2-6", assertIs<ReadSymbolResult.Found>(read("src/A.kt", "counter")).text.lines().first())
     }
@@ -382,12 +380,12 @@ class ReadSymbolTest {
     fun `constructors are named constructor, and a primary constructor's val parameters are properties`() = runTest {
         assertEquals("// Box/constructor(Int) in src/A.kt, L5-5", headerOf("Box/constructor(Int)"))
         // The primary constructor starts on the class's line, so it can be named but not read on its own.
-        assertIs<ReadSymbolResult.SharedLine>(readForm("Box/constructor(Int, Int)"))
-        assertEquals(listOf("constructor(Int, Int)", "Box/constructor(Int)", "Tint/constructor"), assertIs<ReadSymbolResult.Ambiguous>(readForm("constructor")).candidates.map { it.path })
+        assertIs<LookupFailure.SharedLine>(readForm("Box/constructor(Int, Int)").lookupFailure())
+        assertEquals(listOf("constructor(Int, Int)", "Box/constructor(Int)", "Tint/constructor"), assertIs<LookupFailure.Ambiguous>(readForm("constructor").lookupFailure()).candidates.map { it.path })
         // Resolved as a property; its range stops before the comma, so the span guard refuses to read it alone.
-        assertEquals(ReadSymbolResult.SharedLine("width", "src/A.kt", 2), readForm("Box/width"))
-        assertIs<ReadSymbolResult.NotFound>(readForm("Box/height"))
-        assertIs<ReadSymbolResult.NotFound>(readForm("Box/Box"))
+        assertEquals(ReadSymbolResult.LookupFailed(LookupFailure.SharedLine("width", "src/A.kt", 2)), readForm("Box/width"))
+        assertIs<LookupFailure.NotFound>(readForm("Box/height").lookupFailure())
+        assertIs<LookupFailure.NotFound>(readForm("Box/Box").lookupFailure())
     }
 
     @Test
@@ -395,7 +393,7 @@ class ReadSymbolTest {
         assertEquals("// Companion/create in src/A.kt, L10-10", headerOf("Widget/Companion/create"))
         assertEquals("// Companion in src/A.kt, L9-11", headerOf("Widget/Companion"))
         assertEquals("// Factory/create in src/A.kt, L16-16", headerOf("Outer/Factory/create"))
-        assertIs<ReadSymbolResult.NotFound>(readForm("Outer/Companion/create"))
+        assertIs<LookupFailure.NotFound>(readForm("Outer/Companion/create").lookupFailure())
     }
 
     @Test
@@ -421,6 +419,6 @@ class ReadSymbolTest {
         assertIs<ReadSymbolResult.Found>(read("src/A.kt", "((Int) -> Unit).twice"))
         assertIs<ReadSymbolResult.Found>(read("src/A.kt", "((Int) -> Unit).twice(Int)"))
         assertEquals("// String?.orBlank in src/A.kt, L3-3", assertIs<ReadSymbolResult.Found>(read("src/A.kt", "String?.orBlank")).text.lines().first())
-        assertIs<ReadSymbolResult.InvalidPath>(read("src/A.kt", "(Int)x"))
+        assertIs<LookupFailure.InvalidPath>(read("src/A.kt", "(Int)x").lookupFailure())
     }
 }

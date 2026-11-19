@@ -4,7 +4,6 @@ import kronstadt.core.domain.Definition
 import kronstadt.core.domain.DeclarationHead
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
-import kronstadt.core.domain.SymbolPath
 import kronstadt.core.domain.SymbolSpan
 import kronstadt.core.domain.SymbolTree
 import kronstadt.core.domain.TextRange
@@ -23,45 +22,26 @@ public class GetDefinition(
     private val intelligence: CodeIntelligence,
     private val readinessTimeout: Duration = Readiness.DEFAULT_TIMEOUT,
 ) {
-    private val resolver = SymbolResolver(files, intelligence, readinessTimeout)
+    private val resolver = SymbolResolver(files, intelligence)
 
     /** Resolves [name] where it occurs in [symbol] (in [file], else resolved project-wide). */
     public suspend operator fun invoke(symbol: String, name: String, at: String? = null, file: String? = null): GetDefinitionResult {
-        val symbolPath = SymbolPath.parse(symbol).getOrElse { return GetDefinitionResult.InvalidPath(symbol, it.message.orEmpty()) }
-        if (file != null && symbolPath.packageName != null) {
-            return GetDefinitionResult.InvalidPath(symbol, "a package prefix is only for paths without a file; drop it or the file")
-        }
+        val parsed = SymbolResolver.parse(file, symbol).getOrElse { return GetDefinitionResult.LookupFailed(it) }
         // Definitions come from the index even when the Symbol's file is given.
         val readiness = intelligence.awaitReady(readinessTimeout)
-        if (readiness is Readiness.NotReady) return GetDefinitionResult.NotReady(readiness.phase, readiness.elapsed)
-        return intelligence.session { session -> definitions(session, symbol, symbolPath, name, at, file) }
+        if (readiness is Readiness.NotReady) return GetDefinitionResult.NotReady(readiness)
+        return intelligence.session { session -> definitions(session, parsed, name, at) }
     }
 
     /** Resolves the Symbol, then [name] in it, analysing every file in the tool call's one [session]. */
-    private suspend fun definitions(
-        session: AnalysisSession,
-        symbol: String,
-        symbolPath: SymbolPath,
-        name: String,
-        at: String?,
-        file: String?,
-    ): GetDefinitionResult {
-        val found = when (val resolution = resolver.resolve(session, file, symbolPath)) {
-            is SymbolResolver.Resolution.Found -> resolution
-            is SymbolResolver.Resolution.Ambiguous -> return GetDefinitionResult.Ambiguous(symbol, file, resolution.candidates)
-            is SymbolResolver.Resolution.NotFound -> return GetDefinitionResult.NotFound(symbol, file, resolution.suggestions)
-            is SymbolResolver.Resolution.NotReady -> return GetDefinitionResult.NotReady(resolution.phase, resolution.elapsed)
-            is SymbolResolver.Resolution.TooManyDeclarations -> return GetDefinitionResult.TooManyDeclarations(symbol, resolution.name)
-            is SymbolResolver.Resolution.FileNotFound -> return GetDefinitionResult.FileNotFound(resolution.path)
-            is SymbolResolver.Resolution.NotKotlin -> return GetDefinitionResult.NotKotlin(resolution.path)
-            is SymbolResolver.Resolution.OutsideProject -> return GetDefinitionResult.OutsideProject(resolution.path)
-        }
+    private suspend fun definitions(session: AnalysisSession, parsed: ParsedLookup, name: String, at: String?): GetDefinitionResult {
+        val found = resolver.resolve(session, parsed).getOrElse { return GetDefinitionResult.LookupFailed(it) }
         val document = found.document
         val (first, last) = SymbolSpan.lines(document, found.node.symbol)
         val span = document.offsetOf(Position(first, 0)) until document.offsetOf(Position(last, Int.MAX_VALUE))
         fun notExactlyOnce(text: String, matches: List<IntRange>) = GetDefinitionResult.NotExactlyOnce(
             text,
-            found.tree.canonicalPath(found.node).toString(),
+            found.canonical,
             files.display(found.file),
             occurrenceLines(document, matches.map { it.first }),
         )
@@ -80,7 +60,7 @@ public class GetDefinition(
             val diagnostic = session.diagnostics(found.file, document).firstOrNull { it.range.start < range.end && range.start < it.range.end }
             return GetDefinitionResult.Unresolved(
                 name,
-                found.tree.canonicalPath(found.node).toString(),
+                found.canonical,
                 position.line + 1,
                 diagnostic?.let { d -> d.code?.let { "$it: ${d.message}" } ?: d.message },
             )
@@ -162,17 +142,10 @@ public class GetDefinition(
 public sealed interface GetDefinitionResult {
     /** Each definition as its own block, in the code intelligence's order. */
     public data class Found(val text: String) : GetDefinitionResult
-    public data class InvalidPath(val symbol: String, val reason: String) : GetDefinitionResult
+    public data class LookupFailed(val failure: LookupFailure) : GetDefinitionResult
 
     /** [text] (the name, or the `at` snippet) doesn't occur exactly once in [symbol]'s span in [file]; [lines] are where it does. */
     public data class NotExactlyOnce(val text: String, val symbol: String, val file: String, val lines: List<Occurrence>) : GetDefinitionResult
-
-    /** [file] is null when the path was resolved project-wide; each candidate names its own file. */
-    public data class Ambiguous(val symbol: String, val file: String?, val candidates: List<SymbolCandidate>) : GetDefinitionResult
-    public data class NotFound(val symbol: String, val file: String?, val suggestions: List<SymbolCandidate>) : GetDefinitionResult
-
-    /** Without a file: so many declarations are named [name] that the index may not have listed them all. */
-    public data class TooManyDeclarations(val symbol: String, val name: String) : GetDefinitionResult
 
     /**
      * [name] (on 1-based [line] of [symbol]) resolves to no declaration: a keyword, a literal or an unresolved
@@ -180,11 +153,8 @@ public sealed interface GetDefinitionResult {
      */
     public data class Unresolved(val name: String, val symbol: String, val line: Int, val diagnostic: String?) : GetDefinitionResult
 
-    /** The index was still incomplete after waiting [elapsed]. */
-    public data class NotReady(val phase: String, val elapsed: Duration) : GetDefinitionResult
-    public data class FileNotFound(val path: String) : GetDefinitionResult
-    public data class NotKotlin(val path: String) : GetDefinitionResult
-    public data class OutsideProject(val path: String) : GetDefinitionResult
+    /** The index was still incomplete after waiting. */
+    public data class NotReady(val readiness: Readiness.NotReady) : GetDefinitionResult
 }
 
 /** A 1-based [line] and its trimmed [source]. */

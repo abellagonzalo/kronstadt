@@ -6,6 +6,7 @@ import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Position
+import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
@@ -242,8 +243,23 @@ class EditTest {
 
         val result = Edit(files, intelligence, readinessTimeout = 30.seconds)(Replace(path, "Greeter/greet", "fun greet() = 1"))
 
-        assertEquals(EditResult.NotReady("Indexing", 30.seconds), result)
+        assertEquals(EditResult.NotReady(Readiness.NotReady("Indexing", 30.seconds)), result)
         assertEquals(emptyList(), intelligence.events)
+        assertEquals(emptyList(), files.written)
+    }
+
+    @Test
+    fun `an invalid Symbol Path in any Operation fails before waiting for readiness`() = runTest {
+        val files = FakeFileStore(root, mapOf(path to source))
+        val intelligence = FakeCodeIntelligence(notReadyPhase = "Indexing")
+
+        val result = Edit(files, intelligence, readinessTimeout = 30.seconds)(
+            listOf(Replace(path, "Greeter/greet", "fun greet() = 1"), Delete(path, "com.example/greet")),
+        )
+
+        assertEquals(1, assertIs<EditResult.OperationFailed>(result).index)
+        assertIs<LookupFailure.InvalidPath>(result.lookupFailure())
+        assertEquals(0, intelligence.readinessAwaits)
         assertEquals(emptyList(), files.written)
     }
 
@@ -274,13 +290,13 @@ class EditTest {
 
         val result = edit(intelligence, files)(Replace(path, "Greeter/greeet", "fun greet() = 1"))
 
-        assertEquals(EditResult.OperationFailed(0, OperationFailure.NotFound("Greeter/greeet", path, listOf(SymbolCandidate("greet", path), SymbolCandidate("Greeter", path)))), result)
+        assertEquals(EditResult.OperationFailed(0, OperationFailure.LookupFailed(LookupFailure.NotFound("Greeter/greeet", path, listOf(SymbolCandidate("greet", path), SymbolCandidate("Greeter", path))))), result)
         assertEquals(emptyList(), files.written)
         intelligence.assertOneSessionClosedEverything()
     }
 
     @Test
-    fun `without a file the Symbol Path is resolved across the project`() = runTest {
+    fun `without a file the Symbol Path is resolved across the project, after waiting for readiness once`() = runTest {
         val files = FakeFileStore(root, mapOf(path to source))
         val intelligence = FakeCodeIntelligence(
             symbolsByText = mapOf(source to listOf(greeter(greet, other)), hello to listOf(greeter(helloGreet, other))),
@@ -291,6 +307,7 @@ class EditTest {
 
         assertIs<EditResult.Written>(result)
         assertEquals(hello, files.content(path))
+        assertEquals(1, intelligence.readinessAwaits)
         intelligence.assertOneSessionClosedEverything()
     }
 
@@ -323,8 +340,8 @@ class EditTest {
             ),
         )
 
-        assertIs<OperationFailure.NotFound>(assertIs<EditResult.OperationFailed>(result).failure)
-        assertEquals(1, result.index)
+        assertIs<LookupFailure.NotFound>(result.lookupFailure())
+        assertEquals(1, assertIs<EditResult.OperationFailed>(result).index)
         assertEquals(emptyList(), files.written)
         intelligence.assertOneSessionClosedEverything()
     }

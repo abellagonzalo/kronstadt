@@ -25,6 +25,7 @@ import kronstadt.core.port.WriteResult
 import java.io.IOException
 import java.nio.file.Path
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 
@@ -80,6 +81,20 @@ class FakeFileStore(
 
     private fun key(file: Path) = root.relativize(file).toString()
 }
+
+/** The [LookupFailure] a tool's result reports; fails unless it reports one. */
+fun ReadSymbolResult.lookupFailure(): LookupFailure = assertIs<ReadSymbolResult.LookupFailed>(this).failure
+
+fun FindUsagesResult.lookupFailure(): LookupFailure = assertIs<FindUsagesResult.LookupFailed>(this).failure
+
+fun GetDefinitionResult.lookupFailure(): LookupFailure = assertIs<GetDefinitionResult.LookupFailed>(this).failure
+
+fun ReadStructureResult.lookupFailure(): LookupFailure = assertIs<ReadStructureResult.LookupFailed>(this).failure
+
+fun RenameResult.lookupFailure(): LookupFailure = assertIs<RenameResult.LookupFailed>(this).failure
+
+fun EditResult.lookupFailure(): LookupFailure =
+    assertIs<OperationFailure.LookupFailed>(assertIs<EditResult.OperationFailed>(this).failure).failure
 
 /**
  * Ready unless [notReadyPhase] is given; then it stays in that phase until [becomeReady].
@@ -159,7 +174,11 @@ class FakeCodeIntelligence(
         phase.value = null
     }
 
+    /** How many times a tool waited for readiness. */
+    var readinessAwaits = 0
+
     override suspend fun awaitReady(timeout: Duration): Readiness {
+        readinessAwaits++
         withTimeoutOrNull(timeout) { phase.first { it == null } }
         return phase.value?.let { Readiness.NotReady(it, elapsed = timeout) } ?: Readiness.Ready
     }

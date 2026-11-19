@@ -49,9 +49,7 @@ class ReadStructureTest {
     }
 
     @Test
-    fun `reports missing files, non-Kotlin files, and paths escaping the project`() = runTest {
-        assertIs<ReadStructureResult.FileNotFound>(readStructure("src/Missing.kt"))
-        assertIs<ReadStructureResult.NotKotlin>(readStructure("README.md"))
-        assertIs<ReadStructureResult.OutsideProject>(readStructure("../other/B.kt"))
+    fun `a file the lookup module rejects is reported as its lookup failure`() = runTest {
+        assertEquals(ReadStructureResult.LookupFailed(LookupFailure.FileNotFound("src/Missing.kt")), readStructure("src/Missing.kt"))
     }
 }

@@ -14,9 +14,8 @@ public class ReadStructure(
     private val intelligence: CodeIntelligence,
 ) {
     public suspend operator fun invoke(path: String, xml: Boolean = true): ReadStructureResult {
-        val file = files.resolve(path) ?: return ReadStructureResult.OutsideProject(path)
-        if (!AnalysedFile.isKotlin(file)) return ReadStructureResult.NotKotlin(path)
-        val document = files.read(file) ?: return ReadStructureResult.FileNotFound(path)
+        val file = files.classify(path).getOrElse { return ReadStructureResult.LookupFailed(it) }
+        val document = files.read(file) ?: return ReadStructureResult.LookupFailed(LookupFailure.FileNotFound(path))
         val symbols = intelligence.session { it.documentSymbols(file, document) }
         val shown = files.display(file)
         val text = StructureRenderer.render(shown, document, symbols, xml)
@@ -29,7 +28,7 @@ public sealed interface ReadStructureResult {
 
     /** The file declares no Symbol, e.g. a `build.gradle.kts`. */
     public data class NoDeclarations(val path: String) : ReadStructureResult
-    public data class FileNotFound(val path: String) : ReadStructureResult
-    public data class NotKotlin(val path: String) : ReadStructureResult
-    public data class OutsideProject(val path: String) : ReadStructureResult
+
+    /** The file is outside the project, not Kotlin, or doesn't exist. */
+    public data class LookupFailed(val failure: LookupFailure) : ReadStructureResult
 }

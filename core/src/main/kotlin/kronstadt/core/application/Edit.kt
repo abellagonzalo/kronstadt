@@ -5,7 +5,6 @@ import kronstadt.core.domain.FileLayout
 import kronstadt.core.domain.ImportDirective
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
-import kronstadt.core.domain.SymbolPath
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.addingImports
 import kronstadt.core.domain.importsDroppedIn
@@ -92,7 +91,7 @@ public class Edit(
     private val validationTimeout: Duration = Validation.DEFAULT_TIMEOUT,
     private val writeLock: WriteLock = WriteLock(),
 ) {
-    private val resolver = SymbolResolver(files, intelligence, readinessTimeout)
+    private val resolver = SymbolResolver(files, intelligence)
 
     public suspend operator fun invoke(operation: Operation): EditResult = invoke(listOf(operation))
 
@@ -104,15 +103,8 @@ public class Edit(
     public suspend operator fun invoke(operations: List<Operation>): EditResult {
         val paths = operations.mapIndexed { index, operation ->
             val symbol = operation.symbol ?: return@mapIndexed null
-            val symbolPath = SymbolPath.parse(symbol)
-                .getOrElse { return EditResult.OperationFailed(index, OperationFailure.InvalidPath(symbol, it.message.orEmpty())) }
-            if (operation.file != null && symbolPath.packageName != null) {
-                return EditResult.OperationFailed(
-                    index,
-                    OperationFailure.InvalidPath(symbol, "a package prefix is only for paths without a file; drop it or the file"),
-                )
-            }
-            symbolPath
+            SymbolResolver.parse(operation.file, symbol)
+                .getOrElse { return EditResult.OperationFailed(index, OperationFailure.LookupFailed(it)) }
         }
         val imports = operations.mapIndexed { index, operation ->
             operation.imports.map { raw ->
@@ -121,18 +113,17 @@ public class Edit(
         }
         return writeLock.withLock {
             val readiness = intelligence.awaitReady(readinessTimeout)
-            if (readiness is Readiness.NotReady) return@withLock EditResult.NotReady(readiness.phase, readiness.elapsed)
+            if (readiness is Readiness.NotReady) return@withLock EditResult.NotReady(readiness)
             intelligence.session { session ->
                 val shadow = ShadowWorkspace(files, session, resolver, validationTimeout)
                 val listed = mutableMapOf<Path, MutableSet<ImportDirective>>()
-                operations.zip(paths).forEachIndexed { index, (operation, symbolPath) ->
-                    when (val applied = apply(session, shadow, operation, symbolPath)) {
+                operations.zip(paths).forEachIndexed { index, (operation, parsed) ->
+                    when (val applied = apply(session, shadow, operation, parsed)) {
                         is Applied.Done -> {
                             addImports(shadow, applied.file, imports[index])
                             listed.getOrPut(applied.file) { mutableSetOf() } += imports[index]
                         }
                         is Applied.Failed -> return@session EditResult.OperationFailed(index, applied.failure)
-                        is Applied.NotReady -> return@session EditResult.NotReady(applied.phase, applied.elapsed)
                     }
                 }
                 val removed = removeImportsMadeUnused(session, shadow, listed)
@@ -156,7 +147,6 @@ public class Edit(
         /** Applied to [file]. */
         data class Done(val file: Path) : Applied
         data class Failed(val failure: OperationFailure) : Applied
-        data class NotReady(val phase: String, val elapsed: Duration) : Applied
     }
 
     /**
@@ -164,25 +154,24 @@ public class Edit(
      * new code is re-indented to the span's column, except an [EditIn]'s. An [EditIn] without a Symbol works on its
      * whole file instead.
      */
-    private suspend fun apply(session: AnalysisSession, shadow: ShadowWorkspace, operation: Operation, symbolPath: SymbolPath?): Applied {
-        if (symbolPath == null) return applyToFile(shadow, operation as EditIn)
-        val symbol = checkNotNull(operation.symbol)
-        val file = when (val located = locate(session, shadow, operation.file, symbolPath)) {
-            is Located.File -> located.file
-            is Located.Failed -> return Applied.Failed(located.failure)
-            is Located.NotReady -> return Applied.NotReady(located.phase, located.elapsed)
-        }
+    private suspend fun apply(session: AnalysisSession, shadow: ShadowWorkspace, operation: Operation, parsed: ParsedLookup?): Applied {
+        if (parsed == null) return applyToFile(shadow, operation as EditIn)
+        // Without a file, the Symbol Path is resolved project-wide only to find its file; it is resolved again in the
+        // Shadow Workspace, against the text the earlier Operations left. The project index sees only the disk, so a
+        // Symbol that exists only in that text needs its file.
+        val file = parsed.file?.let { path -> files.classify(path).getOrElse { return Applied.Failed(OperationFailure.LookupFailed(it)) } }
+            ?: resolver.resolve(session, parsed).getOrElse { failure ->
+                val inEdit = if (failure is LookupFailure.NotFound) shadow.findInEdited(parsed) else emptyList()
+                return Applied.Failed(
+                    if (inEdit.isNotEmpty()) OperationFailure.NeedsFile(parsed.symbol, inEdit) else OperationFailure.LookupFailed(failure),
+                )
+            }.file
         val shown = files.display(file)
-        val found = when (val lookup = shadow.resolve(file, symbolPath)) {
+        val found = when (val lookup = shadow.resolve(file, parsed)) {
             is ShadowWorkspace.Lookup.Found -> lookup
-            is ShadowWorkspace.Lookup.Ambiguous -> return Applied.Failed(OperationFailure.Ambiguous(symbol, shown, lookup.candidates))
-            is ShadowWorkspace.Lookup.NotFound -> return Applied.Failed(OperationFailure.NotFound(symbol, shown, lookup.suggestions))
+            is ShadowWorkspace.Lookup.Failed -> return Applied.Failed(OperationFailure.LookupFailed(lookup.failure))
             is ShadowWorkspace.Lookup.RemovedEarlier ->
-                return Applied.Failed(OperationFailure.RemovedEarlier(symbol, shown, lookup.suggestions))
-            is ShadowWorkspace.Lookup.OutOfSync -> return Applied.Failed(OperationFailure.OutOfSync(lookup.canonical, shown))
-            is ShadowWorkspace.Lookup.SharedLine ->
-                return Applied.Failed(OperationFailure.SharedLine(lookup.canonical, shown, lookup.line + 1))
-            ShadowWorkspace.Lookup.FileNotFound -> return Applied.Failed(OperationFailure.FileNotFound(operation.file ?: shown))
+                return Applied.Failed(OperationFailure.RemovedEarlier(parsed.symbol, shown, lookup.suggestions))
         }
         val document = found.document
         val span = found.span
@@ -219,12 +208,8 @@ public class Edit(
     /** An [EditIn] on a whole file: its span is the whole text, and only the lines the occurrence is on change. */
     private suspend fun applyToFile(shadow: ShadowWorkspace, operation: EditIn): Applied {
         val path = checkNotNull(operation.file) { "an edit_in without a symbol has a file" }
-        val file = when (val located = fileAt(path)) {
-            is Located.File -> located.file
-            is Located.Failed -> return Applied.Failed(located.failure)
-            is Located.NotReady -> return Applied.NotReady(located.phase, located.elapsed)
-        }
-        val document = shadow.current(file) ?: return Applied.Failed(OperationFailure.FileNotFound(path))
+        val file = files.classify(path).getOrElse { return Applied.Failed(OperationFailure.LookupFailed(it)) }
+        val document = shadow.current(file) ?: return Applied.Failed(OperationFailure.LookupFailed(LookupFailure.FileNotFound(path)))
         when (val splice = Splice.inFile(document, operation)) {
             is Splice.Done -> shadow.replaceLines(file, splice.lines, splice.newLines)
             is Splice.NotExactlyOnce ->
@@ -293,45 +278,6 @@ public class Edit(
             }
         }
     }
-
-    private sealed interface Located {
-        data class File(val file: Path) : Located
-        data class Failed(val failure: OperationFailure) : Located
-        data class NotReady(val phase: String, val elapsed: Duration) : Located
-    }
-
-    /** The Kotlin file at [path], as the agent passed it. */
-    private fun fileAt(path: String): Located {
-        val file = files.resolve(path) ?: return Located.Failed(OperationFailure.OutsideProject(path))
-        if (!AnalysedFile.isKotlin(file)) return Located.Failed(OperationFailure.NotKotlin(path))
-        return Located.File(file)
-    }
-
-    /**
-     * The file the Operation targets. Without one, the Symbol Path is resolved project-wide only to find its file;
-     * it is resolved again in the Shadow Workspace, against the text the earlier Operations left. The project index
-     * sees only the disk, so a Symbol that exists only in that text needs its file.
-     */
-    private suspend fun locate(session: AnalysisSession, shadow: ShadowWorkspace, path: String?, symbolPath: SymbolPath): Located {
-        if (path != null) return fileAt(path)
-        val symbol = symbolPath.toString()
-        return when (val resolution = resolver.resolve(session, null, symbolPath)) {
-            is SymbolResolver.Resolution.Found -> Located.File(resolution.file)
-            is SymbolResolver.Resolution.Ambiguous -> Located.Failed(OperationFailure.Ambiguous(symbol, null, resolution.candidates))
-            is SymbolResolver.Resolution.NotFound -> {
-                val inEdit = shadow.findInEdited(symbolPath)
-                Located.Failed(
-                    if (inEdit.isNotEmpty()) OperationFailure.NeedsFile(symbol, inEdit)
-                    else OperationFailure.NotFound(symbol, null, resolution.suggestions),
-                )
-            }
-            is SymbolResolver.Resolution.NotReady -> Located.NotReady(resolution.phase, resolution.elapsed)
-            is SymbolResolver.Resolution.TooManyDeclarations -> Located.Failed(OperationFailure.TooManyDeclarations(symbol, resolution.name))
-            is SymbolResolver.Resolution.FileNotFound -> Located.Failed(OperationFailure.FileNotFound(resolution.path))
-            is SymbolResolver.Resolution.NotKotlin -> Located.Failed(OperationFailure.NotKotlin(resolution.path))
-            is SymbolResolver.Resolution.OutsideProject -> Located.Failed(OperationFailure.OutsideProject(resolution.path))
-        }
-    }
 }
 
 /** A Symbol an Edit left in a file: its canonical Symbol Path and 1-based line span. */
@@ -375,25 +321,13 @@ public sealed interface EditResult {
     public data class OperationFailed(val index: Int, val failure: OperationFailure) : EditResult
 
     /** The index was still incomplete after waiting [elapsed]; nothing was written. */
-    public data class NotReady(val phase: String, val elapsed: Duration) : EditResult
+    public data class NotReady(val readiness: Readiness.NotReady) : EditResult
 }
 
 /** Why an Operation can't be applied. Paths and files are as the agent passed or should pass them. */
 public sealed interface OperationFailure {
-    public data class InvalidPath(val symbol: String, val reason: String) : OperationFailure
-
-    /** [file] is null when the path was resolved project-wide; each candidate names its own file. */
-    public data class Ambiguous(val symbol: String, val file: String?, val candidates: List<SymbolCandidate>) : OperationFailure
-    public data class NotFound(val symbol: String, val file: String?, val suggestions: List<SymbolCandidate>) : OperationFailure
-
-    /** [symbol], passed without a file: so many declarations are named [name] that the index may not have listed them all. */
-    public data class TooManyDeclarations(val symbol: String, val name: String) : OperationFailure
-
-    /** The text at the Symbol's name range isn't its name, so its range can't be trusted. */
-    public data class OutOfSync(val symbol: String, val file: String) : OperationFailure
-
-    /** Something other than whitespace shares 1-based [line] with the Symbol, so it has no whole-line span. */
-    public data class SharedLine(val symbol: String, val file: String, val line: Int) : OperationFailure
+    /** Its Symbol Path or file names no one Symbol, as for any tool. */
+    public data class LookupFailed(val failure: LookupFailure) : OperationFailure
 
     /**
      * [symbol] is in [file] on disk, but an earlier Operation of this Edit removed or renamed it; [suggestions] are
@@ -418,10 +352,6 @@ public sealed interface OperationFailure {
         val count: Int,
         val lines: List<Occurrence>,
     ) : OperationFailure
-
-    public data class FileNotFound(val path: String) : OperationFailure
-    public data class NotKotlin(val path: String) : OperationFailure
-    public data class OutsideProject(val path: String) : OperationFailure
 
     /** [import] isn't one import directive: a dotted name, optionally ending in `.*` or `as Alias`. */
     public data class InvalidImport(val import: String) : OperationFailure

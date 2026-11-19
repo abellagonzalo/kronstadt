@@ -19,6 +19,7 @@ import kronstadt.core.application.FoundSymbol
 import kronstadt.core.application.GetDefinition
 import kronstadt.core.application.GetDefinitionResult
 import kronstadt.core.application.InsertAfter
+import kronstadt.core.application.LookupFailure
 import kronstadt.core.application.Problem
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.ReadSymbolResult
@@ -221,7 +222,7 @@ class KotlinLspContractTest {
         assertEquals("/** Overloads, a property and a function sharing a name, accessors, constructors and local functions. */", calculator[1])
         assertEquals(
             listOf("PLUS/apply", "TIMES/apply", "Operation/apply"),
-            assertIs<ReadSymbolResult.Ambiguous>(read(shapes, "apply")).candidates.map { it.path },
+            assertIs<LookupFailure.Ambiguous>(read(shapes, "apply").lookupFailure()).candidates.map { it.path },
         )
         assertEquals("// TIMES in $shapes, L57-59", assertIs<ReadSymbolResult.Found>(read(shapes, "TIMES")).text.lines().first())
     }
@@ -242,7 +243,7 @@ class KotlinLspContractTest {
         assertEquals("// Int.decorate in $spansKt, L39-39", header(spansKt, "Int.decorate"))
         assertEquals("// List<T>.second in $spansKt, L91-91", header(spansKt, "List<T>.second"))
         assertEquals("// String.firstChar in $spansKt, L93-94", header(spansKt, "String.firstChar"))
-        assertEquals(listOf("String.shout"), assertIs<ReadSymbolResult.NotFound>(read(shapes, "shout")).suggestions.map { it.path })
+        assertEquals(listOf("String.shout"), assertIs<LookupFailure.NotFound>(read(shapes, "shout").lookupFailure()).suggestions.map { it.path })
 
         // A bare name prefers the property; parentheses select the function.
         assertEquals("// size in $spansKt, L46-46", header(spansKt, "Sized/size"))
@@ -252,8 +253,8 @@ class KotlinLspContractTest {
 
         // Constructors and primary-constructor val parameters.
         assertEquals("// Box/constructor(Int) in $spansKt, L55-55", header(spansKt, "Box/constructor(Int)"))
-        assertIs<ReadSymbolResult.SharedLine>(read(spansKt, "Box/width"))
-        assertIs<ReadSymbolResult.NotFound>(read(spansKt, "Box/height"))
+        assertIs<LookupFailure.SharedLine>(read(spansKt, "Box/width").lookupFailure())
+        assertIs<LookupFailure.NotFound>(read(spansKt, "Box/height").lookupFailure())
 
         // Companions, enum entries with bodies, typealiases.
         assertEquals("// create in $spansKt, L61-61", header(spansKt, "Widget/Companion/create"))
@@ -265,9 +266,9 @@ class KotlinLspContractTest {
 
         // Not addressable: accessors, local declarations, lambdas.
         listOf("counter/get", "Hidden/counter/set", "firstChar/get", "outer/local", "LocalClass", "lambda").forEach { path ->
-            assertIs<ReadSymbolResult.NotFound>(read(spansKt, path), path)
+            assertIs<LookupFailure.NotFound>(read(spansKt, path).lookupFailure(), path)
         }
-        assertIs<ReadSymbolResult.NotFound>(read(shapes, "sumOfSquares/square"))
+        assertIs<LookupFailure.NotFound>(read(shapes, "sumOfSquares/square").lookupFailure())
     }
 
     @Test
@@ -284,7 +285,7 @@ class KotlinLspContractTest {
         // Same-named classes in two packages: ambiguous, until a package prefix narrows them.
         assertEquals(
             listOf(SymbolCandidate("Shape", alpha), SymbolCandidate("Shape", beta)),
-            assertIs<ReadSymbolResult.Ambiguous>(read(null, "Shape")).candidates,
+            assertIs<LookupFailure.Ambiguous>(read(null, "Shape").lookupFailure()).candidates,
         )
         assertEquals("// Shape in $alpha, L3-3", header("fixture.alpha/Shape"))
         assertEquals("// Shape in $beta, L3-3", header("fixture.beta/Shape"))
@@ -298,9 +299,9 @@ class KotlinLspContractTest {
         // A miss suggests close names with their files; local declarations stay unaddressable.
         assertEquals(
             listOf(SymbolCandidate("Calculator", shapes)),
-            assertIs<ReadSymbolResult.NotFound>(read(null, "Calculatr")).suggestions,
+            assertIs<LookupFailure.NotFound>(read(null, "Calculatr").lookupFailure()).suggestions,
         )
-        assertIs<ReadSymbolResult.NotFound>(read(null, "sumOfSquares/square"))
+        assertIs<LookupFailure.NotFound>(read(null, "sumOfSquares/square").lookupFailure())
     }
 
     @Test
@@ -669,3 +670,6 @@ class KotlinLspContractTest {
         assertTrue(Files.readString(project.resolve(check)).contains("import fixture.beta.Polygon"))
     }
 }
+
+/** The [LookupFailure] a read reports; fails unless it reports one. */
+private fun ReadSymbolResult.lookupFailure(): LookupFailure = assertIs<ReadSymbolResult.LookupFailed>(this).failure

@@ -6,7 +6,6 @@ import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.FileLayout
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Severity
-import kronstadt.core.domain.SymbolPath
 import kronstadt.core.domain.SymbolSpan
 import kronstadt.core.domain.SymbolTree
 import kronstadt.core.domain.TextDocument
@@ -66,21 +65,13 @@ internal class ShadowWorkspace(
     sealed interface Lookup {
         /** The Symbol at [canonical] and its [span] in [document], the file's current text. */
         data class Found(val document: TextDocument, val canonical: String, val span: SymbolSpan) : Lookup
-        data class Ambiguous(val candidates: List<SymbolCandidate>) : Lookup
-        data class NotFound(val suggestions: List<SymbolCandidate>) : Lookup
+        data class Failed(val failure: LookupFailure) : Lookup
 
         /**
          * The Symbol is in the file as read from disk, but an earlier Operation removed or renamed it; [suggestions]
          * are close names in the current text.
          */
         data class RemovedEarlier(val suggestions: List<SymbolCandidate>) : Lookup
-
-        /** The text at the Symbol's name range isn't its name, so its range can't be trusted. */
-        data class OutOfSync(val canonical: String) : Lookup
-
-        /** Something other than whitespace shares 0-based [line] with the Symbol, so it has no whole-line span. */
-        data class SharedLine(val canonical: String, val line: Int) : Lookup
-        data object FileNotFound : Lookup
     }
 
     /** [file]'s current text, loading it from disk on first touch; null if there's no such file. */
@@ -89,44 +80,39 @@ internal class ShadowWorkspace(
     /** Each file the Edit changed so far, with its text as read from disk. */
     fun editedBases(): Map<Path, TextDocument> = touched.filterValues { it.isEdited }.mapValues { it.value.base.document }
 
-    /** Resolves [symbol] against [file]'s current text, loading the file from disk on first touch. */
-    suspend fun resolve(file: Path, symbol: SymbolPath): Lookup {
-        val found = when (val resolution = resolver.resolveIn(this, file, symbol)) {
-            null -> return Lookup.FileNotFound
-            is SymbolResolver.Resolution.Found -> resolution
-            is SymbolResolver.Resolution.Ambiguous -> return Lookup.Ambiguous(resolution.candidates)
-            is SymbolResolver.Resolution.NotFound ->
-                return if (inBase(file, symbol)) Lookup.RemovedEarlier(resolution.suggestions) else Lookup.NotFound(resolution.suggestions)
-            else -> error("in-file resolution reported $resolution")
+    /** Resolves [parsed] against [file]'s current text, loading the file from disk on first touch. */
+    suspend fun resolve(file: Path, parsed: ParsedLookup): Lookup {
+        val resolution = resolver.resolveIn(this, file, parsed)
+            ?: return Lookup.Failed(LookupFailure.FileNotFound(parsed.file ?: files.display(file)))
+        val found = resolution.getOrElse { failure ->
+            if (failure is LookupFailure.NotFound && inBase(file, parsed)) return Lookup.RemovedEarlier(failure.suggestions)
+            return Lookup.Failed(failure)
         }
-        val canonical = found.tree.canonicalPath(found.node).toString()
-        return when (val computation = SymbolSpan.of(found.document, found.node.symbol)) {
-            is SymbolSpan.Computation.Computed -> Lookup.Found(found.document, canonical, computation.span)
-            SymbolSpan.Computation.OutOfSync -> Lookup.OutOfSync(canonical)
-            is SymbolSpan.Computation.SharedLine -> Lookup.SharedLine(canonical, computation.line)
-        }
+        val span = resolver.span(found).getOrElse { return Lookup.Failed(it) }
+        return Lookup.Found(found.document, found.canonical, span)
     }
 
-    /** Whether [symbol] resolves in [file] as read from disk, which differs from its current text only once edited. */
-    private suspend fun inBase(file: Path, symbol: SymbolPath): Boolean {
+    /** Whether [parsed] resolves in [file] as read from disk, which differs from its current text only once edited. */
+    private suspend fun inBase(file: Path, parsed: ParsedLookup): Boolean {
         val target = touched[file]?.takeIf { it.isEdited } ?: return false
         val base = DocumentSource { analyse(file, target.base.document) }
-        return resolver.resolveIn(base, file, symbol) !is SymbolResolver.Resolution.NotFound
+        val resolution = resolver.resolveIn(base, file, parsed)
+        return !(resolution is Outcome.Failed && resolution.failure is LookupFailure.NotFound)
     }
 
     /**
-     * Where [symbol] is in the current text of the files this Edit has edited, in its package if it names one: what
+     * Where [parsed] is in the current text of the files this Edit has edited, in its package if it names one: what
      * a project-wide lookup, which sees only the disk, can't find.
      */
-    suspend fun findInEdited(symbol: SymbolPath): List<SymbolCandidate> =
+    suspend fun findInEdited(parsed: ParsedLookup): List<SymbolCandidate> =
         touched.filterValues { it.isEdited }.keys.flatMap { file ->
             val current = touched.getValue(file).current
-            if (symbol.packageName != null && current.packageName != symbol.packageName) return@flatMap emptyList()
-            when (val resolution = resolver.resolveIn(this, file, symbol)) {
-                is SymbolResolver.Resolution.Found ->
-                    listOf(SymbolCandidate(resolution.tree.canonicalPath(resolution.node).toString(), files.display(file)))
-                is SymbolResolver.Resolution.Ambiguous -> resolution.candidates
-                else -> emptyList()
+            val packageName = parsed.path.packageName
+            if (packageName != null && current.packageName != packageName) return@flatMap emptyList()
+            when (val resolution = resolver.resolveIn(this, file, parsed)) {
+                is Outcome.Ok -> listOf(SymbolCandidate(resolution.value.canonical, files.display(file)))
+                is Outcome.Failed -> (resolution.failure as? LookupFailure.Ambiguous)?.candidates.orEmpty()
+                null -> emptyList()
             }
         }
 

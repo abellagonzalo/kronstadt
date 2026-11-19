@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.testTimeSource
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Position
+import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextRange
@@ -180,7 +181,7 @@ class FindSymbolTest {
     fun `fails with the phase and elapsed time when the index is not ready in time, without searching`() = runTest {
         val intelligence = intelligence(notReadyPhase = "Indexing")
         val result = FindSymbol(files, intelligence, readinessTimeout = 90.seconds)("UserRepository")
-        assertEquals(FindSymbolResult.NotReady(phase = "Indexing", elapsed = 90.seconds), result)
+        assertEquals(FindSymbolResult.NotReady(Readiness.NotReady(phase = "Indexing", elapsed = 90.seconds)), result)
         assertEquals(emptyList(), intelligence.searched)
     }
 

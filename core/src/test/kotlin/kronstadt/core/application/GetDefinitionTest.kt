@@ -6,6 +6,7 @@ import kronstadt.core.domain.Definition
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.LibrarySource
 import kronstadt.core.domain.Position
+import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolKind
@@ -328,7 +329,7 @@ class GetDefinitionTest {
 
         val result = GetDefinition(files, intelligence, readinessTimeout = 5.seconds)("welcome", "greet", file = callerKt)
 
-        assertEquals(GetDefinitionResult.NotReady("Indexing", 5.seconds), result)
+        assertEquals(GetDefinitionResult.NotReady(Readiness.NotReady("Indexing", 5.seconds)), result)
         assertEquals(emptyList(), intelligence.analysed)
     }
 
@@ -353,7 +354,7 @@ class GetDefinitionTest {
     fun `a package prefix is only for Symbol Paths without a file`() = runTest {
         val (files, intelligence) = project()
 
-        assertIs<GetDefinitionResult.InvalidPath>(GetDefinition(files, intelligence)("com.example/welcome", "greet", file = callerKt))
+        assertIs<LookupFailure.InvalidPath>(GetDefinition(files, intelligence)("com.example/welcome", "greet", file = callerKt).lookupFailure())
     }
 
     @Test

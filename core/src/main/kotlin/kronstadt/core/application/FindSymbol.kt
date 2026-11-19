@@ -29,7 +29,7 @@ public class FindSymbol(
         if (query.isBlank()) return FindSymbolResult.InvalidQuery("query must not be blank")
         if (limit < 1) return FindSymbolResult.InvalidQuery("limit must be at least 1, was $limit")
         val readiness = intelligence.awaitReady(readinessTimeout)
-        if (readiness is Readiness.NotReady) return FindSymbolResult.NotReady(readiness.phase, readiness.elapsed)
+        if (readiness is Readiness.NotReady) return FindSymbolResult.NotReady(readiness)
         val search = intelligence.workspaceSymbols(query)
         val hits = search.symbols
             .filter { (kind == null || it.kind == kind) && inProjectSource(it.file) }
@@ -94,6 +94,6 @@ public sealed interface FindSymbolResult {
     public data class NoMatches(val query: String, val kind: SymbolKind?, val mayBeIncomplete: Boolean) : FindSymbolResult
     public data class InvalidQuery(val reason: String) : FindSymbolResult
 
-    /** The index was still incomplete after waiting [elapsed]; nothing was searched. */
-    public data class NotReady(val phase: String, val elapsed: Duration) : FindSymbolResult
+    /** The index was still incomplete after waiting; nothing was searched. */
+    public data class NotReady(val readiness: Readiness.NotReady) : FindSymbolResult
 }

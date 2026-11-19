@@ -5,6 +5,7 @@ import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.FileChange
 import kronstadt.core.domain.Position
+import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SymbolKind
@@ -86,6 +87,8 @@ class RenameSymbolTest {
             ),
             result,
         )
+        // Resolved without a file, yet the index is waited for only once, up front.
+        assertEquals(1, intelligence.readinessAwaits)
         intelligence.assertOneSessionClosedEverything()
     }
 
@@ -266,7 +269,7 @@ class RenameSymbolTest {
             "Greeter/greet", "hello", file = greeterPath,
         )
 
-        assertEquals(RenameResult.NotReady("Indexing", 5.seconds), result)
+        assertEquals(RenameResult.NotReady(Readiness.NotReady("Indexing", 5.seconds)), result)
         assertEquals(emptyList(), files.written)
     }
 
@@ -274,7 +277,7 @@ class RenameSymbolTest {
     fun `a Symbol Path that matches nothing fails like a kt_edit Operation's`() = runTest {
         val result = RenameSymbol(files(), intelligence())("Greeter/gret", "hello", file = greeterPath)
 
-        val failure = assertIs<OperationFailure.NotFound>(assertIs<RenameResult.Unresolved>(result).failure)
+        val failure = assertIs<LookupFailure.NotFound>(result.lookupFailure())
         assertEquals(listOf(SymbolCandidate("greet", greeterPath)), failure.suggestions)
     }
 

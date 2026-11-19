@@ -6,7 +6,6 @@ import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
 import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.SymbolKind
-import kronstadt.core.domain.SymbolPath
 import kronstadt.core.domain.SymbolTree
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.TextEdit
@@ -30,41 +29,25 @@ public class RenameSymbol(
     private val validationTimeout: Duration = Validation.DEFAULT_TIMEOUT,
     private val writeLock: WriteLock = WriteLock(),
 ) {
-    private val resolver = SymbolResolver(files, intelligence, readinessTimeout)
+    private val resolver = SymbolResolver(files, intelligence)
 
     /** Renames the Symbol at [symbol] to [newName]; [symbol] is resolved in [file], or project-wide without one. */
     public suspend operator fun invoke(symbol: String, newName: String, file: String? = null): RenameResult {
-        val symbolPath = SymbolPath.parse(symbol)
-            .getOrElse { return RenameResult.Unresolved(OperationFailure.InvalidPath(symbol, it.message.orEmpty())) }
-        if (file != null && symbolPath.packageName != null) {
-            return RenameResult.Unresolved(
-                OperationFailure.InvalidPath(symbol, "a package prefix is only for paths without a file; drop it or the file"),
-            )
-        }
+        val parsed = SymbolResolver.parse(file, symbol).getOrElse { return RenameResult.LookupFailed(it) }
         if (!IDENTIFIER.matches(newName)) return RenameResult.InvalidName(newName)
         return writeLock.withLock {
             val readiness = intelligence.awaitReady(readinessTimeout)
-            if (readiness is Readiness.NotReady) return@withLock RenameResult.NotReady(readiness.phase, readiness.elapsed)
-            intelligence.session { session -> rename(session, symbol, symbolPath, file, newName) }
+            if (readiness is Readiness.NotReady) return@withLock RenameResult.NotReady(readiness)
+            intelligence.session { session -> rename(session, parsed, newName) }
         }
     }
 
-    private suspend fun rename(session: AnalysisSession, symbol: String, symbolPath: SymbolPath, path: String?, newName: String): RenameResult {
-        val target = when (val located = locate(session, symbolPath, path)) {
-            is Located.File -> located.file
-            is Located.Failed -> return located.result
-        }
+    private suspend fun rename(session: AnalysisSession, parsed: ParsedLookup, newName: String): RenameResult {
         val shadow = ShadowWorkspace(files, session, resolver, validationTimeout)
-        val shown = files.display(target)
-        val declaration = when (val resolution = resolver.resolveIn(shadow, target, symbolPath)) {
-            null -> return RenameResult.Unresolved(OperationFailure.FileNotFound(path ?: shown))
-            is SymbolResolver.Resolution.Found -> resolution
-            is SymbolResolver.Resolution.Ambiguous -> return RenameResult.Unresolved(OperationFailure.Ambiguous(symbol, shown, resolution.candidates))
-            is SymbolResolver.Resolution.NotFound -> return RenameResult.Unresolved(OperationFailure.NotFound(symbol, shown, resolution.suggestions))
-            else -> error("in-file resolution reported $resolution")
-        }
+        val declaration = resolver.resolve(session, parsed, shadow).getOrElse { return RenameResult.LookupFailed(it) }
+        val target = declaration.file
         val node = declaration.node
-        val canonical = declaration.tree.canonicalPath(node).toString()
+        val canonical = declaration.canonical
         if (node.symbol.kind == SymbolKind.CONSTRUCTOR) return RenameResult.CannotRename(canonical, CONSTRUCTOR)
         val name = node.symbol.selectionRange
         val preparation = session.prepareRename(target, declaration.document, name.start)
@@ -177,32 +160,6 @@ public class RenameSymbol(
         }
     }
 
-    private sealed interface Located {
-        data class File(val file: Path) : Located
-        data class Failed(val result: RenameResult) : Located
-    }
-
-    /** The file the Symbol is declared in: [path], or without one where the project-wide lookup finds it. */
-    private suspend fun locate(session: AnalysisSession, symbolPath: SymbolPath, path: String?): Located {
-        fun failed(failure: OperationFailure) = Located.Failed(RenameResult.Unresolved(failure))
-        if (path != null) {
-            val file = files.resolve(path) ?: return failed(OperationFailure.OutsideProject(path))
-            if (!AnalysedFile.isKotlin(file)) return failed(OperationFailure.NotKotlin(path))
-            return Located.File(file)
-        }
-        val symbol = symbolPath.toString()
-        return when (val resolution = resolver.resolve(session, null, symbolPath)) {
-            is SymbolResolver.Resolution.Found -> Located.File(resolution.file)
-            is SymbolResolver.Resolution.Ambiguous -> failed(OperationFailure.Ambiguous(symbol, null, resolution.candidates))
-            is SymbolResolver.Resolution.NotFound -> failed(OperationFailure.NotFound(symbol, null, resolution.suggestions))
-            is SymbolResolver.Resolution.NotReady -> Located.Failed(RenameResult.NotReady(resolution.phase, resolution.elapsed))
-            is SymbolResolver.Resolution.TooManyDeclarations -> failed(OperationFailure.TooManyDeclarations(symbol, resolution.name))
-            is SymbolResolver.Resolution.FileNotFound -> failed(OperationFailure.FileNotFound(resolution.path))
-            is SymbolResolver.Resolution.NotKotlin -> failed(OperationFailure.NotKotlin(resolution.path))
-            is SymbolResolver.Resolution.OutsideProject -> failed(OperationFailure.OutsideProject(resolution.path))
-        }
-    }
-
     private companion object {
         /** A plain Kotlin identifier, or any name in backticks. */
         val IDENTIFIER = Regex("[\\p{L}_][\\p{L}\\p{Nd}_]*|`[^`\\r\\n]+`")
@@ -243,8 +200,8 @@ public sealed interface RenameResult {
         val importsRemoved: List<RemovedImport> = emptyList(),
     ) : RenameResult
 
-    /** The Symbol Path or file doesn't name exactly one Symbol; the same failures as for a kt_edit Operation's target. */
-    public data class Unresolved(val failure: OperationFailure) : RenameResult
+    /** The Symbol Path or file doesn't name exactly one Symbol. */
+    public data class LookupFailed(val failure: LookupFailure) : RenameResult
 
     /** [name] isn't a Kotlin identifier (plain, or in backticks); nothing was asked or written. */
     public data class InvalidName(val name: String) : RenameResult
@@ -267,6 +224,6 @@ public sealed interface RenameResult {
     /** Validation's diagnostics took longer than its timeout; nothing was written. */
     public data object ValidationTimedOut : RenameResult
 
-    /** The index was still incomplete after waiting [elapsed]; nothing was written. */
-    public data class NotReady(val phase: String, val elapsed: Duration) : RenameResult
+    /** The index was still incomplete after waiting; nothing was written. */
+    public data class NotReady(val readiness: Readiness.NotReady) : RenameResult
 }
