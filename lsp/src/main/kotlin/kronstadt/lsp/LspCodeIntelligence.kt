@@ -34,6 +34,7 @@ import org.eclipse.lsp4j.DidOpenTextDocumentParams
 import org.eclipse.lsp4j.DidSaveTextDocumentParams
 import org.eclipse.lsp4j.DiagnosticCapabilities
 import org.eclipse.lsp4j.DocumentDiagnosticParams
+import org.eclipse.lsp4j.DocumentSymbol
 import org.eclipse.lsp4j.DocumentSymbolCapabilities
 import org.eclipse.lsp4j.DocumentSymbolParams
 import org.eclipse.lsp4j.ExecuteCommandParams
@@ -51,6 +52,7 @@ import org.eclipse.lsp4j.RenameCapabilities
 import org.eclipse.lsp4j.RenameParams
 import org.eclipse.lsp4j.ResourceOperationKind
 import org.eclipse.lsp4j.ShowMessageRequestParams
+import org.eclipse.lsp4j.SymbolInformation
 import org.eclipse.lsp4j.TextDocumentClientCapabilities
 import org.eclipse.lsp4j.TextDocumentContentChangeEvent
 import org.eclipse.lsp4j.TextDocumentIdentifier
@@ -66,6 +68,7 @@ import org.eclipse.lsp4j.WorkspaceEditCapabilities
 import org.eclipse.lsp4j.WorkspaceFolder
 import org.eclipse.lsp4j.WorkspaceSymbolParams
 import org.eclipse.lsp4j.jsonrpc.ResponseErrorException
+import org.eclipse.lsp4j.jsonrpc.messages.Either
 import org.eclipse.lsp4j.jsonrpc.services.JsonNotification
 import org.eclipse.lsp4j.launch.LSPLauncher
 import org.eclipse.lsp4j.services.LanguageClient
@@ -124,6 +127,10 @@ public class LspCodeIntelligence private constructor(
     /** The readiness signals kotlin-lsp sends from here on; see [ReadinessTracker.signals]. */
     internal val readinessSignals: SharedFlow<ReadinessSignal> get() = readiness.signals
 
+    /** kotlin-lsp's hierarchical `documentSymbol` answer for [document], unmapped, so contract tests can pin what it reports. */
+    internal suspend fun reportedDocumentSymbols(file: Path, document: TextDocument): List<DocumentSymbol> =
+        session { (it as Session).reportedSymbols(file, document) }.orEmpty().map { it.right }
+
     /** The documents one tool call holds open: its first analysis of a file counts it as one more holder. */
     private inner class Session : AnalysisSession {
         /** Guarded by [syncLock], like [openDocuments]. */
@@ -131,10 +138,14 @@ public class LspCodeIntelligence private constructor(
         private var ended = false
 
         override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> {
+            return LspMapping.documentSymbols(reportedSymbols(file, document), document)
+        }
+
+        /** kotlin-lsp's own `documentSymbol` answer for [document], before mapping. */
+        suspend fun reportedSymbols(file: Path, document: TextDocument): List<Either<SymbolInformation, DocumentSymbol>>? {
             val uri = LspMapping.uri(file)
             sync(uri, document)
-            val result = request { server.textDocumentService.documentSymbol(DocumentSymbolParams(TextDocumentIdentifier(uri))) }
-            return LspMapping.documentSymbols(result, document)
+            return request { server.textDocumentService.documentSymbol(DocumentSymbolParams(TextDocumentIdentifier(uri))) }
         }
 
         /** Pulls `textDocument/diagnostic` for [document]. */

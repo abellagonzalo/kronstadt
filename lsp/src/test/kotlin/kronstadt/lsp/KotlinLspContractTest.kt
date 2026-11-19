@@ -42,6 +42,8 @@ import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.TextEdit
 import kronstadt.core.domain.TextRange
 import kronstadt.workspace.LocalFileStore
+import org.eclipse.lsp4j.DocumentSymbol
+import org.eclipse.lsp4j.SymbolKind as LspSymbolKind
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.MethodOrderer
@@ -209,23 +211,36 @@ class KotlinLspContractTest {
 
     /**
      * kotlin-lsp can't tell `val` from `var`: it reports a constructor property as `Variable` and any other property as
-     * `Property` either way, with the same `detail` (`: Int`) and no tags, and doesn't report locals at all. So the kind
-     * comes from the declaration's own source text.
+     * `Property` either way, with the same `detail` and no tags, and doesn't report locals at all. So the kind comes from
+     * the declaration's own source text.
      */
     @Test
     @Order(9)
     fun `val and var come from the declaration, wherever the property is declared, and locals aren't reported`() = runBlocking<Unit> {
         val path = "src/main/kotlin/fixture/Mutability.kt"
         val file = project.resolve(path)
-        val symbols = lsp.session { it.documentSymbols(file, TextDocument(Files.readString(file))) }
-        fun kindAndType(vararg path: String) = symbols.find(*path).let { it.kind to it.type }
-        assertEquals(SymbolKind.PROPERTY to ": Int", kindAndType("Mutability", "ctorVal"))
-        assertEquals(SymbolKind.VARIABLE to ": Int", kindAndType("Mutability", "ctorVar"))
-        assertEquals(SymbolKind.PROPERTY to ": Int", kindAndType("Mutability", "bodyVal"))
-        assertEquals(SymbolKind.VARIABLE to ": Int", kindAndType("Mutability", "bodyVar"))
-        assertEquals(SymbolKind.PROPERTY to ": Int", kindAndType("topLevelVal"))
-        assertEquals(SymbolKind.VARIABLE to ": Int", kindAndType("topLevelVar"))
-        assertEquals(emptyList(), symbols.find("Mutability", "withLocals").children)
+        val document = TextDocument(Files.readString(file))
+
+        val reported = lsp.reportedDocumentSymbols(file, document)
+        fun reported(vararg path: String): DocumentSymbol =
+            path.drop(1).fold(reported.single { it.name == path[0] }) { parent, name -> parent.children.single { it.name == name } }
+        fun kindDetailTags(vararg path: String) = reported(*path).let { Triple(it.kind, it.detail, it.tags.orEmpty()) }
+        assertEquals(Triple(LspSymbolKind.Variable, ": Int", emptyList()), kindDetailTags("Mutability", "ctorVal"))
+        assertEquals(Triple(LspSymbolKind.Variable, ": Int", emptyList()), kindDetailTags("Mutability", "ctorVar"))
+        assertEquals(Triple(LspSymbolKind.Property, ": Int", emptyList()), kindDetailTags("Mutability", "bodyVal"))
+        assertEquals(Triple(LspSymbolKind.Property, ": Int", emptyList()), kindDetailTags("Mutability", "bodyVar"))
+        assertEquals(Triple(LspSymbolKind.Property, ": Int", emptyList()), kindDetailTags("topLevelVal"))
+        assertEquals(Triple(LspSymbolKind.Property, ": Int", emptyList()), kindDetailTags("topLevelVar"))
+        assertEquals(emptyList(), reported("Mutability", "withLocals").children.orEmpty())
+
+        val symbols = lsp.session { it.documentSymbols(file, document) }
+        fun kind(vararg path: String) = symbols.find(*path).kind
+        assertEquals(SymbolKind.PROPERTY, kind("Mutability", "ctorVal"))
+        assertEquals(SymbolKind.VARIABLE, kind("Mutability", "ctorVar"))
+        assertEquals(SymbolKind.PROPERTY, kind("Mutability", "bodyVal"))
+        assertEquals(SymbolKind.VARIABLE, kind("Mutability", "bodyVar"))
+        assertEquals(SymbolKind.PROPERTY, kind("topLevelVal"))
+        assertEquals(SymbolKind.VARIABLE, kind("topLevelVar"))
 
         val structure = assertIs<ReadStructureResult.Structure>(ReadStructure(files, lsp)(path, xml = false)).text
         assertEquals(

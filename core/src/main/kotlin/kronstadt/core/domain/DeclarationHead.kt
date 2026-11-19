@@ -2,7 +2,8 @@ package kronstadt.core.domain
 
 /**
  * A declaration's contract without its body: from its first line (KDoc, annotations, modifiers) to just before the body
- * or initializer. Found by text after the name, so it works on any Kotlin source, a library's included.
+ * or initializer, and what the keywords before its name say. Found by text around the name, so it works on any Kotlin
+ * source, a library's included.
  */
 public object DeclarationHead {
     private val ACCESSOR = Regex("""^((private|protected|internal|public)\s+)?(get|set)\b""")
@@ -42,16 +43,21 @@ public object DeclarationHead {
     }
 
     /**
-     * The keyword, `val` or `var`, that declares the property [symbol] in [document]: the last one between the start of
-     * its range and its name, so none in its KDoc, comments or annotations counts. Null if there is none, as for a plain
-     * constructor parameter, or if [symbol] lies outside [document].
+     * Whether the property [symbol] in [document] is declared `val` ([SymbolKind.PROPERTY]) or `var`
+     * ([SymbolKind.VARIABLE]), by the last of those keywords between the start of its range and its name, so none in its
+     * KDoc, comments or annotations counts. Null if there is none, as for a plain constructor parameter, or if [symbol]
+     * lies outside [document].
      */
-    public fun bindingKeyword(document: TextDocument, symbol: CodeSymbol): String? {
+    public fun propertyKind(document: TextDocument, symbol: CodeSymbol): SymbolKind? {
         val start = symbol.range.start
         val name = symbol.selectionRange.start
         if (name.line >= document.lineCount || start > name) return null
         val text = document.text.substring(document.offsetOf(start), document.offsetOf(name))
-        return BINDING.findAll(text).lastOrNull()?.value
+        return when (BINDING.findAll(text).lastOrNull()?.value) {
+            "val" -> SymbolKind.PROPERTY
+            "var" -> SymbolKind.VARIABLE
+            else -> null
+        }
     }
 
     private fun lineEnd(text: String, from: Int) = text.indexOf('\n', from).let { if (it < 0) text.length else it }

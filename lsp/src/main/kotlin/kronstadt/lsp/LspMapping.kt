@@ -71,20 +71,10 @@ internal object LspMapping {
             parameterTypes = parts.parameterTypes,
             type = parts.type,
         )
-        return symbol.copy(kind = propertyKind(document, symbol))
-    }
-
-    /**
-     * kotlin-lsp reports `val` and `var` alike, a constructor property as `Variable` and any other as `Property`, with the
-     * same `detail` and no tags, so a property's own declaration says which it is. Other kinds are left as mapped.
-     */
-    private fun propertyKind(document: TextDocument, symbol: CodeSymbol): SymbolKind {
-        if (symbol.kind != SymbolKind.PROPERTY && symbol.kind != SymbolKind.VARIABLE) return symbol.kind
-        return when (DeclarationHead.bindingKeyword(document, symbol)) {
-            "val" -> SymbolKind.PROPERTY
-            "var" -> SymbolKind.VARIABLE
-            else -> symbol.kind
-        }
+        // kotlin-lsp reports `val` and `var` alike, a constructor property as `Variable` and any other as `Property`, with
+        // the same `detail` and no tags, so a property's own declaration says which it is.
+        if (kind != SymbolKind.PROPERTY && kind != SymbolKind.VARIABLE) return symbol
+        return symbol.copy(kind = DeclarationHead.propertyKind(document, symbol) ?: kind)
     }
 
     /** The parts of kotlin-lsp's `documentSymbol.detail` that [CodeSymbol] carries. */
