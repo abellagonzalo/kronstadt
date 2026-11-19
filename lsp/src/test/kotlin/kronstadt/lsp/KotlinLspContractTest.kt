@@ -21,6 +21,8 @@ import kronstadt.core.application.GetDefinitionResult
 import kronstadt.core.application.InsertAfter
 import kronstadt.core.application.LookupFailure
 import kronstadt.core.application.Problem
+import kronstadt.core.application.ReadStructure
+import kronstadt.core.application.ReadStructureResult
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.ReadSymbolResult
 import kronstadt.core.application.RenameResult
@@ -203,6 +205,43 @@ class KotlinLspContractTest {
         assertEquals(listOf(null, null, ": Int"), parts(symbols.find("Documented", "annotated")))
         assertEquals(listOf(null, "String", "(String)"), parts(symbols.find("Color").children.single { it.kind == SymbolKind.CONSTRUCTOR }))
         assertEquals(listOf(null, null, null), parts(symbols.find("Documented")))
+    }
+
+    /**
+     * kotlin-lsp can't tell `val` from `var`: it reports a constructor property as `Variable` and any other property as
+     * `Property` either way, with the same `detail` (`: Int`) and no tags, and doesn't report locals at all. So the kind
+     * comes from the declaration's own source text.
+     */
+    @Test
+    @Order(9)
+    fun `val and var come from the declaration, wherever the property is declared, and locals aren't reported`() = runBlocking<Unit> {
+        val path = "src/main/kotlin/fixture/Mutability.kt"
+        val file = project.resolve(path)
+        val symbols = lsp.session { it.documentSymbols(file, TextDocument(Files.readString(file))) }
+        fun kindAndType(vararg path: String) = symbols.find(*path).let { it.kind to it.type }
+        assertEquals(SymbolKind.PROPERTY to ": Int", kindAndType("Mutability", "ctorVal"))
+        assertEquals(SymbolKind.VARIABLE to ": Int", kindAndType("Mutability", "ctorVar"))
+        assertEquals(SymbolKind.PROPERTY to ": Int", kindAndType("Mutability", "bodyVal"))
+        assertEquals(SymbolKind.VARIABLE to ": Int", kindAndType("Mutability", "bodyVar"))
+        assertEquals(SymbolKind.PROPERTY to ": Int", kindAndType("topLevelVal"))
+        assertEquals(SymbolKind.VARIABLE to ": Int", kindAndType("topLevelVar"))
+        assertEquals(emptyList(), symbols.find("Mutability", "withLocals").children)
+
+        val structure = assertIs<ReadStructureResult.Structure>(ReadStructure(files, lsp)(path, xml = false)).text
+        assertEquals(
+            """
+            class Mutability  // L3-15
+              constructor  (Int, Int, Int)  // L4-4
+              val ctorVal  : Int  // L4-4
+              var ctorVar  : Int  // L4-4
+              val bodyVal  : Int  // L5-5
+              var bodyVar  : Int  // L7-7
+              fun withLocals  (): Int  // L9-14
+            val topLevelVal  : Int  // L17-17
+            var topLevelVar  : Int  // L19-19
+            """.trimIndent(),
+            structure,
+        )
     }
 
     private val files by lazy { LocalFileStore(project) }

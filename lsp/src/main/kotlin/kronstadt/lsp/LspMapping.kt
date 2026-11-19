@@ -1,6 +1,7 @@
 package kronstadt.lsp
 
 import kronstadt.core.domain.CodeSymbol
+import kronstadt.core.domain.DeclarationHead
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.FileChange
 import kronstadt.core.domain.Position
@@ -57,19 +58,33 @@ internal object LspMapping {
         else -> SymbolKind.OTHER
     }
 
-    fun documentSymbol(s: DocumentSymbol): CodeSymbol {
+    fun documentSymbol(s: DocumentSymbol, document: TextDocument): CodeSymbol {
         val kind = kind(s.kind)
         val parts = detailParts(kind, s.detail)
-        return CodeSymbol(
+        val symbol = CodeSymbol(
             name = s.name,
             kind = kind,
             range = range(s.range),
             selectionRange = range(s.selectionRange),
-            children = s.children.orEmpty().map(::documentSymbol),
+            children = s.children.orEmpty().map { documentSymbol(it, document) },
             receiver = parts.receiver,
             parameterTypes = parts.parameterTypes,
             type = parts.type,
         )
+        return symbol.copy(kind = propertyKind(document, symbol))
+    }
+
+    /**
+     * kotlin-lsp reports `val` and `var` alike, a constructor property as `Variable` and any other as `Property`, with the
+     * same `detail` and no tags, so a property's own declaration says which it is. Other kinds are left as mapped.
+     */
+    private fun propertyKind(document: TextDocument, symbol: CodeSymbol): SymbolKind {
+        if (symbol.kind != SymbolKind.PROPERTY && symbol.kind != SymbolKind.VARIABLE) return symbol.kind
+        return when (DeclarationHead.bindingKeyword(document, symbol)) {
+            "val" -> SymbolKind.PROPERTY
+            "var" -> SymbolKind.VARIABLE
+            else -> symbol.kind
+        }
     }
 
     /** The parts of kotlin-lsp's `documentSymbol.detail` that [CodeSymbol] carries. */
@@ -124,10 +139,10 @@ internal object LspMapping {
      * Servers that ignore our hierarchical capability return flat [SymbolInformation].
      * Those carry no separate name range, so the declaration range stands in for both.
      */
-    fun documentSymbols(result: List<Either<SymbolInformation, DocumentSymbol>>?): List<CodeSymbol> =
+    fun documentSymbols(result: List<Either<SymbolInformation, DocumentSymbol>>?, document: TextDocument): List<CodeSymbol> =
         result.orEmpty().map { either ->
             if (either.isRight) {
-                documentSymbol(either.right)
+                documentSymbol(either.right, document)
             } else {
                 val info = either.left
                 CodeSymbol(info.name, kind(info.kind), range(info.location.range), range(info.location.range))

@@ -134,7 +134,7 @@ public class LspCodeIntelligence private constructor(
             val uri = LspMapping.uri(file)
             sync(uri, document)
             val result = request { server.textDocumentService.documentSymbol(DocumentSymbolParams(TextDocumentIdentifier(uri))) }
-            return LspMapping.documentSymbols(result)
+            return LspMapping.documentSymbols(result, document)
         }
 
         /** Pulls `textDocument/diagnostic` for [document]. */
@@ -336,7 +336,8 @@ public class LspCodeIntelligence private constructor(
             }.getOrNull()
         } ?: return null
         val symbols = request { server.textDocumentService.documentSymbol(DocumentSymbolParams(TextDocumentIdentifier(uri))) }
-        return LibrarySource(TextDocument(text), LspMapping.documentSymbols(symbols))
+        val document = TextDocument(text)
+        return LibrarySource(document, LspMapping.documentSymbols(symbols, document))
     }
 
     private suspend fun <T> request(call: () -> CompletableFuture<T>): T = awaitAlive(process, requestTimeout, call())

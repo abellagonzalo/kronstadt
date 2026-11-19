@@ -7,6 +7,8 @@ package kronstadt.core.domain
 public object DeclarationHead {
     private val ACCESSOR = Regex("""^((private|protected|internal|public)\s+)?(get|set)\b""")
 
+    private val BINDING = Regex("""\b(val|var)\b""")
+
     /**
      * The head of [symbol] in [document], starting at 0-based line [firstLine]. It ends at the first `{` or `=` after
      * the name that isn't nested in brackets, at a delegating `by`, or before a property's accessor on a new line;
@@ -37,6 +39,19 @@ public object DeclarationHead {
             i++
         }
         return text.substring(start, minOf(i, end)).trimEnd()
+    }
+
+    /**
+     * The keyword, `val` or `var`, that declares the property [symbol] in [document]: the last one between the start of
+     * its range and its name, so none in its KDoc, comments or annotations counts. Null if there is none, as for a plain
+     * constructor parameter, or if [symbol] lies outside [document].
+     */
+    public fun bindingKeyword(document: TextDocument, symbol: CodeSymbol): String? {
+        val start = symbol.range.start
+        val name = symbol.selectionRange.start
+        if (name.line >= document.lineCount || start > name) return null
+        val text = document.text.substring(document.offsetOf(start), document.offsetOf(name))
+        return BINDING.findAll(text).lastOrNull()?.value
     }
 
     private fun lineEnd(text: String, from: Int) = text.indexOf('\n', from).let { if (it < 0) text.length else it }

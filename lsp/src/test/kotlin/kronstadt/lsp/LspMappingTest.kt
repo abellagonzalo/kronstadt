@@ -2,6 +2,7 @@ package kronstadt.lsp
 
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolSearch
+import kronstadt.core.domain.TextDocument
 import org.eclipse.lsp4j.DocumentSymbol
 import org.eclipse.lsp4j.Location
 import org.eclipse.lsp4j.Position
@@ -22,7 +23,7 @@ class LspMappingTest {
     fun `maps hierarchical document symbols with children`() {
         val method = DocumentSymbol("find", LspSymbolKind.Method, range(2, 4), range(2, 2), "(String): Repo?")
         val clazz = DocumentSymbol("Repo", LspSymbolKind.Class, range(0, 5), range(0, 0), null, listOf(method))
-        val result = LspMapping.documentSymbols(listOf(Either.forRight(clazz)))
+        val result = LspMapping.documentSymbols(listOf(Either.forRight(clazz)), TextDocument(""))
 
         val mapped = result.single()
         assertEquals(SymbolKind.CLASS, mapped.kind)
@@ -33,7 +34,7 @@ class LspMappingTest {
 
     /** The receiver, Signature and type mapped from a kotlin-lsp `documentSymbol` of [kind] whose `detail` is [detail]. */
     private fun parts(kind: LspSymbolKind, detail: String?) =
-        LspMapping.documentSymbol(DocumentSymbol("s", kind, range(0, 1), range(0, 0), detail))
+        LspMapping.documentSymbol(DocumentSymbol("s", kind, range(0, 1), range(0, 0), detail), TextDocument(""))
             .let { listOf(it.receiver, it.parameterTypes, it.type) }
 
     @Test
@@ -75,10 +76,48 @@ class LspMappingTest {
         assertEquals(listOf(null, null, "(String)"), parts(LspSymbolKind.Class, "(String)"))
     }
 
+    /** The kind mapped from a kotlin-lsp `documentSymbol` of [kind] for [declaration], named [name], inside [text]. */
+    private fun mappedKind(kind: LspSymbolKind, text: String, declaration: String, name: String): SymbolKind {
+        val document = TextDocument(text)
+        fun at(offset: Int) = document.positionOf(offset).let { Position(it.line, it.character) }
+        val start = text.indexOf(declaration).also { check(it >= 0) { declaration } }
+        val nameStart = text.indexOf(name, start).also { check(it >= 0) { name } }
+        val range = Range(at(start), at(start + declaration.length))
+        val selection = Range(at(nameStart), at(nameStart + name.length))
+        return LspMapping.documentSymbol(DocumentSymbol(name, kind, range, selection, ": Int"), document).kind
+    }
+
+    @Test
+    fun `a property is val or var as its declaration says, whatever kind kotlin-lsp reports`() {
+        val text = """
+            class Box(private val width: Int, var height: Int) {
+                /** Says var, but is a val. */
+                @Volatile val area: Int = 0
+
+                internal var `var`: Int = 0
+
+                val <T> List<T>.second: T get() = this[1]
+            }
+        """.trimIndent()
+        // kotlin-lsp reports a constructor property as Variable and any other property as Property, val or var alike.
+        assertEquals(SymbolKind.PROPERTY, mappedKind(LspSymbolKind.Variable, text, "private val width: Int", "width"))
+        assertEquals(SymbolKind.VARIABLE, mappedKind(LspSymbolKind.Variable, text, "var height: Int", "height"))
+        assertEquals(SymbolKind.PROPERTY, mappedKind(LspSymbolKind.Property, text, "/** Says var, but is a val. */\n    @Volatile val area: Int = 0", "area"))
+        assertEquals(SymbolKind.VARIABLE, mappedKind(LspSymbolKind.Property, text, "internal var `var`: Int = 0", "`var`"))
+        assertEquals(SymbolKind.PROPERTY, mappedKind(LspSymbolKind.Property, text, "val <T> List<T>.second: T get() = this[1]", "second"))
+    }
+
+    @Test
+    fun `a property whose declaration shows neither val nor var keeps the kind kotlin-lsp reports`() {
+        val text = "class Box(width: Int)\n"
+        assertEquals(SymbolKind.VARIABLE, mappedKind(LspSymbolKind.Variable, text, "width: Int", "width"))
+        assertEquals(SymbolKind.PROPERTY, mappedKind(LspSymbolKind.Field, text, "width: Int", "width"))
+    }
+
     @Test
     fun `falls back gracefully for flat symbol information`() {
         val info = SymbolInformation("Repo", LspSymbolKind.Interface, Location("file:///p/Repo.kt", range(0, 3)))
-        val mapped = LspMapping.documentSymbols(listOf(Either.forLeft(info))).single()
+        val mapped = LspMapping.documentSymbols(listOf(Either.forLeft(info)), TextDocument("")).single()
         assertEquals(SymbolKind.INTERFACE, mapped.kind)
         assertEquals(mapped.range, mapped.selectionRange)
     }
