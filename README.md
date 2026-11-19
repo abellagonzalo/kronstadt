@@ -12,7 +12,7 @@ backed by JetBrains' [kotlin-lsp](https://github.com/Kotlin/kotlin-lsp) (see ADR
 | `kt_read_symbol` | ✅ | One declaration's exact source (KDoc, annotations, body), addressed by Symbol Path, e.g. `Calculator/parse(String)`; the file is optional (`com.example.a/Config` narrows by package) |
 | `kt_find_usages` | ✅ | Every Usage of a Symbol in main and test source, grouped by file and by the canonical Symbol Path containing it; imports only counted, at most 100 Usages in whole files, `file` shows one file |
 | `kt_get_definition` | ✅ | Where a name used inside a Symbol is declared (`at` picks one occurrence): a project declaration's KDoc and declaration without the body, a local's enclosing Symbol, or a library's fully qualified name, jar and KDoc and declaration, read-only |
-| `kt_edit` | ✅ | An ordered batch of Operations (`replace`, `insert_before`, `insert_after`, `delete`, `edit_in` on a Symbol or a whole file), possibly across files, each optionally listing `imports` to add; validated once and written all-or-nothing, only if it adds no compiler errors |
+| `kt_edit` | ✅ | An ordered batch of Operations (`replace`, `insert_before`, `insert_after`, `delete`, `edit_in` on a Symbol or a whole file), possibly across files, each optionally listing `imports` to add, and removing the imports the Edit made unused; validated once and written all-or-nothing, only if it adds no compiler errors |
 | `kt_rename_symbol` | ✅ | Renames a Symbol and every reference across files and modules through kotlin-lsp, and the file of a class named like it (never onto an existing file); validated and written all-or-nothing like `kt_edit`; reports each changed file's references, imports kotlin-lsp removed and the new canonical path |
 
 ## Architecture

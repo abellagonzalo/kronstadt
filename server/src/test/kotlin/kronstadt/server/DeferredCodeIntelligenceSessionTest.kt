@@ -86,6 +86,7 @@ private class RecordingIntelligence : CodeIntelligence {
                 override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> = emptyList()
                 override suspend fun prepareRename(file: Path, document: TextDocument, position: Position) = RenamePreparation.Refused("unsupported")
                 override suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String) = Rename.Refused("unsupported")
+                override suspend fun organizeImports(file: Path, document: TextDocument): TextDocument? = null
                 override suspend fun writtenBack(file: Path, document: TextDocument) {
                     events += "written back ${file.fileName}"
                 }

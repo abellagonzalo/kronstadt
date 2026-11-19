@@ -15,6 +15,13 @@ internal class ImportDirective(
 
     override fun hashCode(): Int = key.hashCode()
 
+    /** Whether this is a star import, e.g. `a.b.*`. */
+    val isStar: Boolean get() = key.endsWith(".*")
+
+    /** Whether [star], a star import, brings this directive's name into scope too: it imports from that package, without an alias. */
+    fun isCoveredBy(star: ImportDirective): Boolean =
+        star.isStar && !isStar && " as " !in key && key.substringBeforeLast('.') + ".*" == star.key
+
     /** The directive as a line of a file. */
     val line: String get() = "import $text"
 
@@ -74,4 +81,68 @@ private fun TextDocument.insertedInto(scanned: List<FileHeader.ScannedImport>, m
         lines.add(at, ListLine(directive.line, directive))
     }
     return LineSplice(first..last, lines.map { it.text })
+}
+
+/** The imports [removingImports] removes, and the [splice] that removes them. */
+internal class ImportRemoval(val removed: List<ImportDirective>, val splice: LineSplice)
+
+/**
+ * The imports of this file that [organized], its text after the code intelligence organized its imports, no longer has:
+ * those it found unused. One it merely respelled is kept: an explicit import whose package [organized] newly imports
+ * with a star, and a star import whose package it newly imports by name.
+ */
+internal fun TextDocument.importsDroppedIn(organized: TextDocument): Set<ImportDirective> {
+    val own = FileHeader.of(text).imports.map { it.directive }
+    val left = FileHeader.of(organized.text).imports.map { it.directive }.toSet()
+    val (newStars, newNames) = left.filter { it !in own }.partition { it.isStar }
+    return own.filterTo(mutableSetOf()) { directive ->
+        directive !in left && newStars.none(directive::isCoveredBy) && newNames.none { it.isCoveredBy(directive) }
+    }
+}
+
+/**
+ * The removal of those of [drop] this file has, each with its line; null if none goes. Only an import alone on its line
+ * goes, so one sharing it with another import, the package line or a comment stays. Nothing else in the import list
+ * changes, except that a blank line goes where a removed import would leave it next to another blank line or at the
+ * list's start or end; an emptied list goes with the blank line that set it apart, so no stray one stays.
+ */
+internal fun TextDocument.removingImports(drop: Set<ImportDirective>): ImportRemoval? {
+    val header = FileHeader.of(text)
+    val removed = header.imports.filter { it.directive in drop && heldAlone(it) }
+    if (removed.isEmpty()) return null
+    val first = positionOf(header.imports.first().start).line
+    val last = positionOf(header.imports.last().end).line
+    val gone = removed.map { positionOf(it.start).line }.toSet()
+    val kept = mutableListOf<String>()
+    var removedSinceKept = false
+    for (n in first..last) {
+        when {
+            n in gone -> removedSinceKept = true
+            line(n).isBlank() && removedSinceKept && kept.lastOrNull()?.isBlank() != false -> {}
+            else -> {
+                kept += line(n)
+                removedSinceKept = false
+            }
+        }
+    }
+    // The list ends with an import, so a blank line left at its end bordered a removed one.
+    val lines = kept.dropLastWhile { it.isBlank() }
+    val directives = removed.map { it.directive }
+    if (lines.isNotEmpty()) return ImportRemoval(directives, LineSplice(first..last, lines))
+    val apart = first == 0 || line(first - 1).isBlank()
+    val emptied = when {
+        // The last line of a file ending in a line break is the empty one after it, not a blank line of its own.
+        apart && last + 1 < lineCount - 1 && line(last + 1).isBlank() -> first..(last + 1)
+        first > 0 && line(first - 1).isBlank() -> (first - 1)..last
+        else -> first..last
+    }
+    return ImportRemoval(directives, LineSplice(emptied, emptyList()))
+}
+
+/** Whether [scanned] starts its line and nothing but whitespace or a `;` follows it there. */
+private fun TextDocument.heldAlone(scanned: FileHeader.ScannedImport): Boolean {
+    val start = positionOf(scanned.start)
+    val end = positionOf(scanned.end)
+    return start.line == end.line && line(start.line).take(start.character).isBlank() &&
+        line(end.line).drop(end.character).trim().let { it.isEmpty() || it == ";" }
 }

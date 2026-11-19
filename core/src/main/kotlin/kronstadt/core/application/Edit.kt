@@ -1,5 +1,6 @@
 package kronstadt.core.application
 
+import kronstadt.core.domain.FileHeader
 import kronstadt.core.domain.FileLayout
 import kronstadt.core.domain.ImportDirective
 import kronstadt.core.domain.Position
@@ -7,6 +8,8 @@ import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolPath
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.addingImports
+import kronstadt.core.domain.importsDroppedIn
+import kronstadt.core.domain.removingImports
 import kronstadt.core.domain.Validation
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
@@ -121,16 +124,22 @@ public class Edit(
             if (readiness is Readiness.NotReady) return@withLock EditResult.NotReady(readiness.phase, readiness.elapsed)
             intelligence.session { session ->
                 val shadow = ShadowWorkspace(files, session, resolver, validationTimeout)
+                val listed = mutableMapOf<Path, MutableSet<ImportDirective>>()
                 operations.zip(paths).forEachIndexed { index, (operation, symbolPath) ->
                     when (val applied = apply(session, shadow, operation, symbolPath)) {
-                        is Applied.Done -> addImports(shadow, applied.file, imports[index])
+                        is Applied.Done -> {
+                            addImports(shadow, applied.file, imports[index])
+                            listed.getOrPut(applied.file) { mutableSetOf() } += imports[index]
+                        }
                         is Applied.Failed -> return@session EditResult.OperationFailed(index, applied.failure)
                         is Applied.NotReady -> return@session EditResult.NotReady(applied.phase, applied.elapsed)
                     }
                 }
+                val removed = removeImportsMadeUnused(session, shadow, listed)
                 when (val validated = shadow.validate()) {
                     is ShadowWorkspace.Validated.Passed -> when (val writeBack = shadow.writeBack()) {
-                        ShadowWorkspace.WriteBack.Written -> EditResult.Written(validated.files)
+                        ShadowWorkspace.WriteBack.Written ->
+                            EditResult.Written(validated.files.map { it.copy(importsRemoved = removed[it.file].orEmpty()) })
                         is ShadowWorkspace.WriteBack.ChangedOnDisk -> EditResult.ChangedOnDisk(writeBack.file)
                         is ShadowWorkspace.WriteBack.TargetExists -> error("an Edit moves no file, yet Write-back found ${writeBack.file} moved")
                         is ShadowWorkspace.WriteBack.Partial ->
@@ -231,6 +240,29 @@ public class Edit(
         shadow.replaceLines(file, splice.lines, splice.newLines)
     }
 
+    /**
+     * Removes from each file the Edit changed the imports it made unused (ADR 0004): those the code intelligence's
+     * organize-imports drops from the file's current text but not from its base, other than those its Operations [listed]
+     * for it. Without an answer an import counts as used. Returns those removed, by displayed file.
+     */
+    private suspend fun removeImportsMadeUnused(
+        session: AnalysisSession,
+        shadow: ShadowWorkspace,
+        listed: Map<Path, Set<ImportDirective>>,
+    ): Map<String, List<String>> = shadow.editedBases().mapNotNull { (file, base) ->
+        val current = checkNotNull(shadow.current(file)) { "$file was edited, so it is in the Shadow Workspace" }
+        val before = FileHeader.of(base.text).imports.map { it.directive }.toSet()
+        if (before.isEmpty()) return@mapNotNull null
+        val unusedNow = current.importsDroppedIn(session.organizeImports(file, current) ?: return@mapNotNull null)
+        // Only an import the base had can have been used before; most Edits stop here, with no second round-trip.
+        val candidates = unusedNow.intersect(before) - listed[file].orEmpty()
+        if (candidates.isEmpty()) return@mapNotNull null
+        val unusedBefore = base.importsDroppedIn(session.organizeImports(file, base) ?: return@mapNotNull null)
+        val removal = current.removingImports(candidates - unusedBefore) ?: return@mapNotNull null
+        shadow.replaceLines(file, removal.splice.lines, removal.splice.newLines)
+        files.display(file) to removal.removed.map { it.text }
+    }.toMap()
+
     /** [EditIn]'s change to a document: whole [lines] (0-based) to replace with [newLines]. */
     private sealed interface Splice {
         data class Done(val lines: IntRange, val newLines: List<String>) : Splice
@@ -313,6 +345,8 @@ public data class EditedFile(
     val moreWarnings: Int,
     /** Errors the file had before the Edit, which never block it. */
     val preexistingErrors: Int,
+    /** Imports the Edit made unused, which it removed (ADR 0004), e.g. `a.b.C`. */
+    val importsRemoved: List<String> = emptyList(),
 )
 
 /** A diagnostic as the agent sees it: where it is ([line] is 1-based), what it says and the offending source line. */

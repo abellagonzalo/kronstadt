@@ -5,6 +5,7 @@ package kronstadt.lsp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kronstadt.core.application.Delete
 import kronstadt.core.application.Edit
 import kronstadt.core.application.EditResult
 import kronstadt.core.application.EditedSymbol
@@ -542,10 +543,46 @@ class KotlinLspContractTest {
         )
     }
 
-    // kt_rename_symbol: the shape of kotlin-lsp's rename answer, and the use case end to end.
+    // kt_edit import removal (ADR 0004): organize-imports is kotlin-lsp's only unused-import signal.
 
     @Test
     @Order(21)
+    fun `organize-imports drops the unused imports of exactly the text sent, sorting the rest its own way`() = runBlocking<Unit> {
+        val file = project.resolve("src/main/kotlin/fixture/alpha/Shape.kt")
+        val disk = Files.readString(file)
+        val header = "package fixture.alpha\n\nimport kotlin.time.Duration\nimport java.nio.file.Path\nimport kotlin.time.*\nimport java.io.File as F\n\n"
+        lsp.session { session ->
+            // No diagnostic marks an unused import, so Validation never sees one.
+            assertEquals(emptyList(), session.diagnostics(file, TextDocument(header + "fun p(): Path? = null\n")))
+            assertEquals(
+                TextDocument("package fixture.alpha\n\nimport java.nio.file.Path\n\nfun p(): Path? = null\n"),
+                session.organizeImports(file, TextDocument(header + "fun p(): Path? = null\n")),
+            )
+            assertEquals(
+                TextDocument("package fixture.alpha\n\nimport kotlin.time.Duration\nimport java.io.File as F\n\nfun f(): F? = null\nfun d(): Duration = Duration.ZERO\n"),
+                session.organizeImports(file, TextDocument(header + "fun f(): F? = null\nfun d(): Duration = Duration.ZERO\n")),
+            )
+        }
+        // The edit kotlin-lsp asked to apply was refused.
+        assertEquals(disk, Files.readString(file))
+    }
+
+    @Test
+    @Order(22)
+    fun `kt_edit removes the imports a delete made unused, and the file still validates`() = runBlocking<Unit> {
+        val path = "src/main/kotlin/fixture/alpha/Shape.kt"
+
+        val result = Edit(files, lsp)(Delete(path, "timeout"))
+
+        val written = assertIs<EditResult.Written>(result, "$result").files.single()
+        assertEquals(listOf("kotlin.time.Duration"), written.importsRemoved)
+        assertEquals("package fixture.alpha\n\n/** Renamed. */\nclass Polygon(val sides: Int)\n", Files.readString(project.resolve(path)))
+    }
+
+    // kt_rename_symbol: the shape of kotlin-lsp's rename answer, and the use case end to end.
+
+    @Test
+    @Order(23)
     fun `rename edits files never opened, and a class named like its file also renames the file, last`() = runBlocking {
         val shape = project.resolve("src/main/kotlin/fixture/beta/Shape.kt")
         val check = project.resolve("src/test/kotlin/fixture/ShapesCheck.kt")
@@ -576,7 +613,7 @@ class KotlinLspContractTest {
     }
 
     @Test
-    @Order(22)
+    @Order(24)
     fun `prepare-rename refuses a keyword, and rename refuses a library declaration prepare-rename let through`() = runBlocking {
         val file = project.resolve("src/main/kotlin/fixture/Shapes.kt")
         val document = TextDocument(Files.readString(file))
@@ -591,7 +628,7 @@ class KotlinLspContractTest {
     }
 
     @Test
-    @Order(23)
+    @Order(25)
     fun `kt_rename_symbol renames across main and test sources, and moves a class's file`() = runBlocking<Unit> {
         val shapes = "src/main/kotlin/fixture/Shapes.kt"
         val check = "src/test/kotlin/fixture/ShapesCheck.kt"

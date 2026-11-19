@@ -87,7 +87,7 @@ class FakeFileStore(
  * index entries whose name contains the query, ignoring case: kotlin-lsp 271.2085.0 matches substrings, not typos.
  * Diagnostics are [diagnosticsByText] for the exact text, else none; each pull takes [diagnosticsDelay] and first runs
  * [beforeDiagnostics]. References are [references], and definitions [definitions], for the file and the exact position
- * asked about, else none.
+ * asked about, else none. Organize-imports answers [organizedByText] for the exact text, else nothing.
  *
  * Documents are modelled like the language server sees them: a session's first analysis of a file opens it at
  * version 1 (unless another session holds it), an analysis of different text changes it to the next version, and a
@@ -109,6 +109,7 @@ class FakeCodeIntelligence(
     private val definitions: Map<Pair<Path, Position>, List<Definition>> = emptyMap(),
     private val renames: Map<Pair<Path, Position>, (newName: String) -> Rename> = emptyMap(),
     private val renameRefusals: Map<Pair<Path, Position>, String> = emptyMap(),
+    private val organizedByText: Map<String, String> = emptyMap(),
 ) : CodeIntelligence {
     val analysed = mutableListOf<Pair<Path, TextDocument>>()
     val searched = mutableListOf<String>()
@@ -208,6 +209,11 @@ class FakeCodeIntelligence(
         override suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String): Rename {
             sync(file, document)
             return renames[file to position]?.invoke(newName) ?: Rename.Refused(CANNOT_RENAME)
+        }
+
+        override suspend fun organizeImports(file: Path, document: TextDocument): TextDocument? {
+            sync(file, document)
+            return organizedByText[document.text]?.let(::TextDocument)
         }
 
         override suspend fun writtenBack(file: Path, document: TextDocument) {

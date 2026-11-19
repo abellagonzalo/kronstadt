@@ -76,6 +76,13 @@ public interface AnalysisSession {
      */
     public suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String): Rename
 
+    /**
+     * [document] (the content of [file]) as it would read once the code intelligence organized its imports, or null if it
+     * gives no answer; nothing is applied. Only which imports it leaves is meaningful: it drops those it finds unused, and
+     * the order and layout of the rest are its own.
+     */
+    public suspend fun organizeImports(file: Path, document: TextDocument): TextDocument?
+
     /** Write-back has happened: [document] is now [file]'s content on disk. */
     public suspend fun writtenBack(file: Path, document: TextDocument)
 }

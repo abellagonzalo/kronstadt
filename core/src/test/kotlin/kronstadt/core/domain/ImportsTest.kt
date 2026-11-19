@@ -100,4 +100,66 @@ class ImportsTest {
             adding(source, "d.Delta", "import d.Delta"),
         )
     }
+
+    /** The imports of [text] that [organized], its text after organize-imports, no longer has, sorted. */
+    private fun dropped(text: String, organized: String) = TextDocument(text).importsDroppedIn(TextDocument(organized)).map { it.text }.sorted()
+
+    /** [text] without the [drop] imports, and those it removed. */
+    private fun removing(text: String, vararg drop: String): Pair<String, List<String>> {
+        val document = TextDocument(text)
+        val removal = document.removingImports(imports(*drop).toSet()) ?: return text to emptyList()
+        return document.replaceLines(removal.splice.lines, removal.splice.newLines, "\n").text to removal.removed.map { it.text }
+    }
+
+    @Test
+    fun `the imports organize-imports drops are unused, except those a new star import of their package takes over`() {
+        val text = "package a\n\nimport b.Bravo\nimport c.Charlie\nimport c.Delta\nimport c.Echo as E\nimport d.`Fox`\n\nfun f() = 1\n"
+
+        assertEquals(listOf("b.Bravo", "d.`Fox`"), dropped(text, "package a\n\nimport c.*\nimport c.Echo as E\n\nfun f() = 1\n"))
+        assertEquals(listOf("c.Echo as E"), dropped(text, "package a\n\nimport b.Bravo\nimport c.Charlie\nimport c.Delta\nimport d.Fox\n\nfun f() = 1\n"))
+        assertEquals(emptyList<String>(), dropped(text, text))
+    }
+
+    @Test
+    fun `each import to drop goes with its line, the others stay in place`() {
+        val text = "package a\n\nimport d.Delta\nimport b.Bravo\nimport c.Charlie\n\nfun f() = 1\n"
+
+        assertEquals("package a\n\nimport d.Delta\nimport c.Charlie\n\nfun f() = 1\n" to listOf("b.Bravo"), removing(text, "b.Bravo", "x.NotThere"))
+        assertEquals(text to emptyList(), removing(text, "x.NotThere"))
+    }
+
+    @Test
+    fun `an emptied import list leaves no blank line where it was, and an emptied group only one`() {
+        assertEquals("package a\n\nfun f() = 1\n" to listOf("b.Bravo"), removing("package a\n\nimport b.Bravo\n\nfun f() = 1\n", "b.Bravo"))
+        assertEquals("package a\n" to listOf("b.Bravo"), removing("package a\n\nimport b.Bravo\n", "b.Bravo"))
+        assertEquals("fun f() = 1\n" to listOf("b.Bravo"), removing("import b.Bravo\n\nfun f() = 1\n", "b.Bravo"))
+        assertEquals(
+            "package a\n\nimport b.Bravo\n\nimport java.io.File\n\nfun f() = 1\n" to listOf("c.Charlie", "c.Delta"),
+            removing("package a\n\nimport b.Bravo\n\nimport c.Charlie\nimport c.Delta\n\nimport java.io.File\n\nfun f() = 1\n", "c.Charlie", "c.Delta"),
+        )
+    }
+
+    @Test
+    fun `blank lines that no removed import borders stay as they are`() {
+        val text = "package a\n\nimport b.Bravo\n\n\nimport c.Charlie\nimport d.Delta\n\nfun f() = 1\n"
+
+        assertEquals("package a\n\nimport b.Bravo\n\n\nimport c.Charlie\n\nfun f() = 1\n" to listOf("d.Delta"), removing(text, "d.Delta"))
+    }
+
+    @Test
+    fun `an import sharing its line with another or the package line stays, and isn't reported`() {
+        val text = "package a; import b.Bravo\nimport c.Charlie; import d.Delta\nimport e.Echo;\n\nfun f() = 1\n"
+
+        assertEquals(
+            "package a; import b.Bravo\nimport c.Charlie; import d.Delta\n\nfun f() = 1\n" to listOf("e.Echo"),
+            removing(text, "b.Bravo", "c.Charlie", "e.Echo"),
+        )
+    }
+
+    @Test
+    fun `a star import organize-imports replaces with explicit imports from its package stays`() {
+        val text = "package a\n\nimport b.*\nimport c.*\n\nfun f() = Bravo\n"
+
+        assertEquals(listOf("c.*"), dropped(text, "package a\n\nimport b.Bravo\n\nfun f() = Bravo\n"))
+    }
 }

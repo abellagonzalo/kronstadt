@@ -22,6 +22,8 @@ import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
+import org.eclipse.lsp4j.ApplyWorkspaceEditParams
+import org.eclipse.lsp4j.ApplyWorkspaceEditResponse
 import org.eclipse.lsp4j.ClientCapabilities
 import org.eclipse.lsp4j.ConfigurationParams
 import org.eclipse.lsp4j.DefinitionParams
@@ -33,6 +35,7 @@ import org.eclipse.lsp4j.DiagnosticCapabilities
 import org.eclipse.lsp4j.DocumentDiagnosticParams
 import org.eclipse.lsp4j.DocumentSymbolCapabilities
 import org.eclipse.lsp4j.DocumentSymbolParams
+import org.eclipse.lsp4j.ExecuteCommandParams
 import org.eclipse.lsp4j.InitializeParams
 import org.eclipse.lsp4j.InitializedParams
 import org.eclipse.lsp4j.MessageActionItem
@@ -87,6 +90,7 @@ public class LspCodeIntelligence private constructor(
     private val readiness: ReadinessTracker,
     /** What kotlin-lsp reported as `serverInfo.version` at `initialize`, if anything. */
     public val serverVersion: String?,
+    private val refusedEdits: RefusedEdits,
 ) : CodeIntelligence, AutoCloseable {
 
     /**
@@ -132,25 +136,52 @@ public class LspCodeIntelligence private constructor(
             return LspMapping.documentSymbols(result)
         }
 
-        /**
-         * Pulls `textDocument/diagnostic` for [document]. Other sessions may sync the same file meanwhile (read tools
-         * don't take the write lock), so if its text changed while the request ran, the answer may describe other
-         * text: pull again.
-         */
+        /** Pulls `textDocument/diagnostic` for [document]. */
         override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> {
+            val params = DocumentDiagnosticParams(TextDocumentIdentifier(LspMapping.uri(file)))
+            return LspMapping.diagnostics(answerFor(file, document, "diagnostics were pulled") { request { server.textDocumentService.diagnostic(params) } })
+        }
+
+        /**
+         * Runs kotlin-lsp's organize-imports command on [document] and applies the edit it sends back, which [refusedEdits]
+         * refused, to a copy: kotlin-lsp 271.2085.0 reports no unused import as a diagnostic, and its "Organize imports" code
+         * action carries no edit, only this command, which sends the edit before it answers. An error answer is no answer.
+         */
+        override suspend fun organizeImports(file: Path, document: TextDocument): TextDocument? {
+            val uri = LspMapping.uri(file)
+            val params = ExecuteCommandParams(ORGANIZE_IMPORTS, listOf<Any>(uri))
+            // Being unsure counts as used (ADR 0004): any failure, not only an error answer, is no answer.
+            val edits = try {
+                answerFor(file, document, "imports were organized") {
+                    refusedEdits.during { request { server.workspaceService.executeCommand(params) } }.second
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            } ?: return null
+            return LspMapping.organized(document, uri, edits)
+        }
+
+        /**
+         * [ask]'s answer about [document] as [file]'s content. Other sessions may sync the same file meanwhile (read tools
+         * don't take the write lock), so if its text changed while [ask] ran, the answer may describe other text: ask again.
+         * [what] ends the failure message, e.g. "diagnostics were pulled".
+         */
+        private suspend fun <T> answerFor(file: Path, document: TextDocument, what: String, ask: suspend () -> T): T {
             val uri = LspMapping.uri(file)
             sync(uri, document)
-            repeat(MAX_DIAGNOSTIC_PULLS) {
+            repeat(MAX_ASKS) {
                 val version = syncLock.withLock { openDocuments[uri]?.version }
-                val report = request { server.textDocumentService.diagnostic(DocumentDiagnosticParams(TextDocumentIdentifier(uri))) }
+                val answer = ask()
                 val unchanged = syncLock.withLock {
                     val open = openDocuments[uri]
                     open != null && open.version == version && open.text == document.text
                 }
-                if (unchanged) return LspMapping.diagnostics(report)
+                if (unchanged) return answer
                 syncAgain(uri, document)
             }
-            throw IllegalStateException("${file.fileName} kept changing while its diagnostics were pulled")
+            throw IllegalStateException("${file.fileName} kept changing while its $what")
         }
 
         /**
@@ -329,7 +360,11 @@ public class LspCodeIntelligence private constructor(
     }
 
     public companion object {
-        private const val MAX_DIAGNOSTIC_PULLS = 3
+        /** kotlin-lsp's command behind its "Organize imports" code action; it takes the file's URI. */
+        private const val ORGANIZE_IMPORTS = "kotlin.organize.imports"
+
+        /** How often [Session.answerFor] asks before giving up on a file other sessions keep changing. */
+        private const val MAX_ASKS = 3
 
         /** How long [shutdown] waits for kotlin-lsp to close its index and exit. */
         private val EXIT_TIMEOUT = 10.seconds
@@ -351,8 +386,9 @@ public class LspCodeIntelligence private constructor(
                 .redirectError(ProcessBuilder.Redirect.INHERIT)
                 .start()
             val readiness = ReadinessTracker()
+            val refusedEdits = RefusedEdits()
             val launcher = LSPLauncher.createClientLauncher(
-                KronstadtLanguageClient(readiness),
+                KronstadtLanguageClient(readiness, refusedEdits),
                 process.inputStream,
                 process.outputStream,
             )
@@ -370,12 +406,12 @@ public class LspCodeIntelligence private constructor(
             }
             KotlinLspVersion.mismatchWarning(serverVersion)?.let(System.err::println)
             server.initialized(InitializedParams())
-            return LspCodeIntelligence(process, server, requestTimeout, readiness, serverVersion)
+            return LspCodeIntelligence(process, server, requestTimeout, readiness, serverVersion, refusedEdits)
         }
 
         /** An adapter over an already initialized [server] running as [process]; for tests with a stubbed server. */
         internal fun connected(process: Process, server: LanguageServer, requestTimeout: Duration): LspCodeIntelligence =
-            LspCodeIntelligence(process, server, requestTimeout, ReadinessTracker(), serverVersion = null)
+            LspCodeIntelligence(process, server, requestTimeout, ReadinessTracker(), serverVersion = null, RefusedEdits())
 
         /**
          * Awaits [future], but fails fast if the language server process dies (otherwise lsp4j would leave the
@@ -440,8 +476,14 @@ internal class WorkspaceImportState {
     var phase: String? = null
 }
 
-/** Minimal client side of the protocol: feeds [readiness] and otherwise only needs to not break when the server talks to us. */
-private class KronstadtLanguageClient(private val readiness: ReadinessTracker) : KotlinLspClient {
+/**
+ * Minimal client side of the protocol: feeds [readiness], hands edits the server asks to apply to [refusedEdits], and
+ * otherwise only needs to not break when the server talks to us.
+ */
+private class KronstadtLanguageClient(
+    private val readiness: ReadinessTracker,
+    private val refusedEdits: RefusedEdits,
+) : KotlinLspClient {
     override fun workspaceImportState(params: WorkspaceImportState) {
         params.phase?.let(readiness::importState)
     }
@@ -481,4 +523,8 @@ private class KronstadtLanguageClient(private val readiness: ReadinessTracker) :
 
     override fun configuration(configurationParams: ConfigurationParams): CompletableFuture<List<Any?>> =
         CompletableFuture.completedFuture(configurationParams.items.map { null })
+
+    /** Refused, like every edit the server asks for; see [RefusedEdits]. */
+    override fun applyEdit(params: ApplyWorkspaceEditParams): CompletableFuture<ApplyWorkspaceEditResponse> =
+        CompletableFuture.completedFuture(refusedEdits.refuse(params))
 }

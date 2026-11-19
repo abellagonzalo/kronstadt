@@ -137,6 +137,8 @@ private class RenamingIntelligence(private val a: Path, private val b: Path) : C
             ),
         )
 
+        override suspend fun organizeImports(file: Path, document: TextDocument): TextDocument? = null
+
         override suspend fun writtenBack(file: Path, document: TextDocument) = Unit
     })
 

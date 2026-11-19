@@ -202,8 +202,10 @@ internal class KronstadtTools(
                 "With a file and no symbol, 'edit_in' works on the whole file: the only way to change text outside " +
                 "any Symbol, such as the package line, file annotations or imports. " +
                 "Any Operation may list 'imports' its code needs: each missing one is added to the target's file, " +
-                "sorted in among the others (or in a new block after the package line); none is ever removed or " +
-                "reordered, and nothing is imported unless asked. " +
+                "sorted in among the others (or in a new block after the package line); none is reordered, and " +
+                "nothing is imported unless asked. The Edit removes the imports it made unused (used before it, " +
+                "unused after it, in the files it changed) unless an Operation listed them, and lists them in the " +
+                "result; imports that were already unused are never touched. " +
                 "Files are written only if the Edit adds no compiler errors to them; otherwise nothing is written and " +
                 "the new errors are listed. " +
                 "An Edit is an ordered batch of Operations, possibly across files: each resolves against the code the " +
@@ -424,10 +426,14 @@ internal class KronstadtTools(
         }
     }.trimEnd()
 
-    /** One file's outcome: the Symbols the edit left, then new warnings and the errors it already had. */
+    /** One file's outcome: the Symbols the edit left, the imports it made unused and removed, then new warnings and the errors it already had. */
     private fun written(file: EditedFile) = buildString {
         append("Edited ").append(file.file).append('\n')
         file.symbols.forEach { append("  ").append(it.path).append("  // L").append(it.firstLine).append('-').append(it.lastLine).append('\n') }
+        if (file.importsRemoved.isNotEmpty()) {
+            append("Removed imports it made unused:\n")
+            file.importsRemoved.forEach { append("  ").append(it).append('\n') }
+        }
         if (file.newWarnings.isNotEmpty()) {
             append("New warnings:\n")
             file.newWarnings.forEach { append(problem(it, withFile = false)) }

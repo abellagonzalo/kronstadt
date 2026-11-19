@@ -102,6 +102,9 @@ internal class DeferredCodeIntelligence(private val delegate: Deferred<Result<Co
         override suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String): Rename =
             open().rename(file, document, position, newName)
 
+        override suspend fun organizeImports(file: Path, document: TextDocument): TextDocument? =
+            open().organizeImports(file, document)
+
         /** Only an analysis opens documents, so with nothing analysed yet there is nothing to tell. */
         override suspend fun writtenBack(file: Path, document: TextDocument) {
             opening.withLock { opened }?.writtenBack(file, document)

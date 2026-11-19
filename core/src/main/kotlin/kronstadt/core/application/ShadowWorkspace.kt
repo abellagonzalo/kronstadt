@@ -86,6 +86,9 @@ internal class ShadowWorkspace(
     /** [file]'s current text, loading it from disk on first touch; null if there's no such file. */
     suspend fun current(file: Path): TextDocument? = touch(file)?.current
 
+    /** Each file the Edit changed so far, with its text as read from disk. */
+    fun editedBases(): Map<Path, TextDocument> = touched.filterValues { it.isEdited }.mapValues { it.value.base.document }
+
     /** Resolves [symbol] against [file]'s current text, loading the file from disk on first touch. */
     suspend fun resolve(file: Path, symbol: SymbolPath): Lookup {
         val found = when (val resolution = resolver.resolveIn(this, file, symbol)) {

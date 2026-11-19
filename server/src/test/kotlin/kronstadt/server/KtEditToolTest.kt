@@ -46,12 +46,15 @@ class KtEditToolTest {
     private val root: Path = Files.createTempDirectory("kt-edit-tool").toRealPath()
     private val file = root.resolve("A.kt").apply { writeText("package a\n\nfun greet(): Int = 1\n") }
 
+    /** What organize-imports answers, by exact text; filled by a test before it calls the tool. */
+    private val organized = mutableMapOf<String, String>()
+
     private val server = Server(
         Implementation(name = "kronstadt-test", version = "0"),
         ServerOptions(capabilities = ServerCapabilities(tools = ServerCapabilities.Tools(listChanged = false))),
     ).also { server ->
         val files = LocalFileStore(root)
-        val intelligence = EmptyIntelligence()
+        val intelligence = EmptyIntelligence(organized)
         KronstadtTools(
             ReadStructure(files, intelligence),
             FindSymbol(files, intelligence),
@@ -86,6 +89,20 @@ class KtEditToolTest {
     }
 
     @Test
+    fun `the result lists the imports the Edit made unused, which it removed`() = runTest {
+        val source = "package a\n\nimport b.Bravo\nimport c.Charlie\nimport d.Delta\n\nfun greet(): Int = Bravo.one + Charlie.two + Delta.three\n"
+        val edited = "package a\n\nimport b.Bravo\nimport c.Charlie\nimport d.Delta\n\nfun greet(): Int = 1 + Delta.three\n"
+        organized += mapOf(source to source, edited to "package a\n\nimport d.Delta\n\nfun greet(): Int = 1 + Delta.three\n")
+        file.writeText(source)
+
+        val (failed, text) = ktEdit("""{"operations": [{"type": "edit_in", "file": "A.kt", "old": "Bravo.one + Charlie.two", "new": "1"}]}""")
+
+        assertEquals(false, failed, text)
+        assertEquals("Edited A.kt\nRemoved imports it made unused:\n  b.Bravo\n  c.Charlie", text)
+        assertEquals("package a\n\nimport d.Delta\n\nfun greet(): Int = 1 + Delta.three\n", file.readText())
+    }
+
+    @Test
     fun `imports that aren't an array of import directives reject the call, writing nothing`() = runTest {
         val before = file.readText()
 
@@ -108,8 +125,11 @@ class KtEditToolTest {
     }
 }
 
-/** Always ready, and knows nothing: no Symbols, diagnostics, references or definitions, so every Edit validates. */
-private class EmptyIntelligence : CodeIntelligence {
+/**
+ * Always ready, and knows nothing: no Symbols, diagnostics, references or definitions, so every Edit validates.
+ * Organize-imports answers [organized] for the exact text, else nothing.
+ */
+private class EmptyIntelligence(private val organized: Map<String, String>) : CodeIntelligence {
     override suspend fun <T> session(block: suspend (AnalysisSession) -> T): T = block(object : AnalysisSession {
         override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> = emptyList()
         override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> = emptyList()
@@ -117,6 +137,7 @@ private class EmptyIntelligence : CodeIntelligence {
         override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> = emptyList()
         override suspend fun prepareRename(file: Path, document: TextDocument, position: Position) = RenamePreparation.Refused("unsupported")
         override suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String) = Rename.Refused("unsupported")
+        override suspend fun organizeImports(file: Path, document: TextDocument): TextDocument? = organized[document.text]?.let(::TextDocument)
         override suspend fun writtenBack(file: Path, document: TextDocument) = Unit
     })
 

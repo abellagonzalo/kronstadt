@@ -10,6 +10,7 @@ import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
+import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.TextEdit
 import kronstadt.core.domain.TextRange
 import org.eclipse.lsp4j.DiagnosticSeverity
@@ -208,6 +209,22 @@ internal object LspMapping {
                 }
             },
         )
+    }
+
+    /**
+     * [document] with the [edits] a command sent for [uri] applied, in order; null if one also changes another file, or
+     * isn't plain text edits; no edit means nothing to drop. kotlin-lsp 271.2085.0 sends organize-imports as one `changes` entry for the file.
+     */
+    fun organized(document: TextDocument, uri: String, edits: List<WorkspaceEdit>): TextDocument? {
+        val file = localPath(uri)
+        return edits.fold(document) { text, edit ->
+            val changes = edit.documentChanges?.map { change ->
+                val changed = change.left?.takeIf { localPath(it.textDocument.uri) == file } ?: return null
+                changed.edits.map { if (it.isLeft) it.left else return null }
+            } ?: edit.changes.orEmpty().map { (target, changed) -> if (localPath(target) == file) changed else return null }
+            // Ranges refer to the text before the edit, so the last one goes first.
+            changes.flatten().map(::textEdit).sortedByDescending { it.range.start }.fold(text) { acc, it -> acc.replace(it.range, it.newText) }
+        }
     }
 
     /** An LSP text edit as Kronstadt's. */
