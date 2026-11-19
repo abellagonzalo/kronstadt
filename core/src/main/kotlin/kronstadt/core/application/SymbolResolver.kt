@@ -1,6 +1,8 @@
 package kronstadt.core.application
 
 import kronstadt.core.domain.Readiness
+import kronstadt.core.domain.Suggestions
+import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.SymbolPath
 import kronstadt.core.domain.SymbolSearch
 import kronstadt.core.domain.SymbolTree
@@ -76,11 +78,11 @@ internal class SymbolResolver(
         // A file the index left out may declare the name too: resolving from the rest would pick one (ADR 0002).
         if (search.completeness == SymbolSearch.Completeness.INCOMPLETE) return Resolution.TooManyDeclarations(query)
         val hits = search.symbols.filter { AnalysedFile.isKotlin(it.file) }
-        val analysed = mutableMapOf<Path, AnalysedFile?>()
-        suspend fun analysedOrNull(file: Path) = analysed.getOrPut(file) { AnalysedFile.of(files, session, file) }
+        val cache = mutableMapOf<Path, AnalysedFile?>()
+        val analysed: suspend (Path) -> AnalysedFile? = { file -> cache.getOrPut(file) { AnalysedFile.of(files, session, file) } }
 
         val matches = hits.filter { it.name == query }.map { it.file }.distinct().sorted().flatMap { file ->
-            val candidate = analysedOrNull(file)?.takeIf { inPackage(it, symbol) } ?: return@flatMap emptyList()
+            val candidate = analysed(file)?.takeIf { inPackage(it, symbol) } ?: return@flatMap emptyList()
             when (val resolution = candidate.tree.resolve(symbol)) {
                 is SymbolTree.Resolution.Found -> listOf(candidate to resolution.node)
                 is SymbolTree.Resolution.Ambiguous -> resolution.candidates.map { candidate to it }
@@ -89,27 +91,37 @@ internal class SymbolResolver(
         }
         if (matches.size == 1) return matches.single().let { (file, node) -> found(file, node) }
         if (matches.isNotEmpty()) return Resolution.Ambiguous(matches.map { (file, node) -> candidate(file, node) })
+        return Resolution.NotFound(suggestionsProjectWide(symbol, query, hits, analysed))
+    }
 
-        // Close names live in the files the index found for names like the wanted one, closest first. The index
-        // matches substrings, not typos, so a prefix of the name is looked up too. Suggestions are hints, not
-        // resolutions, so a search that may be incomplete still supplies them.
+    /**
+     * Close names for [symbol], which matched nothing project-wide: they live in the files the index found for names
+     * like [query] ([hits] and more), closest first. The index matches substrings, not typos, so a prefix of the name is
+     * looked up too. Suggestions are hints, not resolutions, so a search that may be incomplete still supplies them.
+     */
+    private suspend fun suggestionsProjectWide(
+        symbol: SymbolPath,
+        query: String,
+        hits: List<SymbolLocation>,
+        analysed: suspend (Path) -> AnalysedFile?,
+    ): List<SymbolCandidate> {
         val prefix = query.take(maxOf(MIN_PREFIX, query.length / 2))
         val similar = hits + if (prefix != query) intelligence.workspaceSymbols(prefix).symbols.filter { AnalysedFile.isKotlin(it.file) } else emptyList()
-        val suggestionFiles = similar.sortedBy { SymbolTree.distance(it.name.lowercase(), query.lowercase()) }
-            .map { it.file }.distinct().take(MAX_SUGGESTIONS)
+        val suggestionFiles = similar.sortedBy { Suggestions.distance(it.name.lowercase(), query.lowercase()) }
+            .map { it.file }.distinct().take(Suggestions.MAX)
         val wanted = symbol.segments.last().name.lowercase()
+        // Outside the wanted package too, so a wrong package still finds the Symbol.
+        val unscoped = if (symbol.packageName == null) symbol else symbol.copy(anchored = false, packageName = null)
         val suggestions = suggestionFiles.flatMap { file ->
-            val candidate = analysedOrNull(file) ?: return@flatMap emptyList()
-            // Outside the wanted package too, so a wrong package still finds the Symbol.
-            val unscoped = if (symbol.packageName == null) symbol else symbol.copy(anchored = false, packageName = null)
+            val candidate = analysed(file) ?: return@flatMap emptyList()
             val nodes = when (val resolution = candidate.tree.resolve(unscoped)) {
                 is SymbolTree.Resolution.NotFound -> resolution.suggestions
                 is SymbolTree.Resolution.Found -> listOf(resolution.node)
                 is SymbolTree.Resolution.Ambiguous -> resolution.candidates
             }
-            nodes.map { candidate(candidate, it) to SymbolTree.distance(wanted, it.symbol.name.lowercase()) }
+            nodes.map { candidate(candidate, it) to Suggestions.distance(wanted, it.symbol.name.lowercase()) }
         }.sortedBy { (_, distance) -> distance }.map { (suggestion, _) -> suggestion }
-        return Resolution.NotFound(suggestions.take(MAX_SUGGESTIONS))
+        return suggestions.take(Suggestions.MAX)
     }
 
     private fun found(analysed: AnalysedFile, node: SymbolTree.Node) =
@@ -124,6 +136,5 @@ internal class SymbolResolver(
     private companion object {
         val UNINDEXED_NAMES = setOf("constructor", "Companion")
         const val MIN_PREFIX = 3
-        const val MAX_SUGGESTIONS = 5
     }
 }

@@ -93,36 +93,19 @@ public class SymbolTree(roots: List<CodeSymbol>) {
     private fun suggestionsFor(path: SymbolPath): List<Node> {
         val wanted = path.segments.last().name
         return nodes
-            .map { it to distance(wanted.lowercase(), pathName(it.symbol).lowercase()) }
+            .map { it to Suggestions.distance(wanted.lowercase(), pathName(it.symbol).lowercase()) }
             .filter { (_, d) -> d <= maxOf(1, wanted.length / 3) }
             .sortedBy { (_, d) -> d }
-            .take(MAX_SUGGESTIONS)
+            .take(Suggestions.MAX)
             .map { (node, _) -> node }
     }
 
-    internal companion object {
-        private const val MAX_SUGGESTIONS = 5
-
+    private companion object {
         /** The name a Symbol has in a path. Constructors are `constructor`, not their class's name (ADR 0002). */
-        private fun pathName(symbol: CodeSymbol): String = if (symbol.kind == SymbolKind.CONSTRUCTOR) "constructor" else symbol.name
+        fun pathName(symbol: CodeSymbol): String = if (symbol.kind == SymbolKind.CONSTRUCTOR) "constructor" else symbol.name
 
-        private fun isFunction(symbol: CodeSymbol) = symbol.kind == SymbolKind.FUNCTION || symbol.kind == SymbolKind.CONSTRUCTOR
+        fun isFunction(symbol: CodeSymbol) = symbol.kind == SymbolKind.FUNCTION || symbol.kind == SymbolKind.CONSTRUCTOR
 
-        private fun normalise(signature: String): String = signature.filterNot(Char::isWhitespace)
-
-        /** Levenshtein distance. */
-        internal fun distance(a: String, b: String): Int {
-            var previous = IntArray(b.length + 1) { it }
-            for (i in 1..a.length) {
-                val current = IntArray(b.length + 1)
-                current[0] = i
-                for (j in 1..b.length) {
-                    val substitution = previous[j - 1] + if (a[i - 1] == b[j - 1]) 0 else 1
-                    current[j] = minOf(substitution, previous[j] + 1, current[j - 1] + 1)
-                }
-                previous = current
-            }
-            return previous[b.length]
-        }
+        fun normalise(signature: String): String = signature.filterNot(Char::isWhitespace)
     }
 }

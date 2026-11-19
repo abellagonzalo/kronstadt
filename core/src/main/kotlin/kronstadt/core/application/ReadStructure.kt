@@ -15,9 +15,7 @@ public class ReadStructure(
 ) {
     public suspend operator fun invoke(path: String, xml: Boolean = true): ReadStructureResult {
         val file = files.resolve(path) ?: return ReadStructureResult.OutsideProject(path)
-        if (!file.fileName.toString().let { it.endsWith(".kt") || it.endsWith(".kts") }) {
-            return ReadStructureResult.NotKotlin(path)
-        }
+        if (!AnalysedFile.isKotlin(file)) return ReadStructureResult.NotKotlin(path)
         val document = files.read(file) ?: return ReadStructureResult.FileNotFound(path)
         val symbols = intelligence.session { it.documentSymbols(file, document) }
         val shown = files.display(file)

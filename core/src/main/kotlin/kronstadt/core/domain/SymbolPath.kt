@@ -33,7 +33,7 @@ public data class SymbolPath(val segments: List<Segment>, val anchored: Boolean 
 
     public companion object {
         private val plainName = Regex("[\\p{L}_][\\p{L}\\p{N}_]*")
-        private val dottedPackage = Regex("[\\p{L}_][\\p{L}\\p{N}_]*(\\.[\\p{L}_][\\p{L}\\p{N}_]*)+")
+        private val dottedPackage = Regex("${plainName.pattern}(\\.${plainName.pattern})+")
 
         /** Names that aren't plain identifiers are written in backticks, as in Kotlin source. */
         private fun quote(name: String) = if (plainName.matches(name)) name else "`$name`"
