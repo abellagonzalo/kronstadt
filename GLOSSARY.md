@@ -47,3 +47,11 @@ _Avoid_: commit (clashes with git), flush, save, persist
 **Index Seed**:
 A repo's snapshot of a language-server index, taken after an instance's language server exits cleanly with a complete index, from which a new worktree starts instead of indexing from scratch.
 _Avoid_: template, cache, warm index
+
+**Retired Seed**:
+An Index Seed that a refresh has replaced, kept under a timed hidden name beside the seed slot until startup pruning deletes it, because a worktree may still be cloning it.
+_Avoid_: old seed, stale seed, backup
+
+**Temporary Clone**:
+A clone of an index made under a timed hidden name next to its destination and then moved into place, so the destination is never left half-copied. A killed instance can leave one behind, for seeding or pruning to delete.
+_Avoid_: temp dir, scratch copy, staging copy
