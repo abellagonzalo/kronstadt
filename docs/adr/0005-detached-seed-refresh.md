@@ -12,7 +12,7 @@ So Kronstadt only starts the refresh. A JVM shutdown hook runs on those signals 
 ## Consequences
 
 - The child isn't kotlin-lsp's parent, so it can't read kotlin-lsp's exit code. "Clean" now means `shutdown` was answered and the process then ended by itself within the wait. A kotlin-lsp that crashed after answering would still be seeded. RocksDB recovers from a crash, and the swap stays atomic.
-- A kill at any point, of Kronstadt or of the child, still leaves the previous seed whole: the slot is only ever replaced by the atomic swap. A half-made clone left by a killed child is a hidden sibling of the slot, which [#53](https://github.com/abellagonzalo/kronstadt/issues/53) cleans up.
+- A kill at any point, of Kronstadt or of the child, still leaves the previous seed whole: the slot is only ever replaced by the atomic swap. A half-made clone left by a killed child is a hidden sibling of the slot. A refresh never deletes the seed it swaps out, because `clonefile(2)` of a directory deleted mid-clone succeeds with only part of it: it retires it under a timed name, and startup pruning deletes such leftovers once over 10 minutes old ([#53](https://github.com/abellagonzalo/kronstadt/issues/53)).
 - The child is not in a session of its own (macOS has no `setsid` command), so a signal to Kronstadt's whole process group, such as Ctrl-C on a `claude -p` run from a shell, ends it too. That costs only the refresh.
 - The child waits only for a process with kotlin-lsp's pid and start instant: kotlin-lsp may have exited, and its pid been reused, before the child's JVM is up.
 - For about a second after a session ends, a small JVM (`-Xmx64m`) runs on.

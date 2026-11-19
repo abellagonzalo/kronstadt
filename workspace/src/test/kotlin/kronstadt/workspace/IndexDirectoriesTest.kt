@@ -2,9 +2,12 @@ package kronstadt.workspace
 
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.FileTime
+import java.time.Instant
 import kotlin.io.path.createDirectories
 import kotlin.io.path.exists
 import kotlin.io.path.readText
+import kotlin.io.path.setLastModifiedTime
 import kotlin.io.path.writeText
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -12,6 +15,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.toJavaDuration
 
 class IndexDirectoriesTest {
     private val tmp: Path = Files.createTempDirectory("kronstadt-test").toRealPath()
@@ -84,6 +89,44 @@ class IndexDirectoriesTest {
         indexes.prune()
 
         assertTrue(unrecorded.exists())
+    }
+
+    @Test
+    fun `pruning deletes temporary clones and retired seeds in a live seed slot once over 10 minutes old, and keeps younger ones`() {
+        var now = Instant.parse("2026-11-19T10:00:00Z")
+        val directories = IndexDirectories(cache, clock = { now })
+        val slot = directories.seedSlot(tmp.resolve("repo/.git").createDirectories()).also(::fillWithIndexFiles)
+        val oldClone = directories.temporarySibling(slot).also(::fillWithIndexFiles)
+        val oldSeed = directories.retiredSibling(slot).also(::fillWithIndexFiles)
+        now += 2.minutes.toJavaDuration()
+        val youngClone = directories.temporarySibling(slot).also(::fillWithIndexFiles)
+        val youngSeed = directories.retiredSibling(slot).also(::fillWithIndexFiles)
+        now += 9.minutes.toJavaDuration()
+
+        directories.prune()
+
+        assertFalse(oldClone.exists(), "an 11-minute-old temporary clone is still there")
+        assertFalse(oldSeed.exists(), "an 11-minute-old retired seed is still there")
+        assertTrue(youngClone.exists(), "a 9-minute-old temporary clone may still be in use")
+        assertTrue(youngSeed.exists(), "a 9-minute-old retired seed may still be being cloned")
+        assertTrue(slot.resolve("db/000001.sst").exists(), "the seed itself was touched")
+        assertTrue(slot.resolveSibling(IndexDirectories.GIT_COMMON_DIR_FILE).exists())
+    }
+
+    @Test
+    fun `a leftover in a seed slot without a time in its name is aged by when it was last modified`() {
+        val now = Instant.parse("2026-11-19T10:00:00Z")
+        val directories = IndexDirectories(cache, clock = { now })
+        val slot = directories.seedSlot(tmp.resolve("repo/.git").createDirectories()).also(::fillWithIndexFiles)
+        val old = slot.resolveSibling(".kotlin-server-0b9e").createDirectories()
+        val young = slot.resolveSibling(".kotlin-server-7c1d").createDirectories()
+        old.setLastModifiedTime(FileTime.from(now - 11.minutes.toJavaDuration()))
+        young.setLastModifiedTime(FileTime.from(now - 9.minutes.toJavaDuration()))
+
+        directories.prune()
+
+        assertFalse(old.exists())
+        assertTrue(young.exists())
     }
 
     private fun fillWithIndexFiles(index: Path) {

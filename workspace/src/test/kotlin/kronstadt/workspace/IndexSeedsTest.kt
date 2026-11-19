@@ -3,6 +3,7 @@ package kronstadt.workspace
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.BasicFileAttributes
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.createDirectories
@@ -94,7 +95,7 @@ class IndexSeedsTest {
     }
 
     @Test
-    fun `each clean shutdown replaces the seed whole, leaving no temporary clones behind`() {
+    fun `each clean shutdown replaces the seed whole, keeping the previous one only as a retired seed`() {
         val main = gitRepo("repo")
         val feature = gitWorktree(main, "feature")
         val mainIndex = seeds.prepare(main)
@@ -110,7 +111,10 @@ class IndexSeedsTest {
         assertEquals("new", featureIndex.dir.resolve("rocks/v241/000001.sst").readText())
         assertFalse(featureIndex.dir.resolve("rocks/v241/000000.sst").exists())
         val seedSlotOwner = directories.cacheRoot.resolve("seed").listDirectoryEntries().single()
-        assertEquals(setOf("git-common-dir", "kotlin-server"), seedSlotOwner.listDirectoryEntries().map { it.name }.toSet())
+        val leftovers = seedSlotOwner.listDirectoryEntries().map { it.name } - setOf("git-common-dir", "kotlin-server")
+        val retired = seedSlotOwner.resolve(leftovers.single())
+        assertTrue(retired.name.startsWith(".kotlin-server-retired-"), "${retired.name} is not a retired seed")
+        assertEquals("old", retired.resolve("rocks/v241/000001.sst").readText())
     }
 
     @Test
@@ -228,6 +232,23 @@ class IndexSeedsTest {
     }
 
     @Test
+    fun `a worktree cloning the seed while a refresh swaps it still gets the whole previous seed`() {
+        val main = gitRepo("repo")
+        val feature = gitWorktree(main, "feature")
+        val mainIndex = seeds.prepare(main)
+        fillWithIndexFiles(mainIndex.dir, "old")
+        seeds.refresh(mainIndex)
+        fillWithIndexFiles(mainIndex.dir, "new")
+        val copyOnWrite = SourceFollowingCopyOnWrite()
+        copyOnWrite.midClone = { IndexSeeds(directories, copyOnWrite).refresh(mainIndex) }
+
+        val featureIndex = IndexSeeds(directories, copyOnWrite).prepare(feature)
+
+        assertEquals(Seeding.Seeded, featureIndex.seeding)
+        assertEquals("old", featureIndex.dir.resolve("rocks/v241/000001.sst").readText())
+    }
+
+    @Test
     fun `a detached refresh seeds the repo once the language server exits, and logs what it did`() {
         val main = gitRepo("repo")
         val feature = gitWorktree(main, "feature")
@@ -273,6 +294,28 @@ class IndexSeedsTest {
         } finally {
             reusedPid.destroyForcibly().waitFor()
         }
+    }
+
+    /**
+     * Real swaps, and a clone that, like `clonefile(2)` on a directory, lists its source first, runs [midClone] once,
+     * then copies the files from that same directory (inode), wherever it was meanwhile swapped or renamed to.
+     */
+    private class SourceFollowingCopyOnWrite : CopyOnWrite {
+        var midClone: (() -> Unit)? = null
+
+        override fun clone(source: Path, target: Path) {
+            val inode = Files.readAttributes(source, BasicFileAttributes::class.java).fileKey()
+            val files = Files.walk(source).use { paths -> paths.filter(Files::isRegularFile).map(source::relativize).toList() }
+            midClone?.also { midClone = null }?.invoke()
+            val current = source.parent.listDirectoryEntries()
+                .single { Files.readAttributes(it, BasicFileAttributes::class.java).fileKey() == inode }
+            for (file in files) {
+                target.resolve(file).parent.createDirectories()
+                Files.copy(current.resolve(file), target.resolve(file))
+            }
+        }
+
+        override fun swap(a: Path, b: Path) = MacOsCopyOnWrite.swap(a, b)
     }
 
     /** Starts another process that holds a POSIX lock on [file], as RocksDB does, for [millis]; returns once held. */

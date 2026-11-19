@@ -9,7 +9,6 @@ import java.nio.file.StandardOpenOption
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
-import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import kotlin.io.path.ExperimentalPathApi
@@ -86,8 +85,8 @@ public class IndexSeeds(
         val slot = index.seedSlot ?: return SeedRefresh.Skipped("not a git repository")
         if (!index.dir.isDirectory()) return SeedRefresh.Skipped("no index to seed from")
         stillLocked(index.dir)?.let { return SeedRefresh.Skipped("$it is still locked") }
-        val temp = temporarySibling(slot)
-        try {
+        val temp = directories.temporarySibling(slot)
+        val swapped = try {
             copyOnWrite.clone(index.dir, temp)
             val placed = !slot.exists() && try {
                 Files.move(temp, slot, StandardCopyOption.ATOMIC_MOVE)
@@ -96,13 +95,14 @@ public class IndexSeeds(
                 false // Another instance refreshed the slot first.
             }
             if (!placed) copyOnWrite.swap(temp, slot)
-            return SeedRefresh.Refreshed
+            !placed
         } catch (e: Exception) {
-            return SeedRefresh.Skipped("could not clone the index: ${e.message}")
-        } finally {
-            // After a swap, the old seed.
             deleteQuietly(temp)
+            return SeedRefresh.Skipped("could not clone the index: ${e.message}")
         }
+        // After a swap, temp holds the previous seed, which a worktree may still be cloning: never delete it here.
+        if (swapped) retire(temp, directories.retiredSibling(slot))
+        return SeedRefresh.Refreshed
     }
 
     /**
@@ -139,7 +139,7 @@ public class IndexSeeds(
 
     private fun cloneInto(slot: Path, dir: Path): Seeding {
         deleteTemporarySiblings(dir)
-        val temp = temporarySibling(dir)
+        val temp = directories.temporarySibling(dir)
         return try {
             copyOnWrite.clone(slot, temp)
             Files.move(temp, dir, StandardCopyOption.ATOMIC_MOVE)
@@ -164,7 +164,18 @@ public class IndexSeeds(
             false
         }
 
-        private fun temporarySibling(dir: Path): Path = dir.resolveSibling(".${dir.fileName}-${UUID.randomUUID()}")
+        /**
+         * Moves [previousSeed], which a swap just took out of the seed slot, to [retired], for [IndexDirectories.prune]
+         * to delete once no worktree can still be cloning it. Never deletes it now: `clonefile(2)` of a directory
+         * deleted mid-clone succeeds with only part of it.
+         */
+        private fun retire(previousSeed: Path, retired: Path) {
+            try {
+                Files.move(previousSeed, retired, StandardCopyOption.ATOMIC_MOVE)
+            } catch (e: IOException) {
+                System.err.println("kronstadt: could not retire the previous Index Seed $previousSeed: ${e.message}")
+            }
+        }
 
         /** Deletes clones a killed instance left next to [dir]; only this worktree's own instance writes there. */
         private fun deleteTemporarySiblings(dir: Path) {
