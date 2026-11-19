@@ -25,8 +25,8 @@ class FindSymbolTest {
     private fun range(startLine: Int, startChar: Int, endLine: Int, endChar: Int) =
         TextRange(Position(startLine, startChar), Position(endLine, endChar))
 
-    private fun symbol(name: String, kind: SymbolKind, range: TextRange, nameLine: Int, nameChar: Int, detail: String? = null, children: List<CodeSymbol> = emptyList()) =
-        CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, detail)
+    private fun symbol(name: String, kind: SymbolKind, range: TextRange, nameLine: Int, nameChar: Int, parameterTypes: String? = null, type: String? = null, receiver: String? = null, children: List<CodeSymbol> = emptyList()) =
+        CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, parameterTypes = parameterTypes, type = type, receiver = receiver)
 
     private val userKt = "src/main/kotlin/com/example/User.kt"
     private val userSource = """
@@ -40,9 +40,9 @@ class FindSymbolTest {
         |    override fun find(id: Int): String = ""
         |}
         |""".trimMargin()
-    private val interfaceFind = symbol("find", SymbolKind.FUNCTION, range(3, 4, 3, 29), 3, 8, "(Int): String")
+    private val interfaceFind = symbol("find", SymbolKind.FUNCTION, range(3, 4, 3, 29), 3, 8, parameterTypes = "Int", type = "(Int): String")
     private val repository = symbol("UserRepository", SymbolKind.INTERFACE, range(2, 0, 4, 1), 2, 10, children = listOf(interfaceFind))
-    private val implFind = symbol("find", SymbolKind.FUNCTION, range(7, 4, 7, 43), 7, 17, "(Int): String")
+    private val implFind = symbol("find", SymbolKind.FUNCTION, range(7, 4, 7, 43), 7, 17, parameterTypes = "Int", type = "(Int): String")
     private val repositoryImpl = symbol("UserRepositoryImpl", SymbolKind.CLASS, range(6, 0, 8, 1), 6, 6, children = listOf(implFind))
 
     private val lookupKt = "src/main/kotlin/com/example/Lookup.kt"
@@ -57,9 +57,9 @@ class FindSymbolTest {
         |fun parse(i: Int): Int = i
         |""".trimMargin()
     // kotlin-lsp omits local functions from documentSymbol.
-    private val findUserRepository = symbol("findUserRepository", SymbolKind.FUNCTION, range(2, 0, 5, 1), 2, 4, "(): UserRepository")
-    private val parseString = symbol("parse", SymbolKind.FUNCTION, range(6, 0, 6, 29), 6, 4, "(String): Int")
-    private val parseInt = symbol("parse", SymbolKind.FUNCTION, range(7, 0, 7, 26), 7, 4, "(Int): Int")
+    private val findUserRepository = symbol("findUserRepository", SymbolKind.FUNCTION, range(2, 0, 5, 1), 2, 4, parameterTypes = "", type = "(): UserRepository")
+    private val parseString = symbol("parse", SymbolKind.FUNCTION, range(6, 0, 6, 29), 6, 4, parameterTypes = "String", type = "(String): Int")
+    private val parseInt = symbol("parse", SymbolKind.FUNCTION, range(7, 0, 7, 26), 7, 4, parameterTypes = "Int", type = "(Int): Int")
 
     private val files = FakeFileStore(root, mapOf(userKt to userSource, lookupKt to lookupSource, "build.gradle.kts" to ""))
 

@@ -14,9 +14,9 @@ class StructureRendererTest {
         range: TextRange,
         nameLine: Int,
         nameChar: Int,
-        detail: String? = null,
+        parameterTypes: String? = null, type: String? = null, receiver: String? = null,
         children: List<CodeSymbol> = emptyList(),
-    ) = CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, detail)
+    ) = CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, parameterTypes = parameterTypes, type = type, receiver = receiver)
 
     private val source = """
         |package demo
@@ -34,9 +34,9 @@ class StructureRendererTest {
         |""".trimMargin()
     private val doc = TextDocument(source)
 
-    private val local = symbol("cached", SymbolKind.VARIABLE, range(6, 8, 6, 30), 6, 12, ": User?")
-    private val find = symbol("find", SymbolKind.FUNCTION, range(5, 4, 8, 5), 5, 8, "(UserId): User?", listOf(local))
-    private val count = symbol("count", SymbolKind.FUNCTION, range(10, 4, 10, 35), 10, 8, "(): Int")
+    private val local = symbol("cached", SymbolKind.VARIABLE, range(6, 8, 6, 30), 6, 12, type = ": User?")
+    private val find = symbol("find", SymbolKind.FUNCTION, range(5, 4, 8, 5), 5, 8, parameterTypes = "UserId", type = "(UserId): User?", children = listOf(local))
+    private val count = symbol("count", SymbolKind.FUNCTION, range(10, 4, 10, 35), 10, 8, parameterTypes = "", type = "(): Int")
     private val clazz = symbol("UserService", SymbolKind.CLASS, range(2, 0, 11, 1), 4, 6, children = listOf(count, find))
 
     @Test
@@ -59,8 +59,8 @@ class StructureRendererTest {
     @Test
     fun `overloads look different and their paths carry the signature`() {
         val doc = TextDocument("fun parse(s: String): Int = 1\nfun parse(s: String, radix: Int): Int = 2\n")
-        val one = symbol("parse", SymbolKind.FUNCTION, range(0, 0, 0, 29), 0, 4, "(String): Int")
-        val two = symbol("parse", SymbolKind.FUNCTION, range(1, 0, 1, 41), 1, 4, "(String, Int): Int")
+        val one = symbol("parse", SymbolKind.FUNCTION, range(0, 0, 0, 29), 0, 4, parameterTypes = "String", type = "(String): Int")
+        val two = symbol("parse", SymbolKind.FUNCTION, range(1, 0, 1, 41), 1, 4, parameterTypes = "String, Int", type = "(String, Int): Int")
 
         val expected = """
             fun parse(String)  (String): Int  // L1-1
@@ -81,11 +81,11 @@ class StructureRendererTest {
             |}
             |""".trimMargin(),
         )
-        val primary = CodeSymbol("Box", SymbolKind.CONSTRUCTOR, range(0, 9, 0, 25), range(0, 9, 0, 25), detail = "(Int)")
-        val width = symbol("width", SymbolKind.PROPERTY, range(0, 10, 0, 24), 0, 14, ": Int")
-        val secondary = CodeSymbol("Box", SymbolKind.CONSTRUCTOR, range(1, 4, 1, 27), range(1, 4, 1, 27), detail = "()")
-        val first = symbol("first", SymbolKind.PROPERTY, range(3, 4, 3, 42), 3, 15, "String.: Char")
-        val shout = symbol("shout", SymbolKind.FUNCTION, range(4, 4, 4, 44), 4, 15, "String.(): String")
+        val primary = CodeSymbol("Box", SymbolKind.CONSTRUCTOR, range(0, 9, 0, 25), range(0, 9, 0, 25), parameterTypes = "Int", type = "(Int)")
+        val width = symbol("width", SymbolKind.PROPERTY, range(0, 10, 0, 24), 0, 14, type = ": Int")
+        val secondary = CodeSymbol("Box", SymbolKind.CONSTRUCTOR, range(1, 4, 1, 27), range(1, 4, 1, 27), parameterTypes = "", type = "()")
+        val first = symbol("first", SymbolKind.PROPERTY, range(3, 4, 3, 42), 3, 15, type = ": Char", receiver = "String")
+        val shout = symbol("shout", SymbolKind.FUNCTION, range(4, 4, 4, 44), 4, 15, parameterTypes = "", type = "(): String", receiver = "String")
         val box = symbol("Box", SymbolKind.CLASS, range(0, 0, 5, 1), 0, 6, children = listOf(primary, width, secondary, first, shout))
 
         // The primary constructor and its property share the class's line, so they report their declaration's lines.
@@ -104,7 +104,7 @@ class StructureRendererTest {
     fun `members of enum entry bodies are listed under their entry`() {
         val doc = TextDocument("enum class Color {\n    RED,\n    BLUE {\n        fun hex() = 1\n    };\n}\n")
         val red = symbol("RED", SymbolKind.ENUM_ENTRY, range(1, 4, 1, 7), 1, 4)
-        val hex = symbol("hex", SymbolKind.FUNCTION, range(3, 8, 3, 21), 3, 12, "(): Int")
+        val hex = symbol("hex", SymbolKind.FUNCTION, range(3, 8, 3, 21), 3, 12, parameterTypes = "", type = "(): Int")
         val blue = symbol("BLUE", SymbolKind.ENUM_ENTRY, range(2, 4, 4, 5), 2, 4, children = listOf(hex))
         val color = symbol("Color", SymbolKind.ENUM, range(0, 0, 5, 1), 0, 11, children = listOf(red, blue))
 

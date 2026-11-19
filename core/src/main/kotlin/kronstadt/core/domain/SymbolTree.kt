@@ -63,15 +63,6 @@ public class SymbolTree(roots: List<CodeSymbol>) {
         return SymbolPath(chain.map { segment(it, withSignature = true) }, anchored = true)
     }
 
-    /**
-     * The Symbol's `detail` without an extension receiver, which its path already shows: `(String): Int` for a
-     * function, `: Char` for a property. Null when the language server gives no detail.
-     */
-    public fun signature(node: Node): String? {
-        val detail = node.symbol.detail ?: return null
-        return receiverEnd(node.symbol)?.let { detail.substring(it).trimStart() } ?: detail
-    }
-
     private fun matching(path: SymbolPath): List<Node> {
         val candidates = nodes.filter { node ->
             val chain = node.chain
@@ -89,14 +80,14 @@ public class SymbolTree(roots: List<CodeSymbol>) {
 
     private fun matches(segment: SymbolPath.Segment, symbol: CodeSymbol): Boolean {
         if (segment.name != pathName(symbol)) return false
-        if (segment.receiver?.let(::normalise) != receiver(symbol)?.let(::normalise)) return false
+        if (segment.receiver?.let(::normalise) != symbol.receiver?.let(::normalise)) return false
         val wanted = segment.signature ?: return true
-        val actual = parameterList(symbol) ?: return false
+        val actual = symbol.parameterTypes ?: return false
         return normalise(wanted) == normalise(actual)
     }
 
     private fun segment(symbol: CodeSymbol, withSignature: Boolean) =
-        SymbolPath.Segment(pathName(symbol), if (withSignature) parameterList(symbol) else null, receiver(symbol))
+        SymbolPath.Segment(pathName(symbol), if (withSignature) symbol.parameterTypes else null, symbol.receiver)
 
     /** Suggestions for a path that matched nothing: Symbols whose name is close to the last segment's. */
     private fun suggestionsFor(path: SymbolPath): List<Node> {
@@ -114,55 +105,6 @@ public class SymbolTree(roots: List<CodeSymbol>) {
 
         /** The name a Symbol has in a path. Constructors are `constructor`, not their class's name (ADR 0002). */
         private fun pathName(symbol: CodeSymbol): String = if (symbol.kind == SymbolKind.CONSTRUCTOR) "constructor" else symbol.name
-
-        /**
-         * The parameter types inside a function's or constructor's `detail`, e.g. `String, Int` from
-         * `(String, Int): Int` or `String.(Int): Unit`: the last top-level parenthesised group that is followed by
-         * the return type or nothing. Null for Symbols that take no parameter list.
-         */
-        private fun parameterList(symbol: CodeSymbol): String? =
-            parameterGroup(symbol)?.let { symbol.detail!!.substring(it.first + 1, it.last) }
-
-        /**
-         * An extension's receiver type, which kotlin-lsp puts before the parameter list of a function's `detail`
-         * (`String.(): String`) and before the type of a property's (`String.: Char`). Null for other Symbols.
-         */
-        private fun receiver(symbol: CodeSymbol): String? {
-            val end = receiverEnd(symbol) ?: return null
-            return symbol.detail!!.substring(0, end - 1).trim().ifEmpty { null }
-        }
-
-        /** Index in `detail` just past the `.` that ends an extension's receiver; null for other Symbols. */
-        private fun receiverEnd(symbol: CodeSymbol): Int? {
-            val detail = symbol.detail ?: return null
-            return when (symbol.kind) {
-                SymbolKind.FUNCTION -> parameterGroup(symbol)?.first?.takeIf { it > 0 && detail[it - 1] == '.' }
-                SymbolKind.PROPERTY, SymbolKind.VARIABLE -> detail.indexOf(".:").takeIf { it > 0 }?.plus(1)
-                else -> null
-            }
-        }
-
-        /** Indices of the parentheses around [parameterList]'s text inside `detail`. */
-        private fun parameterGroup(symbol: CodeSymbol): IntRange? {
-            if (!isFunction(symbol)) return null
-            val detail = symbol.detail ?: return null
-            var depth = 0
-            var open = -1
-            var found: IntRange? = null
-            detail.forEachIndexed { i, c ->
-                when (c) {
-                    '(' -> { if (depth == 0) open = i; depth++ }
-                    ')' -> {
-                        depth--
-                        if (depth == 0 && open >= 0) {
-                            val rest = detail.substring(i + 1).trimStart()
-                            if (rest.isEmpty() || rest.startsWith(":")) found = open..i
-                        }
-                    }
-                }
-            }
-            return found
-        }
 
         private fun isFunction(symbol: CodeSymbol) = symbol.kind == SymbolKind.FUNCTION || symbol.kind == SymbolKind.CONSTRUCTOR
 

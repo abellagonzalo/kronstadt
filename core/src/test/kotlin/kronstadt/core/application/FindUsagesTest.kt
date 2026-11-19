@@ -20,8 +20,8 @@ class FindUsagesTest {
     private fun range(startLine: Int, startChar: Int, endLine: Int, endChar: Int) =
         TextRange(Position(startLine, startChar), Position(endLine, endChar))
 
-    private fun symbol(name: String, kind: SymbolKind, range: TextRange, nameLine: Int, nameChar: Int, detail: String? = null, children: List<CodeSymbol> = emptyList()) =
-        CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, detail)
+    private fun symbol(name: String, kind: SymbolKind, range: TextRange, nameLine: Int, nameChar: Int, parameterTypes: String? = null, type: String? = null, receiver: String? = null, children: List<CodeSymbol> = emptyList()) =
+        CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, parameterTypes = parameterTypes, type = type, receiver = receiver)
 
     /** A reference to a name at [line]:[char] (zero-based) of [file]. */
     private fun ref(file: String, line: Int, char: Int) = SourceLocation(root.resolve(file), range(line, char, line, char + 5))
@@ -38,8 +38,8 @@ class FindUsagesTest {
         |    fun greetTwice(name: String): String = greet(name) + greet(name)
         |}
         |""".trimMargin()
-    private val greet = symbol("greet", SymbolKind.FUNCTION, range(3, 4, 3, 54), 3, 8, "(String): String")
-    private val greetTwice = symbol("greetTwice", SymbolKind.FUNCTION, range(5, 4, 5, 70), 5, 8, "(String): String")
+    private val greet = symbol("greet", SymbolKind.FUNCTION, range(3, 4, 3, 54), 3, 8, parameterTypes = "String", type = "(String): String")
+    private val greetTwice = symbol("greetTwice", SymbolKind.FUNCTION, range(5, 4, 5, 70), 5, 8, parameterTypes = "String", type = "(String): String")
     private val greeter = symbol("Greeter", SymbolKind.CLASS, range(2, 0, 6, 1), 2, 6, children = listOf(greet, greetTwice))
 
     private val callersKt = "src/main/kotlin/com/example/Callers.kt"
@@ -58,7 +58,7 @@ class FindUsagesTest {
     private val greeting = symbol("greeting", SymbolKind.PROPERTY, range(4, 0, 4, 39), 4, 4)
 
     // kotlin-lsp omits the local `polite` from documentSymbol.
-    private val greetAll = symbol("greetAll", SymbolKind.FUNCTION, range(6, 0, 9, 1), 6, 4, "(List<String>): List<String>")
+    private val greetAll = symbol("greetAll", SymbolKind.FUNCTION, range(6, 0, 9, 1), 6, 4, parameterTypes = "List<String>", type = "(List<String>): List<String>")
 
     private val helloKts = "scripts/hello.kts"
     private val helloSource = """
@@ -85,7 +85,7 @@ class FindUsagesTest {
     /** A file `Calls<n>.kt` whose one function, `calls<n>`, calls greet on each of [count] lines (zero-based 2 onwards). */
     private fun calls(n: Int, count: Int): Triple<String, String, CodeSymbol> {
         val source = "package com.example\n\nfun calls$n() {\n" + "    Greeter().greet(\"x\")\n".repeat(count) + "}\n"
-        val function = symbol("calls$n", SymbolKind.FUNCTION, range(2, 0, count + 3, 1), 2, 4, "()")
+        val function = symbol("calls$n", SymbolKind.FUNCTION, range(2, 0, count + 3, 1), 2, 4, parameterTypes = "", type = "()")
         return Triple("src/main/kotlin/com/example/Calls$n.kt", source, function)
     }
 
@@ -291,7 +291,7 @@ class FindUsagesTest {
     @Test
     fun `reports an ambiguous Symbol Path with each candidate and its file`() = runTest {
         val otherKt = "src/main/kotlin/com/example/Other.kt"
-        val otherGreet = symbol("greet", SymbolKind.FUNCTION, range(2, 0, 2, 26), 2, 4, "(): String")
+        val otherGreet = symbol("greet", SymbolKind.FUNCTION, range(2, 0, 2, 26), 2, 4, parameterTypes = "", type = "(): String")
         val (files, intelligence) = project(emptyMap(), extra = listOf(Triple(otherKt, "package com.example\n\nfun greet(): String = \"hi\"\n", otherGreet)))
 
         val result = FindUsages(files, intelligence)("greet")

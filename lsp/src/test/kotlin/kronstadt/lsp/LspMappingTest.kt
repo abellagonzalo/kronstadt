@@ -28,7 +28,51 @@ class LspMappingTest {
         assertEquals(SymbolKind.CLASS, mapped.kind)
         assertEquals(SymbolKind.FUNCTION, mapped.children.single().kind)
         assertEquals(2, mapped.children.single().range.start.line)
-        assertEquals("(String): Repo?", mapped.children.single().detail)
+        assertEquals("(String): Repo?", mapped.children.single().type)
+    }
+
+    /** The receiver, Signature and type mapped from a kotlin-lsp `documentSymbol` of [kind] whose `detail` is [detail]. */
+    private fun parts(kind: LspSymbolKind, detail: String?) =
+        LspMapping.documentSymbol(DocumentSymbol("s", kind, range(0, 1), range(0, 0), detail))
+            .let { listOf(it.receiver, it.parameterTypes, it.type) }
+
+    @Test
+    fun `a function's Signature is the text inside its parameter parentheses, and its type the whole detail`() {
+        assertEquals(listOf(null, "String, Int", "(String, Int): Int"), parts(LspSymbolKind.Function, "(String, Int): Int"))
+        assertEquals(listOf(null, "", "(): Int"), parts(LspSymbolKind.Method, "(): Int"))
+        assertEquals(listOf(null, "List<String>, vararg Int", "(List<String>, vararg Int): Unit"), parts(LspSymbolKind.Function, "(List<String>, vararg Int): Unit"))
+    }
+
+    @Test
+    fun `parentheses nested in parameter types or a function-type receiver stay inside them`() {
+        assertEquals(listOf(null, "T, (T) -> String", "(T, (T) -> String): String"), parts(LspSymbolKind.Function, "(T, (T) -> String): String"))
+        assertEquals(listOf("((Int) -> Unit)", "Int", "(Int): Unit"), parts(LspSymbolKind.Function, "((Int) -> Unit).(Int): Unit"))
+    }
+
+    @Test
+    fun `an extension function's receiver comes before its parameter list, and its type leaves it out`() {
+        assertEquals(listOf("String", "Int", "(Int): Unit"), parts(LspSymbolKind.Function, "String.(Int): Unit"))
+        assertEquals(listOf("List<T>", "", "(): T"), parts(LspSymbolKind.Function, "List<T>.(): T"))
+    }
+
+    @Test
+    fun `a constructor's detail is only its parameter list`() {
+        assertEquals(listOf(null, "String", "(String)"), parts(LspSymbolKind.Constructor, "(String)"))
+    }
+
+    @Test
+    fun `a property has no Signature, and an extension property's receiver comes before its type`() {
+        assertEquals(listOf(null, null, ": Int"), parts(LspSymbolKind.Property, ": Int"))
+        assertEquals(listOf("String", null, ": Char"), parts(LspSymbolKind.Property, "String.: Char"))
+        assertEquals(listOf(null, null, ": Map<String, Int>"), parts(LspSymbolKind.Field, ": Map<String, Int>"))
+    }
+
+    @Test
+    fun `no detail maps to nothing, and a detail that can't be parsed is kept whole as the type`() {
+        assertEquals(listOf(null, null, null), parts(LspSymbolKind.Function, null))
+        assertEquals(listOf(null, null, "String -> Int"), parts(LspSymbolKind.Function, "String -> Int"))
+        assertEquals(listOf(null, null, "Char"), parts(LspSymbolKind.Property, "Char"))
+        assertEquals(listOf(null, null, "(String)"), parts(LspSymbolKind.Class, "(String)"))
     }
 
     @Test

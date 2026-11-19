@@ -155,7 +155,7 @@ public class RenameSymbol(
         val analysed = shadow.analysed(file) ?: return null
         val names = node.chain.dropLast(1).map { it.name } + newName
         val renamed = analysed.tree.nodes.singleOrNull {
-            it.chain.map { symbol -> symbol.name } == names && it.symbol.kind == node.symbol.kind && it.symbol.detail == node.symbol.detail
+            it.chain.map { symbol -> symbol.name } == names && it.symbol.kind == node.symbol.kind && it.symbol.receiver == node.symbol.receiver && it.symbol.type == node.symbol.type
         } ?: return null
         return analysed.tree.canonicalPath(renamed).toString()
     }

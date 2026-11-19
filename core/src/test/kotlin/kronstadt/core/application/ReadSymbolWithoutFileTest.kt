@@ -20,8 +20,8 @@ class ReadSymbolWithoutFileTest {
     private fun range(startLine: Int, startChar: Int, endLine: Int, endChar: Int) =
         TextRange(Position(startLine, startChar), Position(endLine, endChar))
 
-    private fun symbol(name: String, kind: SymbolKind, range: TextRange, nameLine: Int, nameChar: Int, detail: String? = null, children: List<CodeSymbol> = emptyList()) =
-        CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, detail)
+    private fun symbol(name: String, kind: SymbolKind, range: TextRange, nameLine: Int, nameChar: Int, parameterTypes: String? = null, type: String? = null, receiver: String? = null, children: List<CodeSymbol> = emptyList()) =
+        CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, parameterTypes = parameterTypes, type = type, receiver = receiver)
 
     private val controllerKt = "src/main/kotlin/com/example/web/OrderController.kt"
     private val controllerSource = """
@@ -31,7 +31,7 @@ class ReadSymbolWithoutFileTest {
         |    fun create(): Int = 1
         |}
         |""".trimMargin()
-    private val create = symbol("create", SymbolKind.FUNCTION, range(3, 4, 3, 25), 3, 8, "(): Int")
+    private val create = symbol("create", SymbolKind.FUNCTION, range(3, 4, 3, 25), 3, 8, parameterTypes = "", type = "(): Int")
     private val controller = symbol("OrderController", SymbolKind.CLASS, range(2, 0, 4, 1), 2, 6, children = listOf(create))
 
     private val alphaKt = "src/main/kotlin/com/example/a/Config.kt"
@@ -58,11 +58,11 @@ class ReadSymbolWithoutFileTest {
         |fun String.shout(): String = uppercase()
         |""".trimMargin()
     // kotlin-lsp names constructors after their class and omits local functions from documentSymbol.
-    private val boxPrimary = CodeSymbol("Box", SymbolKind.CONSTRUCTOR, range(2, 9, 2, 25), range(2, 9, 2, 25), detail = "(Int)")
-    private val boxSecondary = CodeSymbol("Box", SymbolKind.CONSTRUCTOR, range(3, 4, 3, 27), range(3, 4, 3, 27), detail = "()")
-    private val pack = symbol("pack", SymbolKind.FUNCTION, range(5, 4, 8, 5), 5, 8, "(): Int")
+    private val boxPrimary = CodeSymbol("Box", SymbolKind.CONSTRUCTOR, range(2, 9, 2, 25), range(2, 9, 2, 25), parameterTypes = "Int", type = "(Int)")
+    private val boxSecondary = CodeSymbol("Box", SymbolKind.CONSTRUCTOR, range(3, 4, 3, 27), range(3, 4, 3, 27), parameterTypes = "", type = "()")
+    private val pack = symbol("pack", SymbolKind.FUNCTION, range(5, 4, 8, 5), 5, 8, parameterTypes = "", type = "(): Int")
     private val box = symbol("Box", SymbolKind.CLASS, range(2, 0, 9, 1), 2, 6, children = listOf(boxPrimary, boxSecondary, pack))
-    private val shout = symbol("shout", SymbolKind.FUNCTION, range(11, 0, 11, 41), 11, 11, "String.(): String")
+    private val shout = symbol("shout", SymbolKind.FUNCTION, range(11, 0, 11, 41), 11, 11, parameterTypes = "", type = "(): String", receiver = "String")
 
     private val registryKt = "src/main/kotlin/com/example/Registry.kt"
     private val registrySource = """
@@ -74,7 +74,7 @@ class ReadSymbolWithoutFileTest {
         |    }
         |}
         |""".trimMargin()
-    private val empty = symbol("empty", SymbolKind.FUNCTION, range(4, 8, 4, 42), 4, 12, "(): Registry")
+    private val empty = symbol("empty", SymbolKind.FUNCTION, range(4, 8, 4, 42), 4, 12, parameterTypes = "", type = "(): Registry")
     private val registryCompanion = CodeSymbol("Companion", SymbolKind.OBJECT, range(3, 4, 5, 5), range(3, 4, 5, 5), listOf(empty))
     private val registry = symbol("Registry", SymbolKind.CLASS, range(2, 0, 6, 1), 2, 6, children = listOf(registryCompanion))
 

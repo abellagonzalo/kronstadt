@@ -50,7 +50,7 @@ class RenameSymbolTest {
     private fun greeter(member: String) = listOf(
         CodeSymbol(
             "Greeter", SymbolKind.CLASS, range(2, 0, 4, 1), name(2, 6, 7),
-            listOf(CodeSymbol(member, SymbolKind.FUNCTION, range(3, 4, 3, 30 + member.length - 5), name(3, 8, member.length), detail = "(): String")),
+            listOf(CodeSymbol(member, SymbolKind.FUNCTION, range(3, 4, 3, 30 + member.length - 5), name(3, 8, member.length), parameterTypes = "", type = "(): String")),
         ),
     )
 
@@ -111,7 +111,7 @@ class RenameSymbolTest {
     private fun host() = listOf(
         CodeSymbol(
             "Host", SymbolKind.CLASS, range(2, 0, 4, 1), name(2, 6, 4),
-            listOf(CodeSymbol("greet", SymbolKind.FUNCTION, range(3, 4, 3, 30), name(3, 8, 5), detail = "(): String")),
+            listOf(CodeSymbol("greet", SymbolKind.FUNCTION, range(3, 4, 3, 30), name(3, 8, 5), parameterTypes = "", type = "(): String")),
         ),
     )
 
@@ -202,7 +202,7 @@ class RenameSymbolTest {
     @Test
     fun `a constructor can't be renamed, only its class`() = runTest {
         val source = "package a\n\nclass Box(val size: Int) {\n    constructor() : this(0)\n}\n"
-        val constructor = CodeSymbol("constructor", SymbolKind.CONSTRUCTOR, range(3, 4, 3, 27), range(3, 4, 3, 27), detail = "()")
+        val constructor = CodeSymbol("constructor", SymbolKind.CONSTRUCTOR, range(3, 4, 3, 27), range(3, 4, 3, 27), parameterTypes = "", type = "()")
         val box = CodeSymbol("Box", SymbolKind.CLASS, range(2, 0, 4, 1), name(2, 6, 3), listOf(constructor))
         val files = FakeFileStore(root, mapOf("src/a/Box.kt" to source))
 

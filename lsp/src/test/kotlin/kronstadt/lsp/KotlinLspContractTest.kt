@@ -190,14 +190,18 @@ class KotlinLspContractTest {
 
     @Test
     @Order(9)
-    fun `detail renders parameter types without names, then the return type`() {
+    fun `detail gives parameter types without names, then the return type`() {
         val (_, symbols) = spans()
-        assertEquals("(): Int", symbols.find("Documented", "blocky").detail)
-        assertEquals("(List<Map<String, Int>>, vararg String): Unit", symbols.find("Documented", "generic").detail)
-        assertEquals("(T, (T) -> String): String", symbols.find("Documented", "wrap").detail)
-        assertEquals(": Int", symbols.find("Documented", "annotated").detail)
-        assertEquals("(String)", symbols.find("Color").children.single { it.kind == SymbolKind.CONSTRUCTOR }.detail)
-        assertNull(symbols.find("Documented").detail)
+        fun parts(symbol: CodeSymbol) = listOf(symbol.receiver, symbol.parameterTypes, symbol.type)
+        assertEquals(listOf(null, "", "(): Int"), parts(symbols.find("Documented", "blocky")))
+        assertEquals(
+            listOf(null, "List<Map<String, Int>>, vararg String", "(List<Map<String, Int>>, vararg String): Unit"),
+            parts(symbols.find("Documented", "generic")),
+        )
+        assertEquals(listOf(null, "T, (T) -> String", "(T, (T) -> String): String"), parts(symbols.find("Documented", "wrap")))
+        assertEquals(listOf(null, null, ": Int"), parts(symbols.find("Documented", "annotated")))
+        assertEquals(listOf(null, "String", "(String)"), parts(symbols.find("Color").children.single { it.kind == SymbolKind.CONSTRUCTOR }))
+        assertEquals(listOf(null, null, null), parts(symbols.find("Documented")))
     }
 
     private val files by lazy { LocalFileStore(project) }

@@ -31,9 +31,9 @@ class EditTest {
         range: TextRange,
         nameLine: Int,
         nameChar: Int,
-        detail: String? = null,
+        parameterTypes: String? = null, type: String? = null, receiver: String? = null,
         children: List<CodeSymbol> = emptyList(),
-    ) = CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, detail)
+    ) = CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, parameterTypes = parameterTypes, type = type, receiver = receiver)
 
     private val source = """
         |package a
@@ -47,8 +47,8 @@ class EditTest {
         |""".trimMargin()
     private fun greeter(vararg members: CodeSymbol, lastLine: Int = 7) =
         symbol("Greeter", SymbolKind.CLASS, range(2, 0, lastLine, 1), 2, 6, children = members.toList())
-    private val greet = symbol("greet", SymbolKind.FUNCTION, range(3, 4, 4, 30), 4, 8, "(): String")
-    private val other = symbol("other", SymbolKind.FUNCTION, range(6, 4, 6, 24), 6, 8, "(): Int")
+    private val greet = symbol("greet", SymbolKind.FUNCTION, range(3, 4, 4, 30), 4, 8, parameterTypes = "", type = "(): String")
+    private val other = symbol("other", SymbolKind.FUNCTION, range(6, 4, 6, 24), 6, 8, parameterTypes = "", type = "(): Int")
 
     private val hello = """
         |package a
@@ -60,7 +60,7 @@ class EditTest {
         |    fun other(): Int = 1
         |}
         |""".trimMargin()
-    private val helloGreet = symbol("greet", SymbolKind.FUNCTION, range(3, 4, 4, 15), 3, 8, "(): String")
+    private val helloGreet = symbol("greet", SymbolKind.FUNCTION, range(3, 4, 4, 15), 3, 8, parameterTypes = "", type = "(): String")
 
     private fun error(line: Int, char: Int, message: String, code: String = "ERR") =
         Diagnostic(range(line, char, line, char + 1), Severity.ERROR, message, code)
@@ -298,9 +298,9 @@ class EditTest {
     fun `the new code may rename the declaration and hold several, each reported with its span`() = runTest {
         val files = FakeFileStore(root, mapOf(path to source))
         val twoFunctions = source.replace("    /** Says hi. */\n    fun greet(): String = \"hi\"\n", "    fun hi(): Int = 1\n\n    fun bye(): Int = 2\n")
-        val hi = symbol("hi", SymbolKind.FUNCTION, range(3, 4, 3, 21), 3, 8, "(): Int")
-        val bye = symbol("bye", SymbolKind.FUNCTION, range(5, 4, 5, 22), 5, 8, "(): Int")
-        val movedOther = symbol("other", SymbolKind.FUNCTION, range(7, 4, 7, 24), 7, 8, "(): Int")
+        val hi = symbol("hi", SymbolKind.FUNCTION, range(3, 4, 3, 21), 3, 8, parameterTypes = "", type = "(): Int")
+        val bye = symbol("bye", SymbolKind.FUNCTION, range(5, 4, 5, 22), 5, 8, parameterTypes = "", type = "(): Int")
+        val movedOther = symbol("other", SymbolKind.FUNCTION, range(7, 4, 7, 24), 7, 8, parameterTypes = "", type = "(): Int")
         val intelligence = intelligence(
             symbolsByText = mapOf(source to listOf(greeter(greet, other)), twoFunctions to listOf(greeter(hi, bye, movedOther, lastLine = 8))),
         )
@@ -332,7 +332,7 @@ class EditTest {
     private val renamed = source.replace("    /** Says hi. */\n    fun greet(): String = \"hi\"\n", "    fun hi(): Int = 1\n")
     private val renamedAgain = renamed.replace("fun hi(): Int = 1", "fun hi(): Int = 2")
     private fun renamedSymbols() = listOf(
-        greeter(symbol("hi", SymbolKind.FUNCTION, range(3, 4, 3, 21), 3, 8, "(): Int"), symbol("other", SymbolKind.FUNCTION, range(5, 4, 5, 24), 5, 8, "(): Int"), lastLine = 6),
+        greeter(symbol("hi", SymbolKind.FUNCTION, range(3, 4, 3, 21), 3, 8, parameterTypes = "", type = "(): Int"), symbol("other", SymbolKind.FUNCTION, range(5, 4, 5, 24), 5, 8, parameterTypes = "", type = "(): Int"), lastLine = 6),
     )
     private fun batchIntelligence(index: List<SymbolLocation> = emptyList()) = FakeCodeIntelligence(
         symbolsByText = mapOf(
@@ -379,7 +379,7 @@ class EditTest {
         val intelligence = FakeCodeIntelligence(
             symbolsByText = mapOf(
                 source to listOf(greeter(greet, other)),
-                greets to listOf(greeter(symbol("greets", SymbolKind.FUNCTION, range(3, 4, 3, 25), 3, 8, "(): Int"), symbol("other", SymbolKind.FUNCTION, range(5, 4, 5, 24), 5, 8, "(): Int"), lastLine = 6)),
+                greets to listOf(greeter(symbol("greets", SymbolKind.FUNCTION, range(3, 4, 3, 25), 3, 8, parameterTypes = "", type = "(): Int"), symbol("other", SymbolKind.FUNCTION, range(5, 4, 5, 24), 5, 8, parameterTypes = "", type = "(): Int"), lastLine = 6)),
             ),
         )
 

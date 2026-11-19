@@ -31,11 +31,18 @@ public data class CodeSymbol(
     /** The range of the symbol's name (identifier) only. */
     val selectionRange: TextRange,
     val children: List<CodeSymbol> = emptyList(),
+    /** An extension's receiver type, e.g. `String` or `List<T>`; null for Symbols that aren't extensions. */
+    val receiver: String? = null,
     /**
-     * Extra text the language server shows next to the name. For kotlin-lsp functions and constructors this is the
-     * parameter-type signature that Symbol Paths match against (ADR 0002).
+     * A function's or constructor's Signature: the text between its parameter parentheses, e.g. `String, Int`, and
+     * empty for `()`. Null for Symbols that take no parameter list.
      */
-    val detail: String? = null,
+    val parameterTypes: String? = null,
+    /**
+     * The text `kt_read_structure` shows next to the Symbol's path, without an extension receiver: `(String): Int` for
+     * a function, `: Char` for a property. Null when the language server shows nothing.
+     */
+    val type: String? = null,
 )
 
 /** A symbol found by a workspace-wide search. */

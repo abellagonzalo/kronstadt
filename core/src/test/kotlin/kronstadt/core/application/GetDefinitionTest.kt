@@ -26,8 +26,8 @@ class GetDefinitionTest {
     private fun range(startLine: Int, startChar: Int, endLine: Int, endChar: Int) =
         TextRange(Position(startLine, startChar), Position(endLine, endChar))
 
-    private fun symbol(name: String, kind: SymbolKind, range: TextRange, nameLine: Int, nameChar: Int, detail: String? = null, children: List<CodeSymbol> = emptyList()) =
-        CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, detail)
+    private fun symbol(name: String, kind: SymbolKind, range: TextRange, nameLine: Int, nameChar: Int, parameterTypes: String? = null, type: String? = null, receiver: String? = null, children: List<CodeSymbol> = emptyList()) =
+        CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, parameterTypes = parameterTypes, type = type, receiver = receiver)
 
     // The Greeter, documented, and a caller that uses it.
 
@@ -46,7 +46,7 @@ class GetDefinitionTest {
         |    }
         |}
         |""".trimMargin()
-    private val greet = symbol("greet", SymbolKind.FUNCTION, range(4, 4, 10, 5), 8, 8, "(String): String")
+    private val greet = symbol("greet", SymbolKind.FUNCTION, range(4, 4, 10, 5), 8, 8, parameterTypes = "String", type = "(String): String")
     private val greeter = symbol("Greeter", SymbolKind.CLASS, range(2, 0, 11, 1), 3, 6, children = listOf(greet))
 
     private val callerKt = "src/main/kotlin/com/example/Caller.kt"
@@ -58,7 +58,7 @@ class GetDefinitionTest {
         |    return greeter.greet(guest)
         |}
         |""".trimMargin()
-    private val welcome = symbol("welcome", SymbolKind.FUNCTION, range(2, 0, 5, 1), 2, 4, "(String): String")
+    private val welcome = symbol("welcome", SymbolKind.FUNCTION, range(2, 0, 5, 1), 2, 4, parameterTypes = "String", type = "(String): String")
 
     private val listsKt = "src/main/kotlin/com/example/Lists.kt"
     private val listsSource = """
@@ -66,7 +66,7 @@ class GetDefinitionTest {
         |
         |fun names(): Int = listOf("a").size + java.io.File("x").name.length
         |""".trimMargin()
-    private val names = symbol("names", SymbolKind.FUNCTION, range(2, 0, 2, 67), 2, 4, "(): Int")
+    private val names = symbol("names", SymbolKind.FUNCTION, range(2, 0, 2, 67), 2, 4, parameterTypes = "", type = "(): Int")
 
     /** The name at [line]:[char] (zero-based) of the lists file. */
     private fun inLists(line: Int, char: Int) = root.resolve(listsKt) to Position(line, char)
@@ -87,8 +87,8 @@ class GetDefinitionTest {
         |    override val size: Int
         |}
         |""".trimMargin()
-    private val listOf = symbol("listOf", SymbolKind.FUNCTION, range(2, 0, 6, 61), 5, 15, "(vararg T): List<T>")
-    private val size = symbol("size", SymbolKind.PROPERTY, range(9, 4, 10, 26), 10, 17, ": Int")
+    private val listOf = symbol("listOf", SymbolKind.FUNCTION, range(2, 0, 6, 61), 5, 15, parameterTypes = "vararg T", type = "(vararg T): List<T>")
+    private val size = symbol("size", SymbolKind.PROPERTY, range(9, 4, 10, 26), 10, 17, type = ": Int")
     private val list = symbol("List", SymbolKind.INTERFACE, range(8, 0, 11, 1), 8, 17, children = listOf(size))
     private val stdlib = LibrarySource(TextDocument(stdlibSource), listOf(listOf, list))
     private fun inStdlib(symbol: CodeSymbol) =

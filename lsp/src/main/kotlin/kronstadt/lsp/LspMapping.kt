@@ -57,14 +57,68 @@ internal object LspMapping {
         else -> SymbolKind.OTHER
     }
 
-    fun documentSymbol(s: DocumentSymbol): CodeSymbol = CodeSymbol(
-        name = s.name,
-        kind = kind(s.kind),
-        range = range(s.range),
-        selectionRange = range(s.selectionRange),
-        children = s.children.orEmpty().map(::documentSymbol),
-        detail = s.detail,
-    )
+    fun documentSymbol(s: DocumentSymbol): CodeSymbol {
+        val kind = kind(s.kind)
+        val parts = detailParts(kind, s.detail)
+        return CodeSymbol(
+            name = s.name,
+            kind = kind,
+            range = range(s.range),
+            selectionRange = range(s.selectionRange),
+            children = s.children.orEmpty().map(::documentSymbol),
+            receiver = parts.receiver,
+            parameterTypes = parts.parameterTypes,
+            type = parts.type,
+        )
+    }
+
+    /** The parts of kotlin-lsp's `documentSymbol.detail` that [CodeSymbol] carries. */
+    private data class DetailParts(val receiver: String? = null, val parameterTypes: String? = null, val type: String? = null)
+
+    /**
+     * Splits kotlin-lsp's `detail` (ADR 0001): a function's is `(String, Int): Int`, a constructor's `(String)`, a
+     * property's `: Char`, and an extension's starts with its receiver and a dot (`String.(): String`, `String.: Char`).
+     * The type is the detail without the receiver, whitespace untouched. A detail in another format never fails: what
+     * can't be found is null, and the type is the whole detail.
+     */
+    private fun detailParts(kind: SymbolKind, detail: String?): DetailParts {
+        if (detail == null) return DetailParts()
+        val group = if (kind == SymbolKind.FUNCTION || kind == SymbolKind.CONSTRUCTOR) parameterGroup(detail) else null
+        // Index just past the `.` that ends an extension's receiver.
+        val receiverEnd = when (kind) {
+            SymbolKind.FUNCTION -> group?.first?.takeIf { it > 0 && detail[it - 1] == '.' }
+            SymbolKind.PROPERTY, SymbolKind.VARIABLE -> detail.indexOf(".:").takeIf { it > 0 }?.plus(1)
+            else -> null
+        }
+        return DetailParts(
+            receiver = receiverEnd?.let { detail.substring(0, it - 1).trim().ifEmpty { null } },
+            parameterTypes = group?.let { detail.substring(it.first + 1, it.last) },
+            type = receiverEnd?.let { detail.substring(it).trimStart() } ?: detail,
+        )
+    }
+
+    /**
+     * Indices of the parentheses around a function's parameter types in its `detail`: the last top-level parenthesised
+     * group that is followed by the return type or nothing.
+     */
+    private fun parameterGroup(detail: String): IntRange? {
+        var depth = 0
+        var open = -1
+        var found: IntRange? = null
+        detail.forEachIndexed { i, c ->
+            when (c) {
+                '(' -> { if (depth == 0) open = i; depth++ }
+                ')' -> {
+                    depth--
+                    if (depth == 0 && open >= 0) {
+                        val rest = detail.substring(i + 1).trimStart()
+                        if (rest.isEmpty() || rest.startsWith(":")) found = open..i
+                    }
+                }
+            }
+        }
+        return found
+    }
 
     /**
      * Servers that ignore our hierarchical capability return flat [SymbolInformation].

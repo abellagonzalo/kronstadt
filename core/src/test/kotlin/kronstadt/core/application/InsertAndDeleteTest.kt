@@ -24,7 +24,8 @@ class InsertAndDeleteTest {
         range(line - extraLinesAbove, indent, line, indent + "fun $name(): Int = $n".length),
         range(line, indent + 4, line, indent + 4 + name.length),
         emptyList(),
-        "(): Int",
+        parameterTypes = "",
+        type = "(): Int",
     )
 
     private fun greeter(firstLine: Int, lastLine: Int, vararg members: CodeSymbol) =
@@ -142,7 +143,7 @@ class InsertAndDeleteTest {
         fun outer(lastLine: Int, vararg members: CodeSymbol) =
             CodeSymbol("Outer", SymbolKind.CLASS, range(2, 0, lastLine, 1), range(2, 6, 2, 11), listOf(CodeSymbol("Inner", SymbolKind.CLASS, range(3, 1, lastLine - 1, 2), range(3, 7, 3, 12), members.toList(), null)), null)
         val one = function("one", 4, 2)
-        val two = CodeSymbol("two", SymbolKind.FUNCTION, range(6, 2, 8, 3), range(6, 6, 6, 9), emptyList(), "(): Int")
+        val two = CodeSymbol("two", SymbolKind.FUNCTION, range(6, 2, 8, 3), range(6, 6, 6, 9), emptyList(), parameterTypes = "", type = "(): Int")
         val texts = mapOf(tabs to listOf(outer(6, one)), expected to listOf(outer(10, one, two)))
 
         val (result, files) = run(texts, InsertAfter(path, "Inner/one", "    fun two(): Int {\n        return 2\n    }"))

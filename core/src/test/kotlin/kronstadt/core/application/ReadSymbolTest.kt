@@ -23,9 +23,9 @@ class ReadSymbolTest {
         range: TextRange,
         nameLine: Int,
         nameChar: Int,
-        detail: String? = null,
+        parameterTypes: String? = null, type: String? = null, receiver: String? = null,
         children: List<CodeSymbol> = emptyList(),
-    ) = CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, detail)
+    ) = CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, parameterTypes = parameterTypes, type = type, receiver = receiver)
 
     private fun readSymbol(source: String, vararg symbols: CodeSymbol, intelligence: FakeCodeIntelligence = FakeCodeIntelligence(symbols.toList())) =
         ReadSymbol(FakeFileStore(root, mapOf("src/A.kt" to source)), intelligence)
@@ -33,7 +33,7 @@ class ReadSymbolTest {
     @Test
     fun `reads a top-level function as a header and its raw source`() = runTest {
         val source = "package a\n\nfun greet(): String =\n    \"hi\"\n"
-        val greet = symbol("greet", SymbolKind.FUNCTION, range(2, 0, 3, 8), 2, 4, "(): String")
+        val greet = symbol("greet", SymbolKind.FUNCTION, range(2, 0, 3, 8), 2, 4, parameterTypes = "", type = "(): String")
 
         val result = assertIs<ReadSymbolResult.Found>(readSymbol(source, greet)("src/A.kt", "greet"))
 
@@ -56,11 +56,11 @@ class ReadSymbolTest {
         |
         |fun run(): Int = 3
         |""".trimMargin()
-    private val outerRun = symbol("run", SymbolKind.FUNCTION, range(5, 4, 5, 22), 5, 8, "(): Int")
-    private val nestedRun = symbol("run", SymbolKind.FUNCTION, range(8, 8, 8, 45), 8, 12, "(): Int")
+    private val outerRun = symbol("run", SymbolKind.FUNCTION, range(5, 4, 5, 22), 5, 8, parameterTypes = "", type = "(): Int")
+    private val nestedRun = symbol("run", SymbolKind.FUNCTION, range(8, 8, 8, 45), 8, 12, parameterTypes = "", type = "(): Int")
     private val nestedClass = symbol("Nested", SymbolKind.CLASS, range(7, 4, 9, 5), 7, 10, children = listOf(nestedRun))
     private val runner = symbol("Runner", SymbolKind.CLASS, range(2, 0, 10, 1), 4, 6, children = listOf(outerRun, nestedClass))
-    private val topRun = symbol("run", SymbolKind.FUNCTION, range(12, 0, 12, 18), 12, 4, "(): Int")
+    private val topRun = symbol("run", SymbolKind.FUNCTION, range(12, 0, 12, 18), 12, 4, parameterTypes = "", type = "(): Int")
 
     private suspend fun read(symbol: String) = readSymbol(nested, runner, topRun)("src/A.kt", symbol)
 
@@ -107,9 +107,9 @@ class ReadSymbolTest {
         |    fun merge(a: Map<String, Int>, b: List<Int>): Int = 0
         |}
         |""".trimMargin()
-    private val parse1 = symbol("parse", SymbolKind.FUNCTION, range(1, 4, 1, 47), 1, 8, "(String): Int")
-    private val parse2 = symbol("parse", SymbolKind.FUNCTION, range(3, 4, 3, 64), 3, 8, "(String, Int): Int")
-    private val merge = symbol("merge", SymbolKind.FUNCTION, range(5, 4, 5, 57), 5, 8, "(Map<String, Int>, List<Int>): Int")
+    private val parse1 = symbol("parse", SymbolKind.FUNCTION, range(1, 4, 1, 47), 1, 8, parameterTypes = "String", type = "(String): Int")
+    private val parse2 = symbol("parse", SymbolKind.FUNCTION, range(3, 4, 3, 64), 3, 8, parameterTypes = "String, Int", type = "(String, Int): Int")
+    private val merge = symbol("merge", SymbolKind.FUNCTION, range(5, 4, 5, 57), 5, 8, parameterTypes = "Map<String, Int>, List<Int>", type = "(Map<String, Int>, List<Int>): Int")
     private val parser = symbol("Parser", SymbolKind.CLASS, range(0, 0, 6, 1), 0, 6, children = listOf(parse1, parse2, merge))
 
     private suspend fun readOverload(symbol: String) = readSymbol(overloads, parser)("src/A.kt", symbol)
@@ -144,7 +144,7 @@ class ReadSymbolTest {
 
     @Test
     fun `refuses with out of sync when the name is not where the analysis says`() = runTest {
-        val stale = symbol("parse", SymbolKind.FUNCTION, range(1, 4, 1, 47), 1, 12, "(String): Int")
+        val stale = symbol("parse", SymbolKind.FUNCTION, range(1, 4, 1, 47), 1, 12, parameterTypes = "String", type = "(String): Int")
         assertIs<ReadSymbolResult.OutOfSync>(readSymbol(overloads, stale)("src/A.kt", "parse"))
     }
 
@@ -161,7 +161,7 @@ class ReadSymbolTest {
     @Test
     fun `code between two block comments after the Symbol still counts as sharing its line`() = runTest {
         val source = "fun a() = 1 /* x */ ; val b = 2 /* y */\n"
-        val a = symbol("a", SymbolKind.FUNCTION, range(0, 0, 0, 11), 0, 4, "(): Int")
+        val a = symbol("a", SymbolKind.FUNCTION, range(0, 0, 0, 11), 0, 4, parameterTypes = "", type = "(): Int")
         assertIs<ReadSymbolResult.SharedLine>(readSymbol(source, a)("src/A.kt", "a"))
     }
 
@@ -169,7 +169,7 @@ class ReadSymbolTest {
     fun `columns count UTF-16 units, so names after surrogate pairs are found`() = runTest {
         val source = "/** 😀 */ fun `😀name`(): Int =\n    1\n"
         // "/** 😀 */ " is 10 UTF-16 units, "fun " 4 more: the backticked name starts at column 14.
-        val fn = CodeSymbol("😀name", SymbolKind.FUNCTION, range(0, 0, 1, 5), range(0, 14, 0, 22), detail = "(): Int")
+        val fn = CodeSymbol("😀name", SymbolKind.FUNCTION, range(0, 0, 1, 5), range(0, 14, 0, 22), parameterTypes = "", type = "(): Int")
         val result = assertIs<ReadSymbolResult.Found>(readSymbol(source, fn)("src/A.kt", "`😀name`"))
         assertEquals("// `😀name` in src/A.kt, L1-2\n/** 😀 */ fun `😀name`(): Int =\n    1", result.text)
     }
@@ -202,8 +202,8 @@ class ReadSymbolTest {
     fun `a class is not confused with its constructors, which kotlin-lsp names after the class`() = runTest {
         val source = "class Box(val width: Int) {\n    constructor() : this(0)\n}\n"
         // kotlin-lsp gives constructors no separate name range: selectionRange is the whole declaration.
-        val primary = CodeSymbol("Box", SymbolKind.CONSTRUCTOR, range(0, 9, 0, 25), range(0, 9, 0, 25), detail = "(Int)")
-        val secondary = CodeSymbol("Box", SymbolKind.CONSTRUCTOR, range(1, 4, 1, 27), range(1, 4, 1, 27), detail = "()")
+        val primary = CodeSymbol("Box", SymbolKind.CONSTRUCTOR, range(0, 9, 0, 25), range(0, 9, 0, 25), parameterTypes = "Int", type = "(Int)")
+        val secondary = CodeSymbol("Box", SymbolKind.CONSTRUCTOR, range(1, 4, 1, 27), range(1, 4, 1, 27), parameterTypes = "", type = "()")
         val box = symbol("Box", SymbolKind.CLASS, range(0, 0, 2, 1), 0, 6, children = listOf(primary, secondary))
         val read = readSymbol(source, box)
 
@@ -230,14 +230,14 @@ class ReadSymbolTest {
         |val String.firstChar: Char
         |    get() = this[0]
         |""".trimMargin()
-    private val stringDecorate = symbol("decorate", SymbolKind.FUNCTION, range(1, 4, 1, 45), 1, 15, "String.(): String")
-    private val intDecorate = symbol("decorate", SymbolKind.FUNCTION, range(3, 4, 3, 41), 3, 12, "Int.(): String")
-    private val plainDecorate = symbol("decorate", SymbolKind.FUNCTION, range(5, 4, 5, 36), 5, 8, "(): String")
+    private val stringDecorate = symbol("decorate", SymbolKind.FUNCTION, range(1, 4, 1, 45), 1, 15, parameterTypes = "", type = "(): String", receiver = "String")
+    private val intDecorate = symbol("decorate", SymbolKind.FUNCTION, range(3, 4, 3, 41), 3, 12, parameterTypes = "", type = "(): String", receiver = "Int")
+    private val plainDecorate = symbol("decorate", SymbolKind.FUNCTION, range(5, 4, 5, 36), 5, 8, parameterTypes = "", type = "(): String")
     private val formatter = symbol("Formatter", SymbolKind.CLASS, range(0, 0, 6, 1), 0, 6, children = listOf(stringDecorate, intDecorate, plainDecorate))
-    private val shout = symbol("shout", SymbolKind.FUNCTION, range(8, 0, 8, 41), 8, 11, "String.(): String")
-    private val second = symbol("second", SymbolKind.FUNCTION, range(10, 0, 10, 37), 10, 16, "List<T>.(): T")
+    private val shout = symbol("shout", SymbolKind.FUNCTION, range(8, 0, 8, 41), 8, 11, parameterTypes = "", type = "(): String", receiver = "String")
+    private val second = symbol("second", SymbolKind.FUNCTION, range(10, 0, 10, 37), 10, 16, parameterTypes = "", type = "(): T", receiver = "List<T>")
     private val firstCharGetter = CodeSymbol("get", SymbolKind.FUNCTION, range(13, 4, 13, 19), range(13, 4, 13, 19))
-    private val firstChar = symbol("firstChar", SymbolKind.PROPERTY, range(12, 0, 13, 19), 12, 11, "String.: Char", listOf(firstCharGetter))
+    private val firstChar = symbol("firstChar", SymbolKind.PROPERTY, range(12, 0, 13, 19), 12, 11, type = ": Char", receiver = "String", children = listOf(firstCharGetter))
 
     private suspend fun readExtension(symbol: String) =
         readSymbol(extensions, formatter, shout, second, firstChar)("src/A.kt", symbol)
@@ -270,10 +270,10 @@ class ReadSymbolTest {
         |    fun size(): Int = 1
         |}
         |""".trimMargin()
-    private val sizeProperty = symbol("size", SymbolKind.PROPERTY, range(1, 4, 1, 21), 1, 8, ": Int")
-    private val sizeFunction = symbol("size", SymbolKind.FUNCTION, range(3, 4, 3, 44), 3, 8, "(Int): Int")
+    private val sizeProperty = symbol("size", SymbolKind.PROPERTY, range(1, 4, 1, 21), 1, 8, type = ": Int")
+    private val sizeFunction = symbol("size", SymbolKind.FUNCTION, range(3, 4, 3, 44), 3, 8, parameterTypes = "Int", type = "(Int): Int")
     private val sizedClass = symbol("Sized", SymbolKind.CLASS, range(0, 0, 4, 1), 0, 6, children = listOf(sizeProperty, sizeFunction))
-    private val otherSize = symbol("size", SymbolKind.FUNCTION, range(7, 4, 7, 23), 7, 8, "(): Int")
+    private val otherSize = symbol("size", SymbolKind.FUNCTION, range(7, 4, 7, 23), 7, 8, parameterTypes = "", type = "(): Int")
     private val other = symbol("Other", SymbolKind.CLASS, range(6, 0, 8, 1), 6, 6, children = listOf(otherSize))
 
     private suspend fun readSized(symbol: String) = readSymbol(sized, sizedClass, other)("src/A.kt", symbol)
@@ -311,9 +311,9 @@ class ReadSymbolTest {
         // server might report them as children of the function.
         val getter = CodeSymbol("get", SymbolKind.FUNCTION, range(2, 8, 2, 21), range(2, 8, 2, 21))
         val setter = CodeSymbol("set", SymbolKind.FUNCTION, range(3, 8, 5, 9), range(3, 8, 5, 9))
-        val counter = symbol("counter", SymbolKind.PROPERTY, range(1, 4, 5, 9), 1, 8, ": Int", listOf(getter, setter))
-        val local = symbol("local", SymbolKind.FUNCTION, range(8, 8, 8, 28), 8, 12, "(): Int")
-        val outer = symbol("outer", SymbolKind.FUNCTION, range(7, 4, 10, 5), 7, 8, "(): Int", listOf(local))
+        val counter = symbol("counter", SymbolKind.PROPERTY, range(1, 4, 5, 9), 1, 8, type = ": Int", children = listOf(getter, setter))
+        val local = symbol("local", SymbolKind.FUNCTION, range(8, 8, 8, 28), 8, 12, parameterTypes = "", type = "(): Int")
+        val outer = symbol("outer", SymbolKind.FUNCTION, range(7, 4, 10, 5), 7, 8, parameterTypes = "", type = "(): Int", children = listOf(local))
         val hidden = symbol("Hidden", SymbolKind.CLASS, range(0, 0, 11, 1), 0, 6, children = listOf(counter, outer))
         val read = readSymbol(source, hidden)
 
@@ -355,20 +355,20 @@ class ReadSymbolTest {
 
     // kotlin-lsp reports a primary constructor's val parameter as a variable, and gives constructors and unnamed
     // companions no separate name range.
-    private val width = symbol("width", SymbolKind.VARIABLE, range(1, 4, 1, 18), 1, 8, ": Int")
-    private val primary = CodeSymbol("Box", SymbolKind.CONSTRUCTOR, range(0, 9, 3, 1), range(0, 9, 3, 1), detail = "(Int, Int)")
-    private val secondary = CodeSymbol("Box", SymbolKind.CONSTRUCTOR, range(4, 4, 4, 45), range(4, 4, 4, 45), detail = "(Int)")
+    private val width = symbol("width", SymbolKind.VARIABLE, range(1, 4, 1, 18), 1, 8, type = ": Int")
+    private val primary = CodeSymbol("Box", SymbolKind.CONSTRUCTOR, range(0, 9, 3, 1), range(0, 9, 3, 1), parameterTypes = "Int, Int", type = "(Int, Int)")
+    private val secondary = CodeSymbol("Box", SymbolKind.CONSTRUCTOR, range(4, 4, 4, 45), range(4, 4, 4, 45), parameterTypes = "Int", type = "(Int)")
     private val box = symbol("Box", SymbolKind.CLASS, range(0, 0, 5, 1), 0, 6, children = listOf(width, primary, secondary))
-    private val widgetCreate = symbol("create", SymbolKind.FUNCTION, range(9, 8, 9, 39), 9, 12, "(): Widget")
+    private val widgetCreate = symbol("create", SymbolKind.FUNCTION, range(9, 8, 9, 39), 9, 12, parameterTypes = "", type = "(): Widget")
     private val companion = CodeSymbol("Companion", SymbolKind.OBJECT, range(8, 4, 10, 5), range(8, 4, 10, 5), listOf(widgetCreate))
     private val widget = symbol("Widget", SymbolKind.CLASS, range(7, 0, 11, 1), 7, 6, children = listOf(companion))
-    private val outerCreate = symbol("create", SymbolKind.FUNCTION, range(15, 8, 15, 37), 15, 12, "(): Outer")
+    private val outerCreate = symbol("create", SymbolKind.FUNCTION, range(15, 8, 15, 37), 15, 12, parameterTypes = "", type = "(): Outer")
     private val factory = symbol("Factory", SymbolKind.OBJECT, range(14, 4, 16, 5), 14, 21, children = listOf(outerCreate))
     private val outer = symbol("Outer", SymbolKind.CLASS, range(13, 0, 17, 1), 13, 6, children = listOf(factory))
-    private val code = symbol("code", SymbolKind.VARIABLE, range(19, 16, 19, 29), 19, 20, ": Int")
-    private val tintConstructor = CodeSymbol("Tint", SymbolKind.CONSTRUCTOR, range(19, 15, 19, 30), range(19, 15, 19, 30), detail = "(Int)")
+    private val code = symbol("code", SymbolKind.VARIABLE, range(19, 16, 19, 29), 19, 20, type = ": Int")
+    private val tintConstructor = CodeSymbol("Tint", SymbolKind.CONSTRUCTOR, range(19, 15, 19, 30), range(19, 15, 19, 30), parameterTypes = "Int", type = "(Int)")
     private val pale = symbol("PALE", SymbolKind.ENUM_ENTRY, range(20, 4, 20, 12), 20, 4)
-    private val hex = symbol("hex", SymbolKind.FUNCTION, range(22, 8, 22, 34), 22, 12, "(): String")
+    private val hex = symbol("hex", SymbolKind.FUNCTION, range(22, 8, 22, 34), 22, 12, parameterTypes = "", type = "(): String")
     private val deep = symbol("DEEP", SymbolKind.ENUM_ENTRY, range(21, 4, 23, 6), 21, 4, children = listOf(hex))
     private val tint = symbol("Tint", SymbolKind.ENUM, range(19, 0, 24, 1), 19, 11, children = listOf(code, tintConstructor, pale, deep))
     private val names = symbol("Names", SymbolKind.CLASS, range(26, 0, 26, 30), 26, 10)
@@ -413,8 +413,8 @@ class ReadSymbolTest {
     @Test
     fun `function-type and nullable receivers are written as in Kotlin, and their canonical paths read back`() = runTest {
         val source = "fun ((Int) -> Unit).twice(x: Int) = this(x)\n\nfun String?.orBlank(): String = this ?: \"\"\n"
-        val twice = symbol("twice", SymbolKind.FUNCTION, range(0, 0, 0, 43), 0, 20, "((Int) -> Unit).(Int): Unit")
-        val orBlank = symbol("orBlank", SymbolKind.FUNCTION, range(2, 0, 2, 42), 2, 12, "String?.(): String")
+        val twice = symbol("twice", SymbolKind.FUNCTION, range(0, 0, 0, 43), 0, 20, parameterTypes = "Int", type = "(Int): Unit", receiver = "((Int) -> Unit)")
+        val orBlank = symbol("orBlank", SymbolKind.FUNCTION, range(2, 0, 2, 42), 2, 12, parameterTypes = "", type = "(): String", receiver = "String?")
         val read = readSymbol(source, twice, orBlank)
 
         assertEquals("// ((Int) -> Unit).twice in src/A.kt, L1-1", assertIs<ReadSymbolResult.Found>(read("src/A.kt", "((Int)->Unit).twice")).text.lines().first())

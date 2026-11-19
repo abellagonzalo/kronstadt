@@ -23,7 +23,8 @@ class EditInTest {
         range(firstLine, 0, lastLine, 1),
         range(firstLine, 4, firstLine, 4 + name.length),
         emptyList(),
-        "(): Int",
+        parameterTypes = "",
+        type = "(): Int",
     )
 
     private val source = """

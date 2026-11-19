@@ -4,7 +4,7 @@ package kronstadt.core.domain
  * The address of one Symbol (ADR 0002): enclosing declaration names separated by `/`, e.g. `Outer/Nested/run`.
  *
  * A path may give only the trailing segments of a Symbol's chain; [anchored] (a leading `/`) pins it to the top level.
- * A segment may carry a parameter-type signature, `parse(String)`, compared to the language server's `detail`
+ * A segment may carry a parameter-type signature, `parse(String)`, compared to the Symbol's Signature
  * after whitespace is removed: no type resolution, no positional index. An extension's receiver is written before the
  * name, Kotlin-style (`String.shout`), and is compared the same way.
  *

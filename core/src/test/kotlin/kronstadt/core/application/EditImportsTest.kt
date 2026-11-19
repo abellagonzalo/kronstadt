@@ -20,7 +20,7 @@ class EditImportsTest {
         TextRange(Position(line, 0), Position(line, 20)),
         TextRange(Position(line, 4), Position(line, 4 + name.length)),
         emptyList(),
-        "()",
+        parameterTypes = "", type = "()",
     )
 
     /**

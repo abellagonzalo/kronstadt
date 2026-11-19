@@ -31,7 +31,8 @@ class ShadowWorkspaceTest {
         TextRange(Position(line, 0), Position(lastLine, text.lines()[lastLine].length)),
         range(line, 4, 4 + name.length),
         emptyList(),
-        "(): Int",
+        parameterTypes = "",
+        type = "(): Int",
     )
 
     private fun error(line: Int, message: String) = Diagnostic(range(line, 0, 1), Severity.ERROR, message, "ERR")

@@ -3,8 +3,8 @@ package kronstadt.core.domain
 /**
  * Renders a token-cheap skeleton of a file: every addressable Symbol, without bodies, nested under its container.
  *
- * Each entry shows the Symbol's canonical Symbol Path (exactly what the tools accept), its signature from the
- * language server's `detail` (so overloads look different), and its 1-based line span, as `kt_read_symbol` reports it.
+ * Each entry shows the Symbol's canonical Symbol Path (exactly what the tools accept), its type as the language
+ * server shows it, without an extension receiver (so overloads look different), and its 1-based line span, as `kt_read_symbol` reports it.
  */
 public object StructureRenderer {
     public fun render(path: String, document: TextDocument, symbols: List<CodeSymbol>, xml: Boolean): String {
@@ -24,7 +24,7 @@ public object StructureRenderer {
         val path = tree.canonicalPath(node)
         append(path)
         // A constructor's signature is only its parameter list, which a path that needs it already shows.
-        tree.signature(node)
+        symbol.type
             ?.takeUnless { it == path.segments.last().signature?.let { params -> "($params)" } }
             ?.let { append("  ").append(it) }
         val (first, last) = SymbolSpan.lines(document, symbol)
