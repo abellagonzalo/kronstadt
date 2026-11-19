@@ -25,6 +25,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.time.Duration
 
 /** Sessions opened while the language server may still be starting. */
@@ -66,6 +67,45 @@ class DeferredCodeIntelligenceSessionTest {
 
         val error = assertFailsWith<IllegalStateException> { failed.session { it.documentSymbols(file, document) } }
         assertEquals("no kotlin-lsp", error.message)
+    }
+
+    @Test
+    fun `a written-back file with nothing analysed yet neither waits for startup nor fails with its error`() = runTest {
+        val starting = DeferredCodeIntelligence(CompletableDeferred())
+        val failed = DeferredCodeIntelligence(CompletableDeferred(Result.failure(IllegalStateException("no kotlin-lsp"))))
+
+        val call = async { starting.session { it.writtenBack(file, document) } }
+        runCurrent()
+        assertTrue(call.isCompleted)
+
+        failed.session { it.writtenBack(file, document) }
+    }
+
+    @Test
+    fun `a written-back file is told to the language server's session once startup has finished`() = runTest {
+        val started = RecordingIntelligence()
+
+        DeferredCodeIntelligence(CompletableDeferred(Result.success(started))).session { it.writtenBack(file, document) }
+
+        assertEquals(listOf("begin", "written back A.kt", "end"), started.events)
+    }
+
+    @Test
+    fun `a written-back file is told to the session the first analysis opened during startup`() = runTest {
+        val startup = CompletableDeferred<Result<CodeIntelligence>>()
+        val started = RecordingIntelligence()
+        val call = async {
+            DeferredCodeIntelligence(startup).session { session ->
+                session.documentSymbols(file, document)
+                session.writtenBack(file, document)
+            }
+        }
+        runCurrent()
+
+        startup.complete(Result.success(started))
+        call.await()
+
+        assertEquals(listOf("begin", "symbols A.kt", "written back A.kt", "end"), started.events)
     }
 }
 
