@@ -11,6 +11,7 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.deleteRecursively
 import kotlin.io.path.exists
@@ -102,6 +103,22 @@ public class IndexSeeds(
             // After a swap, the old seed.
             deleteQuietly(temp)
         }
+    }
+
+    /**
+     * Waits up to [exitWait] for [languageServer], the process of kotlin-lsp that was asked to exit, to end, then
+     * [refresh]es the seed from [index]. A kotlin-lsp still running then is killed, and its index left out.
+     * For a process that isn't kotlin-lsp's parent, so cannot read its exit code: call only after kotlin-lsp answered
+     * `shutdown`, so that it closes its index and exits by itself.
+     */
+    public fun refreshAfterExit(languageServer: ProcessHandle, index: WorktreeIndex, exitWait: Duration): SeedRefresh {
+        try {
+            languageServer.onExit().get(exitWait.inWholeMilliseconds, TimeUnit.MILLISECONDS)
+        } catch (_: TimeoutException) {
+            languageServer.destroyForcibly()
+            return SeedRefresh.Skipped("kotlin-lsp did not exit within $exitWait")
+        }
+        return refresh(index)
     }
 
     /**

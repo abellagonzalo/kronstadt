@@ -7,6 +7,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.Implementation
 import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -24,17 +25,22 @@ import kronstadt.core.application.RenameSymbol
 import kronstadt.core.application.WriteLock
 import kronstadt.core.domain.Readiness
 import kronstadt.lsp.LspCodeIntelligence
+import kronstadt.workspace.DetachedSeedRefresh
 import kronstadt.workspace.IndexDirectories
 import kronstadt.workspace.IndexSeeds
 import kronstadt.workspace.LocalFileStore
-import kronstadt.workspace.SeedRefresh
+import kronstadt.workspace.SeedRefreshStart
 import kronstadt.workspace.Seeding
 import kronstadt.workspace.WorktreeIndex
 import java.io.PrintStream
 import kotlin.system.exitProcess
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 
 internal const val VERSION = "0.1.0"
+
+/** How long Kronstadt waits for kotlin-lsp to answer `shutdown` as it ends. It took 6 ms; SIGKILL comes 0.5 s after SIGINT. */
+private val HAND_OFF_ANSWER_WAIT = 200.milliseconds
 
 /**
  * Composition root.
@@ -90,6 +96,10 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
         }
     }
 
+    // Claude Code never closes stdin: it ends Kronstadt with SIGINT, SIGTERM and SIGKILL within 0.5 s (#52). A
+    // shutdown hook runs on those signals and on the exit after a closed stdin alike.
+    Runtime.getRuntime().addShutdownHook(Thread { handOff(languageServer, worktreeIndex) })
+
     val server = Server(
         Implementation(name = "kronstadt", version = VERSION),
         ServerOptions(capabilities = ServerCapabilities(tools = ServerCapabilities.Tools(listChanged = false))),
@@ -113,32 +123,27 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
     val closed = CompletableDeferred<Unit>()
     session.onClose { closed.complete(Unit) }
     closed.await()
-
-    if (languageServer.isCompleted) {
-        languageServer.await().onSuccess { shutDown(it, seeds, worktreeIndex.await()) }
-    } else {
-        languageServer.cancel()
-    }
+    // The shutdown hook ends a started kotlin-lsp.
+    if (!languageServer.isCompleted) languageServer.cancel()
 }
 
 /**
- * Stops kotlin-lsp and, if it had a complete index and exited cleanly, makes that index its repo's Index Seed.
- * Seeding failures only cost the next worktree a cold index, so they are logged, never thrown.
+ * Ends kotlin-lsp and, if its index is complete, hands the Index Seed refresh to [DetachedSeedRefresh], which waits
+ * for kotlin-lsp to exit and clones its index: Claude Code kills Kronstadt 0.5 s after signalling it, too soon to do
+ * that here. Seeding failures only cost the next worktree a cold index, so they are logged, never thrown.
  */
-private suspend fun shutDown(languageServer: LspCodeIntelligence, seeds: IndexSeeds, index: WorktreeIndex) {
-    val ready = languageServer.awaitReady(Duration.ZERO) == Readiness.Ready
-    val clean = languageServer.shutdown()
-    val outcome = when {
-        !ready -> SeedRefresh.Skipped("kotlin-lsp had not finished indexing")
-        !clean -> SeedRefresh.Skipped("kotlin-lsp did not exit cleanly")
-        else -> try {
-            seeds.refresh(index)
-        } catch (e: Exception) {
-            SeedRefresh.Skipped(e.message ?: e.toString())
+private fun handOff(languageServer: Deferred<Result<LspCodeIntelligence>>, worktreeIndex: Deferred<WorktreeIndex>) {
+    if (!languageServer.isCompleted || languageServer.isCancelled) return
+    val started = runBlocking { languageServer.await() }.getOrNull() ?: return
+    val ready = runBlocking { started.awaitReady(Duration.ZERO) } == Readiness.Ready
+    val answered = started.requestExit(HAND_OFF_ANSWER_WAIT)
+    val message = when {
+        !ready -> "Index Seed not refreshed: kotlin-lsp had not finished indexing"
+        !answered -> "Index Seed not refreshed: kotlin-lsp did not answer shutdown"
+        else -> when (val start = DetachedSeedRefresh.start(started.processHandle, runBlocking { worktreeIndex.await() })) {
+            is SeedRefreshStart.Started -> "refreshing the Index Seed once kotlin-lsp exits, in the background; see ${start.log}"
+            is SeedRefreshStart.Skipped -> "Index Seed not refreshed: ${start.reason}"
         }
     }
-    when (outcome) {
-        SeedRefresh.Refreshed -> System.err.println("kronstadt: refreshed the Index Seed from ${index.dir}")
-        is SeedRefresh.Skipped -> System.err.println("kronstadt: Index Seed not refreshed: ${outcome.reason}")
-    }
+    System.err.println("kronstadt: $message")
 }

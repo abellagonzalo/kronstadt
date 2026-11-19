@@ -350,14 +350,24 @@ public class LspCodeIntelligence private constructor(
      * index was closed properly and may become the Index Seed.
      */
     public fun shutdown(): Boolean {
-        val answered = runCatching {
-            server.shutdown().get(5, TimeUnit.SECONDS)
-            server.exit()
-        }.isSuccess
+        val answered = requestExit(SHUTDOWN_ANSWER_WAIT)
         val exited = process.waitFor(EXIT_TIMEOUT.inWholeMilliseconds, TimeUnit.MILLISECONDS)
         if (!exited) process.destroyForcibly()
         return answered && exited && process.exitValue() == 0
     }
+
+    /**
+     * Asks kotlin-lsp to shut down, waiting up to [answerWait] for its answer, then to exit, without waiting for it to.
+     * Returns whether `shutdown` was answered: kotlin-lsp then closes its index and exits by itself.
+     */
+    public fun requestExit(answerWait: Duration): Boolean {
+        val answered = runCatching { server.shutdown().get(answerWait.inWholeMilliseconds, TimeUnit.MILLISECONDS) }.isSuccess
+        runCatching { server.exit() }
+        return answered
+    }
+
+    /** kotlin-lsp's process, for whoever waits for it to exit after [requestExit]. */
+    public val processHandle: ProcessHandle get() = process.toHandle()
 
     public companion object {
         /** kotlin-lsp's command behind its "Organize imports" code action; it takes the file's URI. */
@@ -365,6 +375,9 @@ public class LspCodeIntelligence private constructor(
 
         /** How often [Session.answerFor] asks before giving up on a file other sessions keep changing. */
         private const val MAX_ASKS = 3
+
+        /** How long [shutdown] waits for kotlin-lsp to answer `shutdown`. */
+        private val SHUTDOWN_ANSWER_WAIT = 5.seconds
 
         /** How long [shutdown] waits for kotlin-lsp to close its index and exit. */
         private val EXIT_TIMEOUT = 10.seconds

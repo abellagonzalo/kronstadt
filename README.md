@@ -32,7 +32,8 @@ core/        pure Kotlin, no I/O
 lsp/         CodeIntelligence over kotlin-lsp (lsp4j), incl. readiness tracking
 workspace/   FileStore over the local disk, confined to the project root;
              IndexDirectories (kotlin-lsp index per worktree and Index Seed slots, under ~/Library/Caches/kronstadt);
-             IndexSeeds (seed a new worktree's index, refresh the seed on clean shutdown; clonefile via FFM)
+             IndexSeeds (seed a new worktree's index, refresh the seed once kotlin-lsp exits; clonefile via FFM);
+             DetachedSeedRefresh (that refresh, in a process that outlives Kronstadt: ADR 0005)
 server/      MCP stdio server: tool schemas -> use cases; composition root (Main.kt)
 evaluation/  dev-only, never shipped: judges v1 on Claude Code transcripts (see Evaluation below)
 ```
@@ -50,6 +51,7 @@ Requires JDK 25.
 ```sh
 ./gradlew build                # compile + fast tests
 ./gradlew :lsp:contractTest    # slow contract tests against a real kotlin-lsp (Seam 2)
+./gradlew :server:contractTest # the server against a real kotlin-lsp, e.g. ended the way Claude Code ends it
 ./gradlew installDist          # -> server/build/install/kronstadt/bin/kronstadt
 ```
 
@@ -96,11 +98,12 @@ Kronstadt keeps each worktree's kotlin-lsp index in `~/Library/Caches/kronstadt/
 longer exist.
 
 Worktrees of one clone share an Index Seed in `~/Library/Caches/kronstadt/seed/<hash of git common dir>/`. Each time
-an instance shuts down cleanly with a complete index, Kronstadt waits for kotlin-lsp to exit and release its index,
-clones the index copy-on-write (`clonefile`) and atomically swaps it in as the new seed. A worktree without an index
-starts from a clone of the seed, ready in seconds at about 1 GB instead of indexing cold at about 5 GB. With no seed
-yet, outside a git repository, or on a volume without copy-on-write (anything but APFS), it indexes cold; Kronstadt
-never falls back to a full copy, and never clones the index of a running instance.
+an instance ends with a complete index, Kronstadt asks kotlin-lsp to shut down and hands the refresh to a detached
+process (ADR 0005): it waits for kotlin-lsp to exit and release its index, clones the index copy-on-write (`clonefile`)
+and atomically swaps it in as the new seed. That process logs what it did to `last-refresh.log` in the seed's directory.
+A worktree without an index starts from a clone of the seed, ready in seconds at about 1 GB instead of indexing cold at
+about 5 GB. With no seed yet, outside a git repository, or on a volume without copy-on-write (anything but APFS), it
+indexes cold; Kronstadt never falls back to a full copy, and never clones the index of a running instance.
 
 ## Evaluation (dev-only)
 

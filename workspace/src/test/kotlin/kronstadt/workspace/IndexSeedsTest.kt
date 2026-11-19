@@ -3,6 +3,7 @@ package kronstadt.workspace
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Instant
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.createDirectories
 import kotlin.io.path.deleteExisting
@@ -13,10 +14,14 @@ import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlin.test.AfterTest
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 class IndexSeedsTest {
     private val tmp: Path = Files.createTempDirectory("kronstadt-test").toRealPath()
@@ -164,6 +169,109 @@ class IndexSeedsTest {
             assertEquals(Seeding.Cold("no Index Seed yet"), seeds.prepare(feature).seeding)
         } finally {
             holder.destroyForcibly().waitFor()
+        }
+    }
+
+    @Test
+    fun `refreshing after exit waits for the language server's process to end, then refreshes the seed`() {
+        val main = gitRepo("repo")
+        val feature = gitWorktree(main, "feature")
+        val mainIndex = seeds.prepare(main)
+        fillWithIndexFiles(mainIndex.dir, "warm")
+        val languageServer = ProcessBuilder("sleep", "0.5").start()
+
+        val refresh = seeds.refreshAfterExit(languageServer.toHandle(), mainIndex, exitWait = 10.seconds)
+
+        assertEquals(SeedRefresh.Refreshed, refresh)
+        assertFalse(languageServer.isAlive)
+        assertEquals(Seeding.Seeded, seeds.prepare(feature).seeding)
+    }
+
+    @Test
+    fun `a language server that does not exit in time is killed, and its index never becomes the seed`() {
+        val main = gitRepo("repo")
+        val feature = gitWorktree(main, "feature")
+        val mainIndex = seeds.prepare(main)
+        fillWithIndexFiles(mainIndex.dir, "warm")
+        val languageServer = ProcessBuilder("sleep", "60").start()
+
+        val refresh = seeds.refreshAfterExit(languageServer.toHandle(), mainIndex, exitWait = 300.milliseconds)
+
+        assertEquals(SeedRefresh.Skipped("kotlin-lsp did not exit within 300ms"), refresh)
+        assertTrue(languageServer.waitFor(5, TimeUnit.SECONDS), "kotlin-lsp should have been killed")
+        assertEquals(Seeding.Cold("no Index Seed yet"), seeds.prepare(feature).seeding)
+    }
+
+    @Test
+    fun `a refresh that dies mid-clone leaves the previous seed whole`() {
+        val main = gitRepo("repo")
+        val feature = gitWorktree(main, "feature")
+        val mainIndex = seeds.prepare(main)
+        fillWithIndexFiles(mainIndex.dir, "old")
+        seeds.refresh(mainIndex)
+        fillWithIndexFiles(mainIndex.dir, "new")
+        val dyingMidClone = object : CopyOnWrite {
+            override fun clone(source: Path, target: Path) {
+                target.resolve("rocks/v241").createDirectories()
+                target.resolve("rocks/v241/000001.sst").writeText("ne")
+                throw IOException("killed")
+            }
+
+            override fun swap(a: Path, b: Path) = error("not reached")
+        }
+
+        IndexSeeds(directories, dyingMidClone).refresh(mainIndex)
+
+        val featureIndex = seeds.prepare(feature)
+        assertEquals(Seeding.Seeded, featureIndex.seeding)
+        assertEquals("old", featureIndex.dir.resolve("rocks/v241/000001.sst").readText())
+    }
+
+    @Test
+    fun `a detached refresh seeds the repo once the language server exits, and logs what it did`() {
+        val main = gitRepo("repo")
+        val feature = gitWorktree(main, "feature")
+        val mainIndex = seeds.prepare(main)
+        fillWithIndexFiles(mainIndex.dir, "warm")
+        val languageServer = ProcessBuilder("sleep", "1").start()
+
+        val start = DetachedSeedRefresh.start(languageServer.toHandle(), mainIndex)
+
+        assertIs<SeedRefreshStart.Started>(start)
+        val deadline = TimeSource.Monotonic.markNow() + 30.seconds
+        while (!(start.log.exists() && start.log.readText().contains("refreshed the Index Seed")) && deadline.hasNotPassedNow()) {
+            Thread.sleep(100)
+        }
+        assertContains(start.log.readText(), "kronstadt: refreshed the Index Seed from ${mainIndex.dir}")
+        assertFalse(languageServer.isAlive, "the seed was refreshed before kotlin-lsp exited")
+        assertEquals(Seeding.Seeded, seeds.prepare(feature).seeding)
+    }
+
+    @Test
+    fun `outside a git repository no detached refresh is started`() {
+        val index = seeds.prepare(tmp.resolve("plain").createDirectories())
+
+        val start = DetachedSeedRefresh.start(ProcessHandle.current(), index)
+
+        assertEquals(SeedRefreshStart.Skipped("not a git repository"), start)
+    }
+
+    @Test
+    fun `a detached refresh whose kotlin-lsp pid now belongs to another process refreshes at once, leaving that process alone`() {
+        val main = gitRepo("repo")
+        val mainIndex = seeds.prepare(main)
+        fillWithIndexFiles(mainIndex.dir, "warm")
+        val reusedPid = ProcessBuilder("sleep", "60").start()
+        try {
+            val slot = directories.cacheRoot.resolve("seed").listDirectoryEntries().single().resolve("kotlin-server")
+            val elsewhen = Instant.parse("2000-01-01T00:00:00Z").toString()
+
+            DetachedSeedRefresh.main(arrayOf(reusedPid.pid().toString(), elsewhen, mainIndex.dir.toString(), slot.toString()))
+
+            assertTrue(slot.exists(), "the seed should be refreshed without waiting")
+            assertTrue(reusedPid.isAlive, "a process that isn't kotlin-lsp must not be killed")
+        } finally {
+            reusedPid.destroyForcibly().waitFor()
         }
     }
 
