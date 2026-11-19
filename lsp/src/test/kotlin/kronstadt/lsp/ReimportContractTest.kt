@@ -115,7 +115,7 @@ class ReimportContractTest {
         val gaps = gapsWithNoProgressOpen(seen)
         assertTrue(gaps.all { it < ReadinessTracker.SETTLE }, "gaps $gaps not all below ${ReadinessTracker.SETTLE}")
 
-        val calculator = lsp.workspaceSymbols("Calculator").filter { it.name == "Calculator" }
+        val calculator = lsp.workspaceSymbols("Calculator").symbols.filter { it.name == "Calculator" }
         assertEquals(listOf(SymbolKind.CLASS), calculator.map { it.kind })
     }
 

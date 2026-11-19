@@ -13,6 +13,7 @@ import kronstadt.core.domain.Rename
 import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolLocation
+import kronstadt.core.domain.SymbolSearch
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.TextRange
 import kronstadt.core.port.AnalysisSession
@@ -85,6 +86,7 @@ class FakeFileStore(
  * Every file has [documentSymbols], unless [symbolsByText] gives its exact text, or [symbolsByFile] the file, its own.
  * Workspace search returns [workspaceSymbols] whatever the query, unless an [index] is given: then it returns the
  * index entries whose name contains the query, ignoring case: kotlin-lsp 271.2085.0 matches substrings, not typos.
+ * With a [searchCap], a search returns at most that many results, exact names first, possibly incomplete once it does.
  * Diagnostics are [diagnosticsByText] for the exact text, else none; each pull takes [diagnosticsDelay] and first runs
  * [beforeDiagnostics]. References are [references], and definitions [definitions], for the file and the exact position
  * asked about, else none. Organize-imports answers [organizedByText] for the exact text, else nothing.
@@ -110,6 +112,7 @@ class FakeCodeIntelligence(
     private val renames: Map<Pair<Path, Position>, (newName: String) -> Rename> = emptyMap(),
     private val renameRefusals: Map<Pair<Path, Position>, String> = emptyMap(),
     private val organizedByText: Map<String, String> = emptyMap(),
+    private val searchCap: Int? = null,
 ) : CodeIntelligence {
     val analysed = mutableListOf<Pair<Path, TextDocument>>()
     val searched = mutableListOf<String>()
@@ -170,9 +173,17 @@ class FakeCodeIntelligence(
         }
     }
 
-    override suspend fun workspaceSymbols(query: String): List<SymbolLocation> {
+    /**
+     * Like kotlin-lsp, stops at [searchCap] results, if given, listing names equal to the query first; a full page is
+     * incomplete, for exact names too if it ends in one.
+     */
+    override suspend fun workspaceSymbols(query: String): SymbolSearch {
         searched += query
-        return index?.filter { it.name.contains(query, ignoreCase = true) } ?: workspaceSymbols
+        val found = index?.filter { it.name.contains(query, ignoreCase = true) } ?: workspaceSymbols
+        if (searchCap == null || found.size < searchCap) return SymbolSearch(found)
+        val page = found.sortedBy { !it.name.equals(query, ignoreCase = true) }.take(searchCap)
+        val exactCutOff = page.last().name.equals(query, ignoreCase = true)
+        return SymbolSearch(page, if (exactCutOff) SymbolSearch.Completeness.INCOMPLETE else SymbolSearch.Completeness.EXACT_NAMES_COMPLETE)
     }
 
     private inner class Session(private val log: SessionLog) : AnalysisSession {

@@ -19,6 +19,7 @@ import kronstadt.core.domain.Rename
 import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolLocation
+import kronstadt.core.domain.SymbolSearch
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
@@ -113,9 +114,9 @@ public class LspCodeIntelligence private constructor(
         }
     }
 
-    override suspend fun workspaceSymbols(query: String): List<SymbolLocation> {
+    override suspend fun workspaceSymbols(query: String): SymbolSearch {
         val result = request { server.workspaceService.symbol(WorkspaceSymbolParams(query)) }
-        return LspMapping.workspaceSymbols(result)
+        return SymbolSearch(LspMapping.workspaceSymbols(result), LspMapping.workspaceSymbolCompleteness(result, query))
     }
 
     override suspend fun awaitReady(timeout: Duration): Readiness = readiness.awaitReady(timeout)

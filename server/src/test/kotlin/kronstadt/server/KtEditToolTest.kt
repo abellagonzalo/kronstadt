@@ -27,6 +27,7 @@ import kronstadt.core.domain.Rename
 import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolLocation
+import kronstadt.core.domain.SymbolSearch
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
@@ -49,12 +50,15 @@ class KtEditToolTest {
     /** What organize-imports answers, by exact text; filled by a test before it calls the tool. */
     private val organized = mutableMapOf<String, String>()
 
+    /** Queries the index answers possibly incompletely; filled by a test before it calls the tool. */
+    private val cutOff = mutableSetOf<String>()
+
     private val server = Server(
         Implementation(name = "kronstadt-test", version = "0"),
         ServerOptions(capabilities = ServerCapabilities(tools = ServerCapabilities.Tools(listChanged = false))),
     ).also { server ->
         val files = LocalFileStore(root)
-        val intelligence = EmptyIntelligence(organized)
+        val intelligence = EmptyIntelligence(organized, cutOff)
         KronstadtTools(
             ReadStructure(files, intelligence),
             FindSymbol(files, intelligence),
@@ -123,13 +127,31 @@ class KtEditToolTest {
         assertEquals(before, file.readText())
         assertNotEquals("", before)
     }
+
+    @Test
+    fun `a Symbol Path without a file fails, asking for the file, when the index may not list every declaration of its name`() = runTest {
+        cutOff += "greet"
+        val before = file.readText()
+
+        val (failed, text) = ktEdit("""{"operations": [{"type": "replace", "symbol": "greet", "code": "fun greet(): Int = 2"}]}""")
+
+        assertEquals(true, failed)
+        assertEquals(
+            "Operation 0: 'greet' can't be resolved without a file: so many declarations are named 'greet', dependencies' " +
+                "included, that the project index stops at a maximum number of results and may not list them all; pass its " +
+                "file. Nothing written.",
+            text,
+        )
+        assertEquals(before, file.readText())
+    }
 }
 
 /**
  * Always ready, and knows nothing: no Symbols, diagnostics, references or definitions, so every Edit validates.
- * Organize-imports answers [organized] for the exact text, else nothing.
+ * Organize-imports answers [organized] for the exact text, else nothing. A search for a query in [cutOff] may miss
+ * symbols named exactly like it, as when the index stops at its maximum.
  */
-private class EmptyIntelligence(private val organized: Map<String, String>) : CodeIntelligence {
+private class EmptyIntelligence(private val organized: Map<String, String>, private val cutOff: Set<String>) : CodeIntelligence {
     override suspend fun <T> session(block: suspend (AnalysisSession) -> T): T = block(object : AnalysisSession {
         override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> = emptyList()
         override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> = emptyList()
@@ -141,6 +163,7 @@ private class EmptyIntelligence(private val organized: Map<String, String>) : Co
         override suspend fun writtenBack(file: Path, document: TextDocument) = Unit
     })
 
-    override suspend fun workspaceSymbols(query: String): List<SymbolLocation> = emptyList()
+    override suspend fun workspaceSymbols(query: String): SymbolSearch =
+        SymbolSearch(emptyList(), if (query in cutOff) SymbolSearch.Completeness.INCOMPLETE else SymbolSearch.Completeness.COMPLETE)
     override suspend fun awaitReady(timeout: Duration): Readiness = Readiness.Ready
 }

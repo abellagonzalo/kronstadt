@@ -326,6 +326,7 @@ public class Edit(
                 )
             }
             is SymbolResolver.Resolution.NotReady -> Located.NotReady(resolution.phase, resolution.elapsed)
+            is SymbolResolver.Resolution.TooManyDeclarations -> Located.Failed(OperationFailure.TooManyDeclarations(symbol, resolution.name))
             is SymbolResolver.Resolution.FileNotFound -> Located.Failed(OperationFailure.FileNotFound(resolution.path))
             is SymbolResolver.Resolution.NotKotlin -> Located.Failed(OperationFailure.NotKotlin(resolution.path))
             is SymbolResolver.Resolution.OutsideProject -> Located.Failed(OperationFailure.OutsideProject(resolution.path))
@@ -384,6 +385,9 @@ public sealed interface OperationFailure {
     /** [file] is null when the path was resolved project-wide; each candidate names its own file. */
     public data class Ambiguous(val symbol: String, val file: String?, val candidates: List<SymbolCandidate>) : OperationFailure
     public data class NotFound(val symbol: String, val file: String?, val suggestions: List<SymbolCandidate>) : OperationFailure
+
+    /** [symbol], passed without a file: so many declarations are named [name] that the index may not have listed them all. */
+    public data class TooManyDeclarations(val symbol: String, val name: String) : OperationFailure
 
     /** The text at the Symbol's name range isn't its name, so its range can't be trusted. */
     public data class OutOfSync(val symbol: String, val file: String) : OperationFailure

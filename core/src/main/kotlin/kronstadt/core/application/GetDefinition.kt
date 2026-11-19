@@ -51,6 +51,7 @@ public class GetDefinition(
             is SymbolResolver.Resolution.Ambiguous -> return GetDefinitionResult.Ambiguous(symbol, file, resolution.candidates)
             is SymbolResolver.Resolution.NotFound -> return GetDefinitionResult.NotFound(symbol, file, resolution.suggestions)
             is SymbolResolver.Resolution.NotReady -> return GetDefinitionResult.NotReady(resolution.phase, resolution.elapsed)
+            is SymbolResolver.Resolution.TooManyDeclarations -> return GetDefinitionResult.TooManyDeclarations(symbol, resolution.name)
             is SymbolResolver.Resolution.FileNotFound -> return GetDefinitionResult.FileNotFound(resolution.path)
             is SymbolResolver.Resolution.NotKotlin -> return GetDefinitionResult.NotKotlin(resolution.path)
             is SymbolResolver.Resolution.OutsideProject -> return GetDefinitionResult.OutsideProject(resolution.path)
@@ -169,6 +170,9 @@ public sealed interface GetDefinitionResult {
     /** [file] is null when the path was resolved project-wide; each candidate names its own file. */
     public data class Ambiguous(val symbol: String, val file: String?, val candidates: List<SymbolCandidate>) : GetDefinitionResult
     public data class NotFound(val symbol: String, val file: String?, val suggestions: List<SymbolCandidate>) : GetDefinitionResult
+
+    /** Without a file: so many declarations are named [name] that the index may not have listed them all. */
+    public data class TooManyDeclarations(val symbol: String, val name: String) : GetDefinitionResult
 
     /**
      * [name] (on 1-based [line] of [symbol]) resolves to no declaration: a keyword, a literal or an unresolved

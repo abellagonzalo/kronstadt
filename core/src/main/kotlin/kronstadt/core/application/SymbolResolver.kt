@@ -2,6 +2,7 @@ package kronstadt.core.application
 
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolPath
+import kronstadt.core.domain.SymbolSearch
 import kronstadt.core.domain.SymbolTree
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.packageName
@@ -28,6 +29,9 @@ internal class SymbolResolver(
         data class Found(val file: Path, val document: TextDocument, val tree: SymbolTree, val node: SymbolTree.Node) : Resolution
         data class Ambiguous(val candidates: List<SymbolCandidate>) : Resolution
         data class NotFound(val suggestions: List<SymbolCandidate>) : Resolution
+
+        /** The index may have left out declarations named [name], so the path can't be resolved without a file. */
+        data class TooManyDeclarations(val name: String) : Resolution
         data class NotReady(val phase: String, val elapsed: Duration) : Resolution
         data class FileNotFound(val path: String) : Resolution
         data class NotKotlin(val path: String) : Resolution
@@ -61,14 +65,17 @@ internal class SymbolResolver(
     /**
      * `workspace/symbol` only supplies candidate files: kotlin-lsp's index is lossy, so each candidate is resolved
      * through its own `documentSymbol` tree. Waits for a complete index first, since an incomplete one would make a
-     * Symbol look missing.
+     * Symbol look missing. A search that may have left out a symbol of that exact name resolves nothing.
      */
     private suspend fun resolveProjectWide(session: AnalysisSession, symbol: SymbolPath): Resolution {
         val readiness = intelligence.awaitReady(readinessTimeout)
         if (readiness is Readiness.NotReady) return Resolution.NotReady(readiness.phase, readiness.elapsed)
         // Constructors and unnamed companions aren't indexed under those names; the class before them is.
         val query = symbol.segments.lastOrNull { it.name !in UNINDEXED_NAMES }?.name ?: return Resolution.NotFound(emptyList())
-        val hits = intelligence.workspaceSymbols(query).filter { AnalysedFile.isKotlin(it.file) }
+        val search = intelligence.workspaceSymbols(query)
+        // A file the index left out may declare the name too: resolving from the rest would pick one (ADR 0002).
+        if (search.completeness == SymbolSearch.Completeness.INCOMPLETE) return Resolution.TooManyDeclarations(query)
+        val hits = search.symbols.filter { AnalysedFile.isKotlin(it.file) }
         val analysed = mutableMapOf<Path, AnalysedFile?>()
         suspend fun analysedOrNull(file: Path) = analysed.getOrPut(file) { AnalysedFile.of(files, session, file) }
 
@@ -84,9 +91,10 @@ internal class SymbolResolver(
         if (matches.isNotEmpty()) return Resolution.Ambiguous(matches.map { (file, node) -> candidate(file, node) })
 
         // Close names live in the files the index found for names like the wanted one, closest first. The index
-        // matches substrings, not typos, so a prefix of the name is looked up too.
+        // matches substrings, not typos, so a prefix of the name is looked up too. Suggestions are hints, not
+        // resolutions, so a search that may be incomplete still supplies them.
         val prefix = query.take(maxOf(MIN_PREFIX, query.length / 2))
-        val similar = hits + if (prefix != query) intelligence.workspaceSymbols(prefix).filter { AnalysedFile.isKotlin(it.file) } else emptyList()
+        val similar = hits + if (prefix != query) intelligence.workspaceSymbols(prefix).symbols.filter { AnalysedFile.isKotlin(it.file) } else emptyList()
         val suggestionFiles = similar.sortedBy { SymbolTree.distance(it.name.lowercase(), query.lowercase()) }
             .map { it.file }.distinct().take(MAX_SUGGESTIONS)
         val wanted = symbol.segments.last().name.lowercase()

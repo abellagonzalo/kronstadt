@@ -103,7 +103,7 @@ class KotlinLspContractTest {
     @Order(2)
     fun `is not ready right after initialize, and workspace symbols are silently empty meanwhile`() = runBlocking {
         assertIs<Readiness.NotReady>(lsp.awaitReady(Duration.ZERO))
-        assertEquals(emptyList(), lsp.workspaceSymbols("Calculator"))
+        assertEquals(emptyList(), lsp.workspaceSymbols("Calculator").symbols)
     }
 
     @Test
@@ -121,7 +121,7 @@ class KotlinLspContractTest {
         }
         assertEquals(listOf("Importing", "Indexing"), phases.filter { it != "Starting" }, "phases seen: $phases")
 
-        val calculator = lsp.workspaceSymbols("Calculator").filter { it.name == "Calculator" }
+        val calculator = lsp.workspaceSymbols("Calculator").symbols.filter { it.name == "Calculator" }
         assertEquals(listOf(SymbolKind.CLASS), calculator.map { it.kind })
         assertEquals(project.resolve("src/main/kotlin/fixture/Shapes.kt"), calculator.single().file)
     }
@@ -290,7 +290,7 @@ class KotlinLspContractTest {
         assertEquals("// create in $spansKt, L61-61", header("Widget/Companion/create"))
         assertEquals("Companion", header("Widget/Companion").substringAfter("// ").substringBefore(" in "))
         // The index matches substrings, not typos, so a miss looks up a prefix of the name too.
-        assertEquals(emptyList(), lsp.workspaceSymbols("Calculatr"))
+        assertEquals(emptyList(), lsp.workspaceSymbols("Calculatr").symbols)
         // A miss suggests close names with their files; local declarations stay unaddressable.
         assertEquals(
             listOf(SymbolCandidate("Calculator", shapes)),

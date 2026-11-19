@@ -31,6 +31,7 @@ public class ReadSymbol(
             is SymbolResolver.Resolution.Ambiguous -> return ReadSymbolResult.Ambiguous(symbol, path?.let(::shown), resolution.candidates)
             is SymbolResolver.Resolution.NotFound -> return ReadSymbolResult.NotFound(symbol, path?.let(::shown), resolution.suggestions)
             is SymbolResolver.Resolution.NotReady -> return ReadSymbolResult.NotReady(resolution.phase, resolution.elapsed)
+            is SymbolResolver.Resolution.TooManyDeclarations -> return ReadSymbolResult.TooManyDeclarations(symbol, resolution.name)
             is SymbolResolver.Resolution.FileNotFound -> return ReadSymbolResult.FileNotFound(resolution.path)
             is SymbolResolver.Resolution.NotKotlin -> return ReadSymbolResult.NotKotlin(resolution.path)
             is SymbolResolver.Resolution.OutsideProject -> return ReadSymbolResult.OutsideProject(resolution.path)
@@ -57,6 +58,9 @@ public sealed interface ReadSymbolResult {
     /** [file] is null when the path was resolved project-wide; each candidate names its own file. */
     public data class Ambiguous(val symbol: String, val file: String?, val candidates: List<SymbolCandidate>) : ReadSymbolResult
     public data class NotFound(val symbol: String, val file: String?, val suggestions: List<SymbolCandidate>) : ReadSymbolResult
+
+    /** Without a file: so many declarations are named [name] that the index may not have listed them all. */
+    public data class TooManyDeclarations(val symbol: String, val name: String) : ReadSymbolResult
 
     /** Resolving without a file needs the index, which was still incomplete after waiting [elapsed]. */
     public data class NotReady(val phase: String, val elapsed: Duration) : ReadSymbolResult

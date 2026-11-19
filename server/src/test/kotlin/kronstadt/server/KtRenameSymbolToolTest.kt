@@ -29,6 +29,7 @@ import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
+import kronstadt.core.domain.SymbolSearch
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.TextEdit
 import kronstadt.core.domain.TextRange
@@ -142,6 +143,6 @@ private class RenamingIntelligence(private val a: Path, private val b: Path) : C
         override suspend fun writtenBack(file: Path, document: TextDocument) = Unit
     })
 
-    override suspend fun workspaceSymbols(query: String): List<SymbolLocation> = emptyList()
+    override suspend fun workspaceSymbols(query: String): SymbolSearch = SymbolSearch(emptyList())
     override suspend fun awaitReady(timeout: Duration): Readiness = Readiness.Ready
 }

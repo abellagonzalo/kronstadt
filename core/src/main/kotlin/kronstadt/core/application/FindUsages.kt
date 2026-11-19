@@ -38,6 +38,7 @@ public class FindUsages(
             is SymbolResolver.Resolution.Ambiguous -> return FindUsagesResult.Ambiguous(symbol, resolution.candidates)
             is SymbolResolver.Resolution.NotFound -> return FindUsagesResult.NotFound(symbol, resolution.suggestions)
             is SymbolResolver.Resolution.NotReady -> return FindUsagesResult.NotReady(resolution.phase, resolution.elapsed)
+            is SymbolResolver.Resolution.TooManyDeclarations -> return FindUsagesResult.TooManyDeclarations(symbol, resolution.name)
             // Only resolving in a given file reports these.
             is SymbolResolver.Resolution.FileNotFound, is SymbolResolver.Resolution.NotKotlin,
             is SymbolResolver.Resolution.OutsideProject -> error("project-wide resolution reported $resolution")
@@ -122,6 +123,9 @@ public sealed interface FindUsagesResult {
     /** Resolved project-wide, so each candidate names its own file. */
     public data class Ambiguous(val symbol: String, val candidates: List<SymbolCandidate>) : FindUsagesResult
     public data class NotFound(val symbol: String, val suggestions: List<SymbolCandidate>) : FindUsagesResult
+
+    /** So many declarations are named [name] that the index may not have listed them all. */
+    public data class TooManyDeclarations(val symbol: String, val name: String) : FindUsagesResult
 
     /** The index was still incomplete after waiting [elapsed]. */
     public data class NotReady(val phase: String, val elapsed: Duration) : FindUsagesResult

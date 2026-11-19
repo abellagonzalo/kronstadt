@@ -10,6 +10,7 @@ import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
+import kronstadt.core.domain.SymbolSearch
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.TextEdit
 import kronstadt.core.domain.TextRange
@@ -97,6 +98,34 @@ internal object LspMapping {
                 val file = localPath(location.uri) ?: return@mapNotNull null
                 SymbolLocation(ws.name, kind(ws.kind), file, range(location.range), ws.containerName)
             }
+        }
+    }
+
+    /**
+     * The most results kotlin-lsp 271.2085.0 returns for `workspace/symbol`, however many symbols match, dependencies'
+     * included; it sends no sign that it left any out (pinned by `WorkspaceSymbolCapContractTest`).
+     */
+    const val WORKSPACE_SYMBOL_CAP = 200
+
+    /**
+     * Whether [result], kotlin-lsp's answer to [query], may have left matches out. Below [WORKSPACE_SYMBOL_CAP] results
+     * nothing was left out. kotlin-lsp lists symbols named like the query first, so a full page that ends in another
+     * name left out only names that merely contain the query. One that ends in the query's name (ignoring case, to be
+     * safe) may have left out symbols named exactly like it. Counts every result, dependency symbols included.
+     */
+    fun workspaceSymbolCompleteness(
+        result: Either<List<SymbolInformation>, List<WorkspaceSymbol>>?,
+        query: String,
+    ): SymbolSearch.Completeness {
+        val names = when {
+            result == null -> emptyList()
+            result.isLeft -> result.left.map { it.name }
+            else -> result.right.map { it.name }
+        }
+        return when {
+            names.size < WORKSPACE_SYMBOL_CAP -> SymbolSearch.Completeness.COMPLETE
+            names.last().equals(query, ignoreCase = true) -> SymbolSearch.Completeness.INCOMPLETE
+            else -> SymbolSearch.Completeness.EXACT_NAMES_COMPLETE
         }
     }
 

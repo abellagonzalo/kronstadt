@@ -30,7 +30,8 @@ public class FindSymbol(
         if (limit < 1) return FindSymbolResult.InvalidQuery("limit must be at least 1, was $limit")
         val readiness = intelligence.awaitReady(readinessTimeout)
         if (readiness is Readiness.NotReady) return FindSymbolResult.NotReady(readiness.phase, readiness.elapsed)
-        val hits = intelligence.workspaceSymbols(query)
+        val search = intelligence.workspaceSymbols(query)
+        val hits = search.symbols
             .filter { (kind == null || it.kind == kind) && inProjectSource(it.file) }
             // Exact name matches first, then prefix matches, then everything else the server considered relevant.
             .sortedWith(compareBy<SymbolLocation> { rank(it.name, query) }.thenBy { it.name }.thenBy { it.file })
@@ -48,11 +49,11 @@ public class FindSymbol(
                 if (matches.none { (f, s) -> f == hit.file && s == found }) matches += hit.file to found
             }
         }
-        if (matches.isEmpty()) return FindSymbolResult.NoMatches(query, kind)
+        if (matches.isEmpty()) return FindSymbolResult.NoMatches(query, kind, search.mayBeIncomplete)
         val shown = matches.take(limit)
             .groupBy({ (file, _) -> file }, { (_, symbol) -> symbol })
             .map { (file, symbols) -> FileMatches(files.display(file), symbols) }
-        return FindSymbolResult.Found(shown, truncated = matches.size > limit)
+        return FindSymbolResult.Found(shown, truncated = matches.size > limit, mayBeIncomplete = search.mayBeIncomplete)
     }
 
     private fun inProjectSource(file: Path) = AnalysedFile.isKotlin(file) && files.resolve(file.toString()) == file
@@ -83,9 +84,14 @@ public data class FoundSymbol(val kind: SymbolKind, val path: String, val firstL
 public data class FileMatches(val file: String, val symbols: List<FoundSymbol>)
 
 public sealed interface FindSymbolResult {
-    /** Files in the order of their best-ranked declaration. */
-    public data class Found(val files: List<FileMatches>, val truncated: Boolean) : FindSymbolResult
-    public data class NoMatches(val query: String, val kind: SymbolKind?) : FindSymbolResult
+    /**
+     * Files in the order of their best-ranked declaration. [mayBeIncomplete] when the index may have left matches out,
+     * however high the limit: a narrower query may find them.
+     */
+    public data class Found(val files: List<FileMatches>, val truncated: Boolean, val mayBeIncomplete: Boolean) : FindSymbolResult
+
+    /** [mayBeIncomplete] when the index may have left matches out: a narrower query may find some. */
+    public data class NoMatches(val query: String, val kind: SymbolKind?, val mayBeIncomplete: Boolean) : FindSymbolResult
     public data class InvalidQuery(val reason: String) : FindSymbolResult
 
     /** The index was still incomplete after waiting [elapsed]; nothing was searched. */

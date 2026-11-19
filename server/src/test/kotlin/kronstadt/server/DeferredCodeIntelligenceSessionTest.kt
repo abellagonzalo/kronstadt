@@ -16,6 +16,7 @@ import kronstadt.core.domain.Rename
 import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolLocation
+import kronstadt.core.domain.SymbolSearch
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
@@ -96,6 +97,6 @@ private class RecordingIntelligence : CodeIntelligence {
         }
     }
 
-    override suspend fun workspaceSymbols(query: String): List<SymbolLocation> = emptyList()
+    override suspend fun workspaceSymbols(query: String): SymbolSearch = SymbolSearch(emptyList())
     override suspend fun awaitReady(timeout: Duration): Readiness = Readiness.Ready
 }

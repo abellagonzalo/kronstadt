@@ -196,6 +196,7 @@ public class RenameSymbol(
             is SymbolResolver.Resolution.Ambiguous -> failed(OperationFailure.Ambiguous(symbol, null, resolution.candidates))
             is SymbolResolver.Resolution.NotFound -> failed(OperationFailure.NotFound(symbol, null, resolution.suggestions))
             is SymbolResolver.Resolution.NotReady -> Located.Failed(RenameResult.NotReady(resolution.phase, resolution.elapsed))
+            is SymbolResolver.Resolution.TooManyDeclarations -> failed(OperationFailure.TooManyDeclarations(symbol, resolution.name))
             is SymbolResolver.Resolution.FileNotFound -> failed(OperationFailure.FileNotFound(resolution.path))
             is SymbolResolver.Resolution.NotKotlin -> failed(OperationFailure.NotKotlin(resolution.path))
             is SymbolResolver.Resolution.OutsideProject -> failed(OperationFailure.OutsideProject(resolution.path))

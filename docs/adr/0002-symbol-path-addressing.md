@@ -4,7 +4,7 @@ Agents name a Symbol with a Symbol Path, which every Kronstadt tool accepts and 
 
 We use `/` and not Kotlin's `.` because `.` already separates packages, marks extension receivers, and appears in nested type names inside signatures (`Map.Entry`). With `/` between segments, a dot inside a segment always means one of those three things.
 
-Resolution always goes through `documentSymbol`, even when no file is given: `workspace/symbol` only supplies candidate files. kotlin-lsp's index is not a faithful view of the symbols. It returns top-level symbols twice, drops a property when a function shares its name, never shows extension receivers, and lists local functions, which `documentSymbol` omits.
+Resolution always goes through `documentSymbol`, even when no file is given: `workspace/symbol` only supplies candidate files. kotlin-lsp's index is not a faithful view of the symbols. It returns top-level symbols twice, drops a property when a function shares its name, never shows extension receivers, and lists local functions, which `documentSymbol` omits. It also stops at 200 results without saying so (#38), counting dependency symbols and names that merely contain the query. It lists exact name matches first, so a full page that ends in another name still holds every file declaring the name. A full page that ends in the name may leave one out, and resolving from what came back could then pick one. So such a path fails without a file and asks for one. A package prefix doesn't help, because the index is searched by the name alone.
 
 ## Consequences
 

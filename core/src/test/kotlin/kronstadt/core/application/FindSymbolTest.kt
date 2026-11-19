@@ -13,6 +13,7 @@ import kronstadt.core.domain.TextRange
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
@@ -76,9 +77,10 @@ class FindSymbolTest {
         SymbolLocation("local", SymbolKind.FUNCTION, root.resolve(lookupKt), range(3, 8, 3, 13)),
     )
 
-    private fun intelligence(index: List<SymbolLocation> = this.index, notReadyPhase: String? = null) = FakeCodeIntelligence(
+    private fun intelligence(index: List<SymbolLocation> = this.index, notReadyPhase: String? = null, searchCap: Int? = null) = FakeCodeIntelligence(
         index = index,
         notReadyPhase = notReadyPhase,
+        searchCap = searchCap,
         symbolsByFile = mapOf(
             root.resolve(userKt) to listOf(repository, repositoryImpl),
             root.resolve(lookupKt) to listOf(findUserRepository, parseString, parseInt),
@@ -123,6 +125,20 @@ class FindSymbolTest {
         val limited = assertIs<FindSymbolResult.Found>(findSymbol("User", limit = 1))
         assertEquals(listOf("UserRepository"), limited.files.flatMap { it.symbols }.map { it.path })
         assertTrue(limited.truncated)
+    }
+
+    @Test
+    fun `lists what an index that stopped at its maximum returned, marked as possibly incomplete`() = runTest {
+        // Capped at two results, the index leaves one of the three names containing 'User' out.
+        val findSymbol = FindSymbol(files, intelligence(searchCap = 2))
+
+        val capped = assertIs<FindSymbolResult.Found>(findSymbol("User"))
+        assertEquals(2, capped.files.flatMap { it.symbols }.size)
+        assertTrue(capped.mayBeIncomplete)
+        // However the kind filter leaves it empty.
+        assertEquals(FindSymbolResult.NoMatches("find", SymbolKind.CLASS, mayBeIncomplete = true), findSymbol("find", SymbolKind.CLASS))
+        // Below the maximum, the list is complete.
+        assertFalse(assertIs<FindSymbolResult.Found>(findSymbol("UserRepositoryImpl")).mayBeIncomplete)
     }
 
     @Test

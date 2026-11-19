@@ -17,6 +17,7 @@ import kronstadt.core.domain.Rename
 import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolLocation
+import kronstadt.core.domain.SymbolSearch
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
@@ -47,7 +48,7 @@ internal class DeferredCodeIntelligence(private val delegate: Deferred<Result<Co
         }
     }
 
-    override suspend fun workspaceSymbols(query: String): List<SymbolLocation> = started().workspaceSymbols(query)
+    override suspend fun workspaceSymbols(query: String): SymbolSearch = started().workspaceSymbols(query)
 
     /** Startup counts against [timeout]: the agent waits once, however the time is split. */
     override suspend fun awaitReady(timeout: Duration): Readiness {

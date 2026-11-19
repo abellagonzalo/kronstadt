@@ -110,9 +110,10 @@ class ReadSymbolWithoutFileTest {
         SymbolLocation("Template", SymbolKind.CLASS, file(templateKt), template.range),
     )
 
-    private fun intelligence(notReadyPhase: String? = null) = FakeCodeIntelligence(
+    private fun intelligence(notReadyPhase: String? = null, searchCap: Int? = null) = FakeCodeIntelligence(
         index = index,
         notReadyPhase = notReadyPhase,
+        searchCap = searchCap,
         symbolsByFile = mapOf(
             file(controllerKt) to listOf(controller),
             file(alphaKt) to listOf(alphaConfig),
@@ -250,5 +251,39 @@ class ReadSymbolWithoutFileTest {
         val intelligence = intelligence()
         assertIs<ReadSymbolResult.InvalidPath>(ReadSymbol(files, intelligence)(alphaKt, "com.example.a/Config"))
         assertEquals(emptyList(), intelligence.analysed)
+    }
+
+    // ADR 0002: the index stops at a maximum number of results, and a full page may have left a declaring file out.
+    @Test
+    fun `a name the index may not have listed in full is never resolved without a file, not even to one match`() = runTest {
+        // Capped at one result, the index returns one of the two Configs: resolving it would silently pick that one.
+        val capped = intelligence(searchCap = 1)
+
+        assertEquals(ReadSymbolResult.TooManyDeclarations("Config", "Config"), read("Config", capped))
+        // The index is searched by the name alone, so a package prefix narrows nothing.
+        assertEquals(
+            ReadSymbolResult.TooManyDeclarations("com.example.a/Config", "Config"),
+            read("com.example.a/Config", capped),
+        )
+        // A constructor is looked up through its class's name.
+        assertEquals(ReadSymbolResult.TooManyDeclarations("Box/constructor()", "Box"), read("Box/constructor()", capped))
+        // With a file, the index isn't asked.
+        assertIs<ReadSymbolResult.Found>(ReadSymbol(files, capped)(alphaKt, "Config"))
+        // A search that stops short of the cap is complete, so it resolves as before.
+        assertIs<ReadSymbolResult.Found>(read("OrderController/create", intelligence(searchCap = 2)))
+    }
+
+    @Test
+    fun `a full page that ends in other names listed every exact match, so the name still resolves`() = runTest {
+        // `createAll` merely contains the name; capped at two, the page ends in it, after the one exact `create`.
+        val createAll = SymbolLocation("createAll", SymbolKind.FUNCTION, file(boxKt), pack.range, "Box")
+        val capped = FakeCodeIntelligence(
+            index = index + createAll,
+            symbolsByFile = mapOf(file(controllerKt) to listOf(controller), file(boxKt) to listOf(box, shout)),
+            searchCap = 2,
+        )
+
+        val result = assertIs<ReadSymbolResult.Found>(read("create", capped))
+        assertEquals("// create in $controllerKt, L4-4", result.text.lines().first())
     }
 }

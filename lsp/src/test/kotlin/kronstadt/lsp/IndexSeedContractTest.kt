@@ -57,7 +57,7 @@ class IndexSeedContractTest {
         assertEquals(Seeding.Cold("no Index Seed yet"), mainIndex.seeding)
         val mainLsp = LspCodeIntelligence.start(command, main, mainIndex.dir)
         assertEquals(Readiness.Ready, mainLsp.awaitReady(5.minutes))
-        assertEquals(listOf("LeavingInFeature"), mainLsp.workspaceSymbols("LeavingInFeature").map { it.name })
+        assertEquals(listOf("LeavingInFeature"), mainLsp.workspaceSymbols("LeavingInFeature").symbols.map { it.name })
         assertTrue(mainLsp.shutdown(), "kotlin-lsp did not exit cleanly")
         assertEquals(SeedRefresh.Refreshed, seeds.refresh(mainIndex))
 
@@ -69,9 +69,9 @@ class IndexSeedContractTest {
             assertEquals(Readiness.Ready, featureLsp.awaitReady(5.minutes))
             System.err.println("seeded worktree ready in ${start.elapsedNow()}")
 
-            assertEquals(emptyList(), featureLsp.workspaceSymbols("LeavingInFeature").map { it.name })
-            assertEquals(listOf("ArrivedInFeature"), featureLsp.workspaceSymbols("ArrivedInFeature").map { it.name })
-            val found = listOf("Shape", "Calculator", "Arrived").flatMap { featureLsp.workspaceSymbols(it) }
+            assertEquals(emptyList(), featureLsp.workspaceSymbols("LeavingInFeature").symbols.map { it.name })
+            assertEquals(listOf("ArrivedInFeature"), featureLsp.workspaceSymbols("ArrivedInFeature").symbols.map { it.name })
+            val found = listOf("Shape", "Calculator", "Arrived").flatMap { featureLsp.workspaceSymbols(it).symbols }
             assertTrue(found.isNotEmpty())
             val outside = found.map { it.file }.filterNot { it.startsWith(feature) }
             assertEquals(emptyList(), outside, "results outside $feature")

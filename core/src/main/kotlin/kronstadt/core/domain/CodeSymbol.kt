@@ -48,5 +48,22 @@ public data class SymbolLocation(
     val containerName: String? = null,
 )
 
+/** What a workspace-wide symbol search found, and whether it may have left matches out. */
+public data class SymbolSearch(val symbols: List<SymbolLocation>, val completeness: Completeness = Completeness.COMPLETE) {
+    /** Whether the search may have left matches out, e.g. because the code intelligence stops at a maximum number of results. */
+    public val mayBeIncomplete: Boolean get() = completeness != Completeness.COMPLETE
+
+    public enum class Completeness {
+        /** Every match came back. */
+        COMPLETE,
+
+        /** Every symbol named exactly like the query came back; some whose names merely contain it may not have. */
+        EXACT_NAMES_COMPLETE,
+
+        /** Even symbols named exactly like the query may be missing. */
+        INCOMPLETE,
+    }
+}
+
 /** A range in a project file, e.g. where a Usage of a Symbol is. */
 public data class SourceLocation(val file: Path, val range: TextRange)

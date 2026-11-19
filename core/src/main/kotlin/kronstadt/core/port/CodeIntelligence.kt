@@ -9,6 +9,7 @@ import kronstadt.core.domain.Rename
 import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolLocation
+import kronstadt.core.domain.SymbolSearch
 import kronstadt.core.domain.TextDocument
 import java.nio.file.Path
 import kotlin.time.Duration
@@ -29,8 +30,11 @@ public interface CodeIntelligence {
      */
     public suspend fun <T> session(block: suspend (AnalysisSession) -> T): T
 
-    /** Project-wide symbol search by (partial) name. Results outside the project, e.g. in dependencies, are excluded. */
-    public suspend fun workspaceSymbols(query: String): List<SymbolLocation>
+    /**
+     * Project-wide symbol search by (partial) name. Results outside the project, e.g. in dependencies, are excluded.
+     * Reports the search as possibly incomplete when it may have left matches out.
+     */
+    public suspend fun workspaceSymbols(query: String): SymbolSearch
 
     /**
      * Waits up to [timeout] until the project index is complete. Readiness is live: it can be lost again later,

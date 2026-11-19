@@ -464,6 +464,7 @@ internal class KronstadtTools(
             failure.file != null -> " Use kt_read_structure to list its declarations."
             else -> " Use kt_find_symbol to search by partial name."
         }
+        is OperationFailure.TooManyDeclarations -> tooManyDeclarations(failure.symbol, failure.name) + "."
         is OperationFailure.OutOfSync ->
             "index out of sync for ${failure.symbol} in ${failure.file}: its name is not where kotlin-lsp says; retry."
         is OperationFailure.SharedLine ->
@@ -527,10 +528,18 @@ internal class KronstadtTools(
                         }
                     }
                     if (result.truncated) append("(more results omitted; refine the query or raise limit)\n")
+                    if (result.mayBeIncomplete) {
+                        append("($INDEX_STOPS, so this list may be incomplete; narrow the query)\n")
+                    }
                 }.trimEnd(),
             )
             is FindSymbolResult.NoMatches -> text(
-                "No symbols matching '${result.query}'" + (result.kind?.let { " of kind ${it.name}" } ?: "") + ".",
+                "No symbols matching '${result.query}'" + (result.kind?.let { " of kind ${it.name}" } ?: "") + "." +
+                    if (result.mayBeIncomplete) {
+                        " ${INDEX_STOPS.replaceFirstChar { it.uppercase() }}, so some may have been left out; narrow the query."
+                    } else {
+                        ""
+                    },
             )
             is FindSymbolResult.InvalidQuery -> error(result.reason)
             is FindSymbolResult.NotReady -> notReady(result.phase, result.elapsed)
@@ -556,6 +565,7 @@ internal class KronstadtTools(
                     else -> " Use kt_find_symbol to search by partial name."
                 },
             )
+            is ReadSymbolResult.TooManyDeclarations -> error(tooManyDeclarations(result.symbol, result.name))
             is ReadSymbolResult.NotReady -> notReady(result.phase, result.elapsed)
             is ReadSymbolResult.OutOfSync -> error(
                 "index out of sync for ${result.symbol} in ${result.file}: its name is not where kotlin-lsp says; nothing returned, retry",
@@ -589,6 +599,10 @@ internal class KronstadtTools(
                 "No symbol '${result.symbol}'." +
                     if (result.suggestions.isNotEmpty()) " Close names:\n" + candidates(result.suggestions, withFiles = true)
                     else " Use kt_find_symbol to search by partial name.",
+            )
+            // kt_find_usages takes no file for the Symbol itself, so there is nothing to pass instead.
+            is FindUsagesResult.TooManyDeclarations -> error(
+                tooManyDeclarations(result.symbol, result.name, remedy = "kt_find_usages takes no file to look in instead"),
             )
             is FindUsagesResult.NotReady -> notReady(result.phase, result.elapsed)
             is FindUsagesResult.FileNotFound -> error("File not found: ${result.path}")
@@ -636,12 +650,22 @@ internal class KronstadtTools(
                     else -> " Use kt_find_symbol to search by partial name."
                 },
             )
+            is GetDefinitionResult.TooManyDeclarations -> error(tooManyDeclarations(result.symbol, result.name))
             is GetDefinitionResult.NotReady -> notReady(result.phase, result.elapsed)
             is GetDefinitionResult.FileNotFound -> error("File not found: ${result.path}")
             is GetDefinitionResult.NotKotlin -> error("Not a Kotlin file: ${result.path}. kt_get_definition only supports .kt and .kts files.")
             is GetDefinitionResult.OutsideProject -> error("Path is outside the project root: ${result.path}")
         }
     }
+
+    /**
+     * The index stops at a maximum number of results, so a common name can't be resolved without a file: a package
+     * prefix or enclosing declaration doesn't help, since the index is searched by the name alone. [remedy] says what the
+     * agent can do instead.
+     */
+    private fun tooManyDeclarations(symbol: String, name: String, remedy: String = "pass its file") =
+        "'$symbol' can't be resolved without a file: so many declarations are named '$name', dependencies' included, " +
+            "that $INDEX_STOPS and may not list them all; $remedy"
 
     private fun String?.inFile() = this?.let { " in $it" } ?: ""
 
@@ -679,6 +703,9 @@ internal class KronstadtTools(
 
     private fun JsonObject.int(key: String): Int? = (this[key] as? JsonPrimitive)?.intOrNull
 }
+
+/** Why a search may be incomplete, as the tools tell the agent. */
+private const val INDEX_STOPS = "the project index stops at a maximum number of results"
 
 /**
  * The MCP server instructions: which of the tools [KronstadtTools] registers to use instead of the agent's built-in
