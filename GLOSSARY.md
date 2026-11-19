@@ -37,8 +37,12 @@ Kronstadt's in-memory copy of the files one edit touches, which the language ser
 _Avoid_: shadow file system, in-memory buffer, working memory copy
 
 **Validation**:
-Checking the Shadow Workspace for errors the edit introduced, before Write-back. A failed Validation rejects the whole edit.
+Checking the Shadow Workspace for errors the edit introduced in the files it touched, before Write-back. A failed Validation rejects the whole edit. Errors in other files are Collateral Errors.
 _Avoid_: check, lint, verify
+
+**Collateral Error**:
+A compiler error an edit introduces in a file it didn't touch, such as a caller still using a signature the edit changed. It is reported with the edit's result and never blocks it.
+_Avoid_: caller error, ripple error, downstream error
 
 **Write-back**:
 Writing a validated edit from the Shadow Workspace to the file on disk.
