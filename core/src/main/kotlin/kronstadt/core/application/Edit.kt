@@ -375,7 +375,10 @@ public sealed interface EditResult {
 }
 
 /** Where an `edit_in` looks for its text: [symbol]'s span in [file], or the whole file when [symbol] is null. */
-public data class EditInScope(val symbol: String?, val file: String)
+public data class EditInScope(val symbol: String?, val file: String) {
+    /** Whether the `edit_in` works on the whole file rather than a Symbol's span. */
+    val wholeFile: Boolean get() = symbol == null
+}
 
 /** Why an Operation can't be applied. Paths and files are as the agent passed or should pass them. */
 public sealed interface OperationFailure {

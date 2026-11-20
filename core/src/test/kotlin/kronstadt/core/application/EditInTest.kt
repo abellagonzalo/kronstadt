@@ -184,4 +184,23 @@ class EditInTest {
         assertEquals(expected, files.content(path))
         assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 5, 8)), emptyList(), 0, 0))), result)
     }
+
+    @Test
+    fun `edit_in on a whole file whose text starts at the beginning of a line, after the indentation or mid-line splices it as written`() = runTest {
+        val expected = source
+            .replace("import a.b.Unused", "import a.b.Used")
+            .replaceFirst("    val n = 1\n", "    val n = 2\n")
+            .replace("    val n = 1\n", "    val n = 3\n")
+        val texts = mapOf(expected to symbols)
+
+        val (result, files) = run(
+            texts,
+            EditIn(path, null, old = "    val n = 1\n    return n\n}\n\nfun other", new = "    val n = 2\n    return n\n}\n\nfun other"),
+            EditIn(path, null, old = "val n = 1\n", new = "val n = 3\n"),
+            EditIn(path, null, old = "Unused", new = "Used"),
+        )
+
+        assertEquals(expected, files.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0))), result)
+    }
 }

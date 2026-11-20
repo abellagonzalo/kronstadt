@@ -479,7 +479,7 @@ internal class KronstadtTools(
             val where = where(failure.scope)
             if (failure.lines.isEmpty()) {
                 "'old' doesn't occur in $where, exactly as written (whitespace included). " +
-                    (if (failure.scope.symbol == null) "Read the file to copy it." else "Use kt_read_symbol to see its source.")
+                    (if (failure.scope.wholeFile) "Read the file to copy it." else "Use kt_read_symbol to see its source.")
             } else {
                 "'old' occurs ${failure.count} times in $where; make it longer so it occurs exactly once:\n" +
                     failure.lines.joinToString("\n") { "  L${it.line}: ${it.source}" } + "\n"
