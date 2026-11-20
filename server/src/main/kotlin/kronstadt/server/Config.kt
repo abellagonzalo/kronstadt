@@ -18,6 +18,8 @@ internal data class Config(
                  [--validation-timeout <seconds>]
 
   --project-root       Project (or Git worktree) to serve. Default: current directory.
+                       Only one Kronstadt at a time may serve a worktree; a second one fails
+                       every analysis, naming the first. Use a separate Git worktree instead.
   --language-server    Which kotlin-lsp to run: the command that starts it over stdio.
                        Default: ${'$'}KRONSTADT_LANGUAGE_SERVER, else "kotlin-lsp --stdio".
   --readiness-timeout  Seconds a tool waits for kotlin-lsp to finish importing and indexing before failing

@@ -74,20 +74,26 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
     // Failures surface as tool errors, not a crashed server.
     val languageServer = async(Dispatchers.IO) {
         try {
-            try {
-                indexes.prune()
-            } catch (e: Exception) {
-                // Pruning only frees disk; it must never stop kotlin-lsp from starting.
-                System.err.println("kronstadt: could not prune ${indexes.cacheRoot}: ${e.message}")
-            }
-            val index = seeds.prepare(files.root)
-            when (val seeding = index.seeding) {
-                Seeding.Seeded -> System.err.println("kronstadt: started ${index.dir} from the repo's Index Seed")
-                Seeding.AlreadyIndexed -> {}
-                is Seeding.Cold -> System.err.println("kronstadt: indexing cold: ${seeding.reason}")
-            }
-            worktreeIndex.complete(index)
-            Result.success(LspCodeIntelligence.start(config.languageServer, files.root, index.dir))
+            // Only the instance holding the claim seeds, starts kotlin-lsp and so refreshes the seed as it ends. The
+            // claim is held until the process exits.
+            Result.success(
+                startUp(
+                    files.root,
+                    claim = { indexes.claim(files.root) },
+                    prune = indexes::prune,
+                    prepare = {
+                        val index = seeds.prepare(files.root)
+                        when (val seeding = index.seeding) {
+                            Seeding.Seeded -> System.err.println("kronstadt: started ${index.dir} from the repo's Index Seed")
+                            Seeding.AlreadyIndexed -> {}
+                            is Seeding.Cold -> System.err.println("kronstadt: indexing cold: ${seeding.reason}")
+                        }
+                        worktreeIndex.complete(index)
+                        index
+                    },
+                    start = { index -> LspCodeIntelligence.start(config.languageServer, files.root, index.dir) },
+                ),
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

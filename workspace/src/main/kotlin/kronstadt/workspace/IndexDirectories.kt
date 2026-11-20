@@ -22,12 +22,15 @@ import kotlin.time.Duration.Companion.minutes
  * Layout, one directory per owner, keyed by a hash of the owner's real path:
  * ```
  * <cacheRoot>/index/<hash>/worktree         the worktree's path
+ * <cacheRoot>/index/<hash>/lock             locked by the one instance serving the worktree; holds its pid
  * <cacheRoot>/index/<hash>/kotlin-server/   passed to kotlin-lsp as `initializationOptions.indexDir`
  * <cacheRoot>/seed/<hash>/git-common-dir    the repo's `git rev-parse --git-common-dir`
  * <cacheRoot>/seed/<hash>/kotlin-server/    the repo's Index Seed
  * <cacheRoot>/seed/<hash>/.kotlin-server-<millis>-<uuid>/          a refresh's temporary clone
  * <cacheRoot>/seed/<hash>/.kotlin-server-retired-<millis>-<uuid>/  a seed a refresh replaced, until [prune] deletes it
  * ```
+ *
+ * Only one instance per worktree may use its index, since kotlin-lsp locks it: each instance [claim]s it first.
  */
 public class IndexDirectories(
     public val cacheRoot: Path,
@@ -42,6 +45,13 @@ public class IndexDirectories(
      * itself to kotlin-lsp, which creates a missing one and builds the index cold.
      */
     public fun forWorktree(worktree: Path): Path = recordOwner(indexes, WORKTREE_FILE, worktree)
+
+    /**
+     * Claims [worktree]'s index for this instance alone, with an exclusive, non-blocking lock on its `lock` file, which
+     * sits outside the directory [forWorktree] returns, so no Index Seed ever holds it. Never waits: if another instance
+     * holds it, says so at once, with that instance's pid if it could be read. [prune] neither takes nor waits on it.
+     */
+    public fun claim(worktree: Path): IndexClaim = IndexClaim.take(forWorktree(worktree).resolveSibling(LOCK_FILE))
 
     /**
      * The Index Seed slot shared by every worktree of the repo whose git common dir is [gitCommonDir]. Pass it
@@ -137,6 +147,9 @@ public class IndexDirectories(
 
         /** File in each seed slot that records the git common dir of the repo it belongs to. */
         public const val GIT_COMMON_DIR_FILE: String = "git-common-dir"
+
+        /** File in each index directory that the instance serving its worktree locks; see [claim]. */
+        public const val LOCK_FILE: String = "lock"
         private const val LSP_INDEX_DIR = "kotlin-server"
 
         private const val RETIRED = "retired"
