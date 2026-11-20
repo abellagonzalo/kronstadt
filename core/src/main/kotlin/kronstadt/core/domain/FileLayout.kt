@@ -51,7 +51,11 @@ public data class FileLayout(val indentUnit: String, val lineSeparator: String) 
             return " ".repeat(smallest)
         }
 
-        private fun indentOf(line: String) = line.takeWhile { it == ' ' || it == '\t' }
+        /** The spaces and tabs [line] starts with. */
+        public fun indentOf(line: String): String = line.takeWhile { it == ' ' || it == '\t' }
+
+        /** Whether [column] (0-based) of [line] is inside its indent: after some of its leading spaces and tabs, not all of them. */
+        public fun isInsideIndent(line: String, column: Int): Boolean = column in 1 until indentOf(line).length
 
         /** Whole [unit]s at the start of [indent]. */
         private fun levelsOf(indent: String, unit: String): Int {

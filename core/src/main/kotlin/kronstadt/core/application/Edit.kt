@@ -217,7 +217,7 @@ public class Edit(
         }
         val document = found.document
         val span = found.span
-        val prefix = document.line(span.firstLine).takeWhile { it == ' ' || it == '\t' }
+        val prefix = FileLayout.indentOf(document.line(span.firstLine))
         fun reindented(code: String) = FileLayout.of(document).reindent(code, prefix).lines()
         // Inserted code starts and ends at its first and last non-blank lines: the one blank line comes from here.
         fun sibling(code: String) = reindented(code).dropWhile { it.isEmpty() }
@@ -228,13 +228,8 @@ public class Edit(
             is Replace -> shadow.replaceLines(file, first..span.lastLine, reindented(operation.code))
             is InsertBefore -> shadow.replaceLines(file, first until first, sibling(operation.code) + "")
             is InsertAfter -> shadow.replaceLines(file, afterSpan until afterSpan, listOf("") + sibling(operation.code))
-            is EditIn -> when (val splice = Splice.inSpan(document, first..span.lastLine, operation)) {
-                is Splice.Done -> shadow.replaceLines(file, splice.lines, splice.newLines)
-                is Splice.NotExactlyOnce ->
-                    return Applied.Failed(OperationFailure.NotExactlyOnce(operation.old, found.canonical, shown, splice.count, splice.lines))
-                is Splice.StartsInIndentation ->
-                    return Applied.Failed(OperationFailure.StartsInIndentation(found.canonical, shown, splice.line))
-            }
+            is EditIn ->
+                return applySplice(shadow, file, Splice.inSpan(document, first..span.lastLine, operation), operation, EditInScope(found.canonical, shown))
             is Delete -> {
                 // The last line is the empty one after a final newline, not a blank line between declarations.
                 val blankAfter = afterSpan < document.lineCount - 1 && document.line(afterSpan).isBlank()
@@ -255,12 +250,15 @@ public class Edit(
         val path = checkNotNull(operation.file) { "an edit_in without a symbol has a file" }
         val file = classify(shadow, path).getOrElse { return Applied.Failed(OperationFailure.LookupFailed(it)) }
         val document = shadow.current(file) ?: return Applied.Failed(OperationFailure.LookupFailed(LookupFailure.FileNotFound(path)))
-        when (val splice = Splice.inFile(document, operation)) {
+        return applySplice(shadow, file, Splice.inFile(document, operation), operation, EditInScope(null, files.display(file)))
+    }
+
+    /** Makes [splice]'s change to [file], or fails [operation], whose `old` was looked for in [scope]. */
+    private fun applySplice(shadow: ShadowWorkspace, file: Path, splice: Splice, operation: EditIn, scope: EditInScope): Applied {
+        when (splice) {
             is Splice.Done -> shadow.replaceLines(file, splice.lines, splice.newLines)
-            is Splice.NotExactlyOnce ->
-                return Applied.Failed(OperationFailure.NotExactlyOnce(operation.old, null, files.display(file), splice.count, splice.lines))
-            is Splice.StartsInIndentation ->
-                return Applied.Failed(OperationFailure.StartsInIndentation(null, files.display(file), splice.line))
+            is Splice.NotExactlyOnce -> return Applied.Failed(OperationFailure.NotExactlyOnce(operation.old, scope, splice.count, splice.lines))
+            is Splice.StartsInIndentation -> return Applied.Failed(OperationFailure.StartsInIndentation(scope, splice.line + 1))
         }
         return Applied.Done(file)
     }
@@ -299,7 +297,7 @@ public class Edit(
         data class Done(val lines: IntRange, val newLines: List<String>) : Splice
         /** `old` occurs [count] times, on [lines]. */
         data class NotExactlyOnce(val count: Int, val lines: List<Occurrence>) : Splice
-        /** `old` starts inside [line]'s (1-based) indentation: after some of its leading whitespace, not all of it. */
+        /** `old` starts inside [line]'s (0-based) indentation: after some of its leading whitespace, not all of it. */
         data class StartsInIndentation(val line: Int) : Splice
 
         companion object {
@@ -319,18 +317,13 @@ public class Edit(
                 val matches = exactOccurrences(document, old, start until end)
                 val match = matches.singleOrNull() ?: return NotExactlyOnce(matches.size, occurrenceLines(document, matches))
                 val at = document.positionOf(match)
-                val before = document.line(at.line).substring(0, at.character)
-                if (at.character > 0 && before.all(::isIndentation) && text.getOrNull(match)?.let(::isIndentation) == true) {
-                    return StartsInIndentation(at.line + 1)
-                }
+                if (FileLayout.isInsideIndent(document.line(at.line), at.character)) return StartsInIndentation(at.line)
                 val lines = replaced(at.line..document.positionOf(match + old.length).line)
                 val linesStart = document.offsetOf(Position(lines.first, 0))
                 val linesEnd = document.offsetOf(Position(lines.last, Int.MAX_VALUE))
                 val spliced = text.substring(linesStart, match) + operation.new + text.substring(match + old.length, linesEnd)
                 return Done(lines, spliced.lines())
             }
-
-            private fun isIndentation(char: Char) = char == ' ' || char == '\t'
         }
     }
 }
@@ -381,6 +374,9 @@ public sealed interface EditResult {
     public data class NotReady(val readiness: Readiness.NotReady) : EditResult
 }
 
+/** Where an `edit_in` looks for its text: [symbol]'s span in [file], or the whole file when [symbol] is null. */
+public data class EditInScope(val symbol: String?, val file: String)
+
 /** Why an Operation can't be applied. Paths and files are as the agent passed or should pass them. */
 public sealed interface OperationFailure {
     /** Its Symbol Path or file names no one Symbol, as for any tool. */
@@ -398,24 +394,15 @@ public sealed interface OperationFailure {
      */
     public data class NeedsFile(val symbol: String, val candidates: List<SymbolCandidate>) : OperationFailure
 
-    /**
-     * An `edit_in`'s [text] occurs [count] times, not exactly once, in [symbol]'s span in [file], or in the whole file
-     * when [symbol] is null; [lines] are where.
-     */
-    public data class NotExactlyOnce(
-        val text: String,
-        val symbol: String?,
-        val file: String,
-        val count: Int,
-        val lines: List<Occurrence>,
-    ) : OperationFailure
+    /** An `edit_in`'s [text] occurs [count] times, not exactly once, in [scope]; [lines] are where. */
+    public data class NotExactlyOnce(val text: String, val scope: EditInScope, val count: Int, val lines: List<Occurrence>) : OperationFailure
 
     /**
-     * An `edit_in`'s text, in [symbol]'s span in [file] or in the whole file when [symbol] is null, starts inside the
-     * indentation of [file]'s [line] (1-based): after some of the line's leading whitespace but not all of it. `new`
-     * would keep the leftover indentation on its first line only, so its lines would no longer line up.
+     * An `edit_in`'s text, in [scope], starts inside the indentation of its file's [line] (1-based): after some of the
+     * line's leading whitespace but not all of it. `new` would keep the leftover indentation on its first line only, so
+     * its lines would no longer line up.
      */
-    public data class StartsInIndentation(val symbol: String?, val file: String, val line: Int) : OperationFailure
+    public data class StartsInIndentation(val scope: EditInScope, val line: Int) : OperationFailure
 
     /** A `create`'s [file] exists on disk, or, if [inEdit], an earlier Operation of this Edit created or changed it. */
     public data class FileExists(val file: String, val inEdit: Boolean) : OperationFailure
