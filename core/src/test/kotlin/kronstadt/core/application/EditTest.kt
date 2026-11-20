@@ -329,6 +329,26 @@ class EditTest {
     }
 
     @Test
+    fun `a replace whose code holds a multi-line raw string writes the string's lines exactly as sent`() = runTest {
+        val files = FakeFileStore(root, mapOf(path to source))
+        val code = "fun greet(): String =\n    \"\"\"\n  Hello,\n    world\n\"\"\"\n"
+        val written = source.replace(
+            "    /** Says hi. */\n    fun greet(): String = \"hi\"\n",
+            "    fun greet(): String =\n        \"\"\"\n  Hello,\n    world\n\"\"\"\n",
+        )
+        val newGreet = symbol("greet", SymbolKind.FUNCTION, range(3, 4, 7, 3), 3, 8, parameterTypes = "", type = "(): String")
+        val movedOther = symbol("other", SymbolKind.FUNCTION, range(9, 4, 9, 24), 9, 8, parameterTypes = "", type = "(): Int")
+        val intelligence = intelligence(
+            symbolsByText = mapOf(source to listOf(greeter(greet, other)), written to listOf(greeter(newGreet, movedOther, lastLine = 10))),
+        )
+
+        val result = edit(intelligence, files)(Replace(path, "Greeter/greet", code))
+
+        assertEquals(written, files.content(path))
+        assertEquals(listOf(EditedSymbol("greet", 4, 8)), assertIs<EditResult.Written>(result).files.single().symbols)
+    }
+
+    @Test
     fun `an Operation that fails after others applied reports its own index, and nothing is written`() = runTest {
         val files = FakeFileStore(root, mapOf(path to source))
         val intelligence = intelligence()

@@ -9,20 +9,24 @@ public data class FileLayout(val indentUnit: String, val lineSeparator: String) 
      * Lays out [code] for a target whose first line starts with [prefix]: strips the code's common leading indent,
      * converts its indent levels to [indentUnit], prefixes every non-blank line and joins lines with [lineSeparator].
      * Blank lines become empty; trailing blank lines are dropped. Leftover spaces that are not a whole level (such
-     * as the space before a KDoc `*`) are kept as they are.
+     * as the space before a KDoc `*`) are kept as they are. Lines inside a multi-line raw string are data, so they
+     * are kept exactly as sent (as is the end of the line it opens on) and play no part in the common indent or the
+     * code's indent unit.
      */
     public fun reindent(code: String, prefix: String): String {
-        val lines = code.lines().map { it.trimEnd() }.dropLastWhile { it.isEmpty() }
-        val nonBlank = lines.filter { it.isNotEmpty() }
-        val common = nonBlank.minOfOrNull { indentOf(it).length } ?: 0
-        val stripped = lines.map { if (it.isEmpty()) it else it.substring(common) }
-        val codeUnit = unitOf(stripped) ?: indentUnit
-        return stripped.joinToString(lineSeparator) { line ->
-            if (line.isEmpty()) return@joinToString line
-            val indent = indentOf(line)
+        val source = SourceLines.of(code)
+        val raw = source.rawString
+        val lines = code.lines().mapIndexed { i, line -> if (i in raw || i + 1 in raw) line else line.trimEnd() }.dropLastWhile { it.isEmpty() }
+        val indented = lines.withIndex().filter { (i, line) -> i !in raw && line.isNotEmpty() }
+        val common = indented.minOfOrNull { indentOf(it.value).length } ?: 0
+        val codeUnit = unitOf(indented.filter { source.isCode(it.index) }.map { it.value.substring(common) }) ?: indentUnit
+        return lines.withIndex().joinToString(lineSeparator) { (i, line) ->
+            if (i in raw || line.isEmpty()) return@joinToString line
+            val stripped = line.substring(common)
+            val indent = indentOf(stripped)
             val levels = levelsOf(indent, codeUnit)
             val rest = indent.substring(levels * codeUnit.length).replace("\t", codeUnit)
-            prefix + indentUnit.repeat(levels) + rest + line.substring(indent.length)
+            prefix + indentUnit.repeat(levels) + rest + stripped.substring(indent.length)
         }
     }
 
@@ -33,7 +37,9 @@ public data class FileLayout(val indentUnit: String, val lineSeparator: String) 
         public fun of(document: TextDocument): FileLayout {
             val text = document.text
             val separator = Regex("\r\n|\n|\r").find(text)?.value ?: "\n"
-            return FileLayout(unitOf(text.lines()) ?: DEFAULT_UNIT, separator)
+            val source = SourceLines.of(text)
+            val lines = text.lines().filterIndexed { i, _ -> source.isCode(i) }
+            return FileLayout(unitOf(lines) ?: DEFAULT_UNIT, separator)
         }
 
         /** A tab if most indented lines start with one; otherwise the smallest indent of two or more spaces. */

@@ -46,4 +46,29 @@ class FileLayoutTest {
     fun `a file without indented lines indents with four spaces`() {
         assertEquals("fun b() {\n    y()\n}", layoutOf("fun a() = 1\n").reindent("fun b() {\n\ty()\n}", ""))
     }
+
+    @Test
+    fun `lines inside a multi-line raw string don't count towards the file's indent unit`() {
+        val file = "private const val USAGE = \"\"\"Usage:\n\n  --projects <dir>\n  --include <dir>\"\"\"\n\nfun main() {\n    run()\n}\n"
+        assertEquals("    ", layoutOf(file).indentUnit)
+    }
+
+    @Test
+    fun `lines inside a block comment don't count towards the file's indent unit`() {
+        val file = "/*\n  Licensed under the\n  Apache License.\n*/\nfun main() {\n    run()\n}\n"
+        assertEquals("    ", layoutOf(file).indentUnit)
+    }
+
+    @Test
+    fun `lines inside a multi-line raw string don't count towards the code's indent unit`() {
+        val code = "fun usage() {\n    print(\n        \"\"\"Usage:\n  --projects <dir>\"\"\",\n    )\n}"
+        assertEquals(code, fourSpaces.reindent(code, ""))
+    }
+
+    @Test
+    fun `lines inside a multi-line raw string are kept exactly as sent while the code around them moves`() {
+        val code = "    fun usage() = print(\n        \"\"\"Usage:  \n  --projects <dir>  \n   \n\t--tab\"\"\" + x,\n    )\n"
+        val expected = "\tfun usage() = print(\n\t\t\"\"\"Usage:  \n  --projects <dir>  \n   \n\t--tab\"\"\" + x,\n\t)"
+        assertEquals(expected, layoutOf("class A {\n\tval a = 1\n}").reindent(code, "\t"))
+    }
 }
