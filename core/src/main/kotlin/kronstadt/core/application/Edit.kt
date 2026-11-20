@@ -9,6 +9,7 @@ import kronstadt.core.domain.addingImports
 import kronstadt.core.domain.Validation
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
+import kronstadt.core.port.ContentHash
 import kronstadt.core.port.FileStore
 import java.nio.file.Path
 import kotlin.time.Duration
@@ -109,55 +110,78 @@ public class Edit(
      * Applies [operations] in order, each resolved against the text the earlier ones left, possibly across several
      * files; validates once after the last and writes every edited file back, or nothing (unless a write fails
      * part-way, see [EditResult.PartiallyWritten]).
+     *
+     * With [amend], the id of the last Rejected Edit, [operations] are appended to its Operations and the combined Edit is
+     * applied, validated and written as one, provided no file it touched changed on disk since it read them. Every call
+     * drops the Rejected Edit kept so far, whatever its outcome; one that is rejected is kept in its place.
      */
-    public suspend operator fun invoke(operations: List<Operation>): EditResult {
-        val paths = operations.mapIndexed { index, operation ->
+    public suspend operator fun invoke(operations: List<Operation>, amend: String? = null): EditResult = writeLock.withLock { rejected ->
+        if (amend == null) return@withLock apply(emptyList(), operations, emptyMap())
+        if (rejected == null || rejected.id != amend) return@withLock EditResult.NoRejectedEdit(amend)
+        changedSince(rejected.bases)?.let { return@withLock EditResult.ChangedOnDisk(it) }
+        apply(rejected.operations, operations, rejected.bases)
+    }
+
+    /** The first of [bases]' files whose content hash on disk is no longer its base's (or that now exists, for a null one), as shown. */
+    private suspend fun changedSince(bases: Map<Path, ContentHash?>): String? =
+        bases.entries.firstOrNull { (file, hash) -> files.readHashed(file)?.hash != hash }?.let { files.display(it.key) }
+
+    /**
+     * Applies [kept], the Operations of a Rejected Edit read at [bases], then [operations], as one Edit; indexes in its
+     * result count [operations], or [kept]'s if one of those fails. Kept as the Rejected Edit if Validation rejects it.
+     */
+    private suspend fun apply(kept: List<Operation>, operations: List<Operation>, bases: Map<Path, ContentHash?>): EditResult {
+        val combined = kept + operations
+        fun failed(index: Int, failure: OperationFailure) =
+            if (index < kept.size) EditResult.OperationFailed(index, failure, inRejected = true) else EditResult.OperationFailed(index - kept.size, failure)
+        val paths = combined.mapIndexed { index, operation ->
             val symbol = operation.symbol ?: return@mapIndexed null
-            SymbolResolver.parse(operation.file, symbol)
-                .getOrElse { return EditResult.OperationFailed(index, OperationFailure.LookupFailed(it)) }
+            SymbolResolver.parse(operation.file, symbol).getOrElse { return failed(index, OperationFailure.LookupFailed(it)) }
         }
-        val imports = operations.mapIndexed { index, operation ->
+        val imports = combined.mapIndexed { index, operation ->
             operation.imports.map { raw ->
-                ImportDirective.parse(raw).getOrElse { return EditResult.OperationFailed(index, OperationFailure.InvalidImport(raw)) }
+                ImportDirective.parse(raw).getOrElse { return failed(index, OperationFailure.InvalidImport(raw)) }
             }
         }
-        operations.forEachIndexed { index, operation ->
+        combined.forEachIndexed { index, operation ->
             val inserted = when (operation) {
                 is InsertBefore -> operation.code
                 is InsertAfter -> operation.code
                 else -> return@forEachIndexed
             }
-            if (inserted.isBlank()) return EditResult.OperationFailed(index, OperationFailure.BlankCode)
+            if (inserted.isBlank()) return failed(index, OperationFailure.BlankCode)
         }
-        return writeLock.withLock {
-            val readiness = intelligence.awaitReady(readinessTimeout)
-            if (readiness is Readiness.NotReady) return@withLock EditResult.NotReady(readiness)
-            intelligence.session { session ->
-                val shadow = ShadowWorkspace(files, session, resolver, validationTimeout)
-                val listed = mutableMapOf<Path, MutableSet<ImportDirective>>()
-                operations.zip(paths).forEachIndexed { index, (operation, parsed) ->
-                    when (val applied = apply(session, shadow, operation, parsed)) {
-                        is Applied.Done -> {
-                            addImports(shadow, applied.file, imports[index])
-                            listed.getOrPut(applied.file) { mutableSetOf() } += imports[index]
-                        }
-                        is Applied.Failed -> return@session EditResult.OperationFailed(index, applied.failure)
+        val readiness = intelligence.awaitReady(readinessTimeout)
+        if (readiness is Readiness.NotReady) return EditResult.NotReady(readiness)
+        return intelligence.session { session ->
+            val shadow = ShadowWorkspace(files, session, resolver, validationTimeout)
+            val listed = mutableMapOf<Path, MutableSet<ImportDirective>>()
+            combined.zip(paths).forEachIndexed { index, (operation, parsed) ->
+                when (val applied = apply(session, shadow, operation, parsed)) {
+                    is Applied.Done -> {
+                        addImports(shadow, applied.file, imports[index])
+                        listed.getOrPut(applied.file) { mutableSetOf() } += imports[index]
                     }
+                    is Applied.Failed -> return@session failed(index, applied.failure)
                 }
-                val removed = shadow.removeImportsMadeUnused(session, validationTimeout) { file, suspects -> suspects - listed[file].orEmpty() }
-                    .mapKeys { files.display(it.key) }
-                when (val validated = shadow.validate()) {
-                    is ShadowWorkspace.Validated.Passed -> when (val writeBack = shadow.writeBack()) {
-                        ShadowWorkspace.WriteBack.Written ->
-                            EditResult.Written(validated.files.map { it.copy(importsRemoved = removed[it.file].orEmpty()) })
-                        is ShadowWorkspace.WriteBack.ChangedOnDisk -> EditResult.ChangedOnDisk(writeBack.file)
-                        is ShadowWorkspace.WriteBack.TargetExists -> error("an Edit moves no file, yet Write-back found ${writeBack.file} moved")
-                        is ShadowWorkspace.WriteBack.Partial ->
-                            EditResult.PartiallyWritten(writeBack.written, writeBack.failed, writeBack.reason)
-                    }
-                    is ShadowWorkspace.Validated.Rejected -> EditResult.Rejected(validated.newErrors)
-                    ShadowWorkspace.Validated.TimedOut -> EditResult.ValidationTimedOut
+            }
+            // A file can change on disk between an amend's check and its replay reading it: the Edit is based on the first read.
+            val read = shadow.baseHashes()
+            bases.entries.firstOrNull { (file, hash) -> file in read && read[file] != hash }
+                ?.let { return@session EditResult.ChangedOnDisk(files.display(it.key)) }
+            val removed = shadow.removeImportsMadeUnused(session, validationTimeout) { file, suspects -> suspects - listed[file].orEmpty() }
+                .mapKeys { files.display(it.key) }
+            when (val validated = shadow.validate()) {
+                is ShadowWorkspace.Validated.Passed -> when (val writeBack = shadow.writeBack()) {
+                    ShadowWorkspace.WriteBack.Written ->
+                        EditResult.Written(validated.files.map { it.copy(importsRemoved = removed[it.file].orEmpty()) })
+                    is ShadowWorkspace.WriteBack.ChangedOnDisk -> EditResult.ChangedOnDisk(writeBack.file)
+                    is ShadowWorkspace.WriteBack.TargetExists -> error("an Edit moves no file, yet Write-back found ${writeBack.file} moved")
+                    is ShadowWorkspace.WriteBack.Partial ->
+                        EditResult.PartiallyWritten(writeBack.written, writeBack.failed, writeBack.reason)
                 }
+                is ShadowWorkspace.Validated.Rejected -> EditResult.Rejected(validated.newErrors, writeLock.keep(combined, read))
+                ShadowWorkspace.Validated.TimedOut -> EditResult.ValidationTimedOut
             }
         }
     }
@@ -360,8 +384,11 @@ public data class Problem(val file: String, val symbol: String?, val line: Int, 
 public sealed interface EditResult {
     public data class Written(val files: List<EditedFile>) : EditResult
 
-    /** Validation found [newErrors] the Edit introduced; nothing was written. */
-    public data class Rejected(val newErrors: List<Problem>) : EditResult
+    /**
+     * Validation found [newErrors] the Edit introduced; nothing was written. The Edit is kept as the Rejected Edit [id]
+     * until the next write call, so a follow-up can amend it.
+     */
+    public data class Rejected(val newErrors: List<Problem>, val id: String) : EditResult
 
     /** [file] changed on disk after the Edit read it; nothing was written. */
     public data class ChangedOnDisk(val file: String) : EditResult
@@ -375,8 +402,14 @@ public sealed interface EditResult {
     /** Validation didn't finish within its timeout; nothing was written. */
     public data object ValidationTimedOut : EditResult
 
-    /** The Operation at [index] (0-based) can't be applied; nothing was written. */
-    public data class OperationFailed(val index: Int, val failure: OperationFailure) : EditResult
+    /**
+     * The Operation at [index] (0-based) can't be applied; nothing was written. In an amend, [index] counts the amend's
+     * Operations, unless [inRejected]: then it is one of the Rejected Edit's, which no longer applies.
+     */
+    public data class OperationFailed(val index: Int, val failure: OperationFailure, val inRejected: Boolean = false) : EditResult
+
+    /** There is no Rejected Edit [id] to amend: it never was, or a later write call dropped it. Nothing was written. */
+    public data class NoRejectedEdit(val id: String) : EditResult
 
     /** The index was still incomplete after waiting [elapsed]; nothing was written. */
     public data class NotReady(val readiness: Readiness.NotReady) : EditResult

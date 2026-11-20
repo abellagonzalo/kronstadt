@@ -146,7 +146,7 @@ class EditTest {
         val result = edit(intelligence, files)(Replace(path, "Greeter/greet", "fun greet(): String =\n    \"hello\""))
 
         assertEquals(
-            EditResult.Rejected(listOf(Problem(path, "greet", 5, "Type mismatch: inferred type is String", "\"hello\""))),
+            EditResult.Rejected(listOf(Problem(path, "greet", 5, "Type mismatch: inferred type is String", "\"hello\"")), "e1"),
             result,
         )
         assertEquals(source, files.content(path))
@@ -183,7 +183,7 @@ class EditTest {
 
         val result = edit(intelligence)(Replace(path, "Greeter/greet", "fun greet(): String =\n    \"hello\""))
 
-        assertEquals(EditResult.Rejected(listOf(Problem(path, "greet", 5, unresolved, "\"hello\""))), result)
+        assertEquals(EditResult.Rejected(listOf(Problem(path, "greet", 5, unresolved, "\"hello\"")), "e1"), result)
     }
 
     /** What kotlin-lsp reports for a declaration without visibility or return type, as explicit-API mode wants (#48). */
@@ -668,7 +668,7 @@ class EditTest {
             listOf(Create(created, hello1), Replace(path, "Greeter/greet", "fun greet(): String =\n    \"hello\"")),
         )
 
-        assertEquals(EditResult.Rejected(listOf(Problem(created, "hi", 4, "Return type mismatch", "fun hi(): Int = 1"))), result)
+        assertEquals(EditResult.Rejected(listOf(Problem(created, "hi", 4, "Return type mismatch", "fun hi(): Int = 1")), "e1"), result)
         assertEquals(emptyList(), files.written)
         assertEquals(null, files.content(created))
         intelligence.assertOneSessionClosedEverything()

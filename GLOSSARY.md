@@ -25,7 +25,7 @@ A place in project source that refers to a Symbol by name, other than its own de
 _Avoid_: reference, call site, occurrence
 
 **Edit**:
-One write request: an ordered batch of Operations that is validated and written back as a whole, or rejected as a whole.
+One write request: an ordered batch of Operations that is validated and written back as a whole, or rejected as a whole. An Edit can amend the last Rejected Edit: its Operations are appended to the Rejected Edit's, and the combined Edit is validated and written back as one.
 _Avoid_: change, transaction, patch
 
 **Operation**:
@@ -39,6 +39,10 @@ _Avoid_: shadow file system, in-memory buffer, working memory copy
 **Validation**:
 Checking the Shadow Workspace for errors the edit introduced in the files it touched, before Write-back. A failed Validation rejects the whole edit. Errors in other files are Collateral Errors.
 _Avoid_: check, lint, verify
+
+**Rejected Edit**:
+An Edit that failed Validation, kept in memory until the next write call so a follow-up can amend it. Nothing of it is written.
+_Avoid_: pending edit, draft
 
 **Collateral Error**:
 A compiler error an edit introduces in a file it didn't touch, such as a caller still using a signature the edit changed. It is reported with the edit's result and never blocks it.

@@ -37,9 +37,10 @@ public class RenameSymbol(
 
     /** Renames the Symbol at [symbol] to [newName]; [symbol] is resolved in [file], or project-wide without one. */
     public suspend operator fun invoke(symbol: String, newName: String, file: String? = null): RenameResult {
-        val parsed = SymbolResolver.parse(file, symbol).getOrElse { return RenameResult.LookupFailed(it) }
-        if (!IDENTIFIER.matches(newName)) return RenameResult.InvalidName(newName)
+        // Taking the lock drops the last Rejected Edit, whatever the outcome, so even a malformed call takes it.
         return writeLock.withLock {
+            val parsed = SymbolResolver.parse(file, symbol).getOrElse { return@withLock RenameResult.LookupFailed(it) }
+            if (!IDENTIFIER.matches(newName)) return@withLock RenameResult.InvalidName(newName)
             val readiness = intelligence.awaitReady(readinessTimeout)
             if (readiness is Readiness.NotReady) return@withLock RenameResult.NotReady(readiness)
             intelligence.session { session -> rename(session, parsed, newName) }
