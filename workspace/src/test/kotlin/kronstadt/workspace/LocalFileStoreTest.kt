@@ -143,4 +143,33 @@ class LocalFileStoreTest {
         assertEquals(WriteResult.ChangedOnDisk, store.moveIfUnchanged(file, read.hash, target, TextDocument("class Polygon\n")))
         assertEquals(listOf("Shape.kt"), project.listDirectoryEntries().map { it.name })
     }
+
+    @Test
+    fun `a created file gets its missing directories, is written whole like any new file, and leaves no temp file`() = runBlocking {
+        val file = project.resolve("src/main/kotlin/a/B.kt")
+
+        assertEquals(WriteResult.Written, store.writeIfAbsent(file, TextDocument("package a\n\nclass B\n")))
+
+        assertEquals("package a\n\nclass B\n", file.readText())
+        assertEquals(listOf("B.kt"), file.parent.listDirectoryEntries().map { it.name }, "no temp file is left")
+        val plain = Files.createFile(project.resolve("Plain.kt"))
+        assertEquals(Files.getPosixFilePermissions(plain), Files.getPosixFilePermissions(file), "not private like a temp file")
+    }
+
+    @Test
+    fun `a created file never overwrites an existing one`() = runBlocking {
+        val file = project.resolve("B.kt").apply { writeText("class Theirs\n") }
+
+        assertEquals(WriteResult.ChangedOnDisk, store.writeIfAbsent(file, TextDocument("class B\n")))
+
+        assertEquals("class Theirs\n", file.readText())
+        assertEquals(listOf("B.kt"), project.listDirectoryEntries().map { it.name })
+    }
+
+    @Test
+    fun `rejects a path that doesn't exist yet under a symlink pointing outside the project`() {
+        project.resolve("src").createSymbolicLinkPointingTo(outside)
+        assertNull(store.resolve("src/a/New.kt"))
+        assertEquals(project.resolve("other/a/New.kt"), store.resolve("other/a/New.kt"))
+    }
 }

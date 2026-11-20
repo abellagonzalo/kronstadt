@@ -16,11 +16,11 @@ import kronstadt.core.port.FileStore
 import java.nio.file.Path
 import kotlin.time.Duration
 
-/** A single step inside an Edit, aimed at one Symbol Path, in [file] if it is given, or at a whole [file]. */
+/** A single step inside an Edit, aimed at one Symbol Path, in [file] if it is given, at a whole [file], or creating one. */
 public sealed interface Operation {
     public val file: String?
 
-    /** Null only for an [EditIn] on a whole file. */
+    /** Null only for an [EditIn] on a whole file and for a [Create]. */
     public val symbol: String?
 
     /**
@@ -77,6 +77,19 @@ public data class EditIn(
         require(symbol != null || file != null) { "edit_in needs a symbol, a file, or both" }
         require(old.isNotEmpty()) { "edit_in needs a non-empty 'old'" }
     }
+}
+
+/**
+ * Creates the Kotlin [file], which mustn't exist, with [code] as its whole text, as written except that its line
+ * breaks become `\n`. Validated and written back with the rest of the Edit, its missing parent directories created only
+ * then. Later Operations can target its Symbols, passing [file].
+ */
+public data class Create(
+    override val file: String,
+    val code: String,
+    override val imports: List<String> = emptyList(),
+) : Operation {
+    override val symbol: String? get() = null
 }
 
 /**
@@ -152,14 +165,14 @@ public class Edit(
     /**
      * Resolves [operation]'s Symbol against the Shadow Workspace's current text and changes the lines around its span;
      * new code is re-indented to the span's column, except an [EditIn]'s. An [EditIn] without a Symbol works on its
-     * whole file instead.
+     * whole file instead, and a [Create] makes one.
      */
     private suspend fun apply(session: AnalysisSession, shadow: ShadowWorkspace, operation: Operation, parsed: ParsedLookup?): Applied {
-        if (parsed == null) return applyToFile(shadow, operation as EditIn)
+        if (parsed == null) return if (operation is Create) create(shadow, operation) else applyToFile(shadow, operation as EditIn)
         // Without a file, the Symbol Path is resolved project-wide only to find its file; it is resolved again in the
         // Shadow Workspace, against the text the earlier Operations left. The project index sees only the disk, so a
         // Symbol that exists only in that text needs its file.
-        val file = parsed.file?.let { path -> files.classify(path).getOrElse { return Applied.Failed(OperationFailure.LookupFailed(it)) } }
+        val file = parsed.file?.let { path -> classify(shadow, path).getOrElse { return Applied.Failed(OperationFailure.LookupFailed(it)) } }
             ?: resolver.resolve(session, parsed).getOrElse { failure ->
                 val inEdit = if (failure is LookupFailure.NotFound) shadow.findInEdited(parsed) else emptyList()
                 return Applied.Failed(
@@ -182,6 +195,7 @@ public class Edit(
         val first = span.firstLine
         val afterSpan = span.lastLine + 1
         when (operation) {
+            is Create -> error("a create has no Symbol Path")
             is Replace -> shadow.replaceLines(file, first..span.lastLine, reindented(operation.code))
             is InsertBefore -> shadow.replaceLines(file, first until first, sibling(operation.code) + "")
             is InsertAfter -> shadow.replaceLines(file, afterSpan until afterSpan, listOf("") + sibling(operation.code))
@@ -208,7 +222,7 @@ public class Edit(
     /** An [EditIn] on a whole file: its span is the whole text, and only the lines the occurrence is on change. */
     private suspend fun applyToFile(shadow: ShadowWorkspace, operation: EditIn): Applied {
         val path = checkNotNull(operation.file) { "an edit_in without a symbol has a file" }
-        val file = files.classify(path).getOrElse { return Applied.Failed(OperationFailure.LookupFailed(it)) }
+        val file = classify(shadow, path).getOrElse { return Applied.Failed(OperationFailure.LookupFailed(it)) }
         val document = shadow.current(file) ?: return Applied.Failed(OperationFailure.LookupFailed(LookupFailure.FileNotFound(path)))
         when (val splice = Splice.inFile(document, operation)) {
             is Splice.Done -> shadow.replaceLines(file, splice.lines, splice.newLines)
@@ -216,6 +230,28 @@ public class Edit(
                 return Applied.Failed(OperationFailure.NotExactlyOnce(operation.old, null, files.display(file), splice.count, splice.lines))
         }
         return Applied.Done(file)
+    }
+
+    /** A [Create]: a Kotlin file in the project that neither exists nor was touched earlier in the Edit, with its code as text. */
+    private suspend fun create(shadow: ShadowWorkspace, operation: Create): Applied {
+        val path = operation.file
+        val file = files.resolve(path) ?: return Applied.Failed(OperationFailure.LookupFailed(LookupFailure.OutsideProject(path)))
+        if (!AnalysedFile.isKotlin(file)) return Applied.Failed(OperationFailure.LookupFailed(LookupFailure.NotKotlin(path)))
+        return when (shadow.create(file, operation.code.lines())) {
+            null -> Applied.Done(file)
+            ShadowWorkspace.NotCreated.ON_DISK -> Applied.Failed(OperationFailure.FileExists(files.display(file), inEdit = false))
+            ShadowWorkspace.NotCreated.IN_EDIT -> Applied.Failed(OperationFailure.FileExists(files.display(file), inEdit = true))
+        }
+    }
+
+    /** The file [path] names, as [FileStore.classify] finds it on disk, or one an earlier [Create] of this Edit made. */
+    private suspend fun classify(shadow: ShadowWorkspace, path: String): Outcome<Path> {
+        val onDisk = files.classify(path)
+        if (onDisk is Outcome.Failed && onDisk.failure is LookupFailure.FileNotFound) {
+            val created = files.resolve(path)?.takeIf { shadow.current(it) != null }
+            if (created != null) return Outcome.Ok(created)
+        }
+        return onDisk
     }
 
     /** Adds those of [imports] that [file] lacks to its current text (see [addingImports]); never removes or reorders any. */
@@ -294,6 +330,8 @@ public data class EditedFile(
     val preexistingErrors: Int,
     /** Imports the Edit made unused, which it removed (ADR 0004), e.g. `a.b.C`. */
     val importsRemoved: List<String> = emptyList(),
+    /** Whether the Edit created the file (see [Create]). */
+    val created: Boolean = false,
 )
 
 /** A diagnostic as the agent sees it: where it is ([line] is 1-based), what it says and the offending source line. */
@@ -352,6 +390,9 @@ public sealed interface OperationFailure {
         val count: Int,
         val lines: List<Occurrence>,
     ) : OperationFailure
+
+    /** A `create`'s [file] exists on disk, or, if [inEdit], an earlier Operation of this Edit created or changed it. */
+    public data class FileExists(val file: String, val inEdit: Boolean) : OperationFailure
 
     /** [import] isn't one import directive: a dotted name, optionally ending in `.*` or `as Alias`. */
     public data class InvalidImport(val import: String) : OperationFailure

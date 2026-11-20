@@ -29,7 +29,7 @@ One write request: an ordered batch of Operations that is validated and written 
 _Avoid_: change, transaction, patch
 
 **Operation**:
-A single step inside an Edit (replace, insert before or after, delete, or a text replace inside a Symbol Span), aimed at one Symbol Path. A text replace may instead target a whole file, for text that belongs to no Symbol.
+A single step inside an Edit (replace, insert before or after, delete, or a text replace inside a Symbol Span), aimed at one Symbol Path. A text replace may instead target a whole file, for text that belongs to no Symbol. A create makes a new file instead: its whole text, validated and written back with the rest of the Edit.
 _Avoid_: action, command, step
 
 **Shadow Workspace**:

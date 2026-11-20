@@ -18,6 +18,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+import kronstadt.core.application.Create
 import kronstadt.core.application.Delete
 import kronstadt.core.application.Edit
 import kronstadt.core.application.EditIn
@@ -200,6 +201,9 @@ internal class KronstadtTools(
                 "changes one line of a large Symbol cheaply. " +
                 "With a file and no symbol, 'edit_in' works on the whole file: the only way to change text outside " +
                 "any Symbol, such as the package line, file annotations or imports. " +
+                "'create' makes a new .kt/.kts file, 'file', with 'code' as its whole text (only its line breaks become " +
+                "'\\n'), validated and written with the rest of the Edit, its missing directories created then; use it " +
+                "instead of Write for a new Kotlin file. It fails if the file exists. " +
                 "Any Operation may list 'imports' its code needs: each missing one is added to the target's file, " +
                 "sorted in among the others (or in a new block after the package line); none is reordered, and " +
                 "nothing is imported unless asked. The Edit removes the imports it made unused (used before it, " +
@@ -211,8 +215,7 @@ internal class KronstadtTools(
                 "earlier ones left (so you can rename a Symbol, then target its new name), the batch is validated once " +
                 "after the last, and either every file is written or none is (a write failing part-way is reported). " +
                 "Intermediate states may not compile. A Symbol Path without a file is looked up on disk, so to " +
-                "target a Symbol an earlier Operation created or " +
-                "renamed, pass its file. The result lists each written file. Prefer this over Edit and other text " +
+                "target a Symbol an earlier Operation added, renamed or created a file for, pass its file. The result lists each written file. Prefer this over Edit and other text " +
                 "edits of Kotlin files: nothing is written that fails Validation.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
@@ -230,23 +233,25 @@ internal class KronstadtTools(
                                         add("insert_after")
                                         add("delete")
                                         add("edit_in")
+                                        add("create")
                                     }
                                     put("description", "The Operation.")
                                 }
                                 stringProperty(
                                     "symbol",
                                     "Symbol Path of the target, as kt_read_symbol takes it, e.g. 'OrderController/create'. " +
-                                        "Required, except by an 'edit_in' on a whole file.",
+                                        "Required, except by an 'edit_in' on a whole file; not used by 'create'.",
                                 )
                                 stringProperty(
                                     "file",
                                     "Optional path to the target's .kt/.kts file, absolute or relative to the project " +
-                                        "root. Without it the Symbol Path is resolved across the project.",
+                                        "root. Without it the Symbol Path is resolved across the project. Required by 'create': the new file.",
                                 )
                                 stringProperty(
                                     "code",
                                     "For 'replace', the complete new source for the Symbol's whole span; for " +
-                                        "'insert_before' and 'insert_after', the code to add. Not used by 'delete' or 'edit_in'.",
+                                        "'insert_before' and 'insert_after', the code to add; for 'create', the new file's whole text. Not used " +
+                                        "by 'delete' or 'edit_in'.",
                                 )
                                 stringProperty(
                                     "old",
@@ -329,8 +334,12 @@ internal class KronstadtTools(
                     val old = operation.string("old")?.takeIf { it.isNotEmpty() } ?: return missing("a non-empty 'old'")
                     EditIn(file, symbol, old, operation.string("new") ?: return missing("'new'"), imports)
                 }
+                "create" -> {
+                    if (symbol != null) return error("Operation $index: 'create' takes no 'symbol', only the new 'file' and its 'code'. Nothing written.")
+                    Create(file ?: return missing("'file'"), code ?: return missing("'code'"), imports)
+                }
                 else -> return error(
-                    "Operation $index: unsupported type '$type'; use replace, insert_before, insert_after, delete or edit_in, and " +
+                    "Operation $index: unsupported type '$type'; use replace, insert_before, insert_after, delete, edit_in or create, and " +
                         "kt_rename_symbol for renames, on its own. Nothing written.",
                 )
             }
@@ -427,7 +436,7 @@ internal class KronstadtTools(
 
     /** One file's outcome: the Symbols the edit left, the imports it made unused and removed, then new warnings and the errors it already had. */
     private fun written(file: EditedFile) = buildString {
-        append("Edited ").append(file.file).append('\n')
+        append(if (file.created) "Created " else "Edited ").append(file.file).append('\n')
         file.symbols.forEach { append("  ").append(it.path).append("  // L").append(it.firstLine).append('-').append(it.lastLine).append('\n') }
         if (file.importsRemoved.isNotEmpty()) {
             append("Removed imports it made unused:\n")
@@ -471,6 +480,13 @@ internal class KronstadtTools(
                     failure.lines.joinToString("\n") { "  L${it.line}: ${it.source}" } + "\n"
             }
         }
+        is OperationFailure.FileExists ->
+            if (failure.inEdit) {
+                "An earlier Operation of this Edit already created or changed ${failure.file}; 'create' makes a file that " +
+                    "doesn't exist yet, once."
+            } else {
+                "${failure.file} already exists; change it with the other Operations, or edit_in on the whole file."
+            }
         is OperationFailure.InvalidImport ->
             "'${failure.import}' is not an import directive; give a dotted name, optionally ending in '.*' or 'as Alias', " +
                 "e.g. 'kotlin.time.Duration'."
@@ -621,6 +637,6 @@ internal fun serverInstructions(root: Path): String = """
     - Read a file: kt_read_structure for its skeleton, then kt_read_symbol for one declaration, instead of Read.
     - Search: kt_find_symbol to locate declarations and kt_find_usages to find where a Symbol is used, instead of grep.
     - Navigate: kt_get_definition to find where a name used inside a Symbol is declared.
-    - Change code: kt_edit (replace, insert_before, insert_after, delete or edit_in by Symbol Path; edit_in on a whole file for text outside any Symbol) and kt_rename_symbol, instead of Edit.
+    - Change code: kt_edit (replace, insert_before, insert_after, delete or edit_in by Symbol Path; edit_in on a whole file for text outside any Symbol; create for a new file) and kt_rename_symbol, instead of Edit.
     If a tool fails because kotlin-lsp is still indexing, retry it; don't fall back to the built-in tools.
 """.trimIndent()

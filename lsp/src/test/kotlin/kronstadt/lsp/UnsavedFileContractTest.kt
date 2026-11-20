@@ -5,9 +5,13 @@ package kronstadt.lsp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kronstadt.core.application.Create
+import kronstadt.core.application.Edit
+import kronstadt.core.application.EditResult
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.TextDocument
+import kronstadt.workspace.LocalFileStore
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.MethodOrderer
@@ -24,6 +28,7 @@ import kotlin.io.path.exists
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
@@ -135,6 +140,32 @@ class UnsavedFileContractTest {
 
         assertEquals(before, after, "diagnostics: $after")
         assertFalse(file.exists())
+    }
+
+    @Test
+    @Order(8)
+    fun `kt_edit rejects a created file that doesn't compile, creating no directory`() = runBlocking {
+        val result = Edit(LocalFileStore(project), lsp)(Create("src/main/kotlin/fixture/made/Broken.kt", "package fixture.made\n\nval broken: Int = \"x\"\n"))
+
+        val errors = assertIs<EditResult.Rejected>(result, "$result").newErrors
+        assertEquals(listOf(3), errors.map { it.line }, "$errors")
+        assertFalse(project.resolve("src/main/kotlin/fixture/made").exists())
+    }
+
+    @Test
+    @Order(9)
+    fun `kt_edit creates a main class and a test that uses it in one Edit`() = runBlocking {
+        val result = Edit(LocalFileStore(project), lsp)(
+            listOf(
+                Create("src/main/kotlin/fixture/made/Greeter.kt", GREETER.replace("fixture.created", "fixture.made")),
+                Create("src/test/kotlin/fixture/made/GreeterCheck.kt", "package fixture.made\n\nfun greets(): Boolean = Greeter().greet() == \"hello\"\n"),
+            ),
+        )
+
+        val written = assertIs<EditResult.Written>(result, "$result").files
+        assertEquals(listOf(listOf("Greeter"), listOf("greets")), written.map { file -> file.symbols.map { it.path } })
+        assertEquals(listOf(true, true), written.map { it.created })
+        assertEquals(GREETER.replace("fixture.created", "fixture.made"), Files.readString(project.resolve("src/main/kotlin/fixture/made/Greeter.kt")))
     }
 
     private fun unsaved(sourceSet: String): Path = project.resolve("src/$sourceSet/kotlin/fixture/created/Greeter.kt")

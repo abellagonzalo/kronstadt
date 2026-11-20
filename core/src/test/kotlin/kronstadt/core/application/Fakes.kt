@@ -74,6 +74,14 @@ class FakeFileStore(
         return WriteResult.Written
     }
 
+    override suspend fun writeIfAbsent(file: Path, document: TextDocument): WriteResult {
+        if (key(file) in files) return WriteResult.ChangedOnDisk
+        if (key(file) in failingWrites) throw IOException("No space left on device")
+        files[key(file)] = document.text
+        written += key(file) to document.text
+        return WriteResult.Written
+    }
+
     override fun display(file: Path): String = key(file)
 
     override suspend fun kotlinFiles(): List<Path> =

@@ -16,9 +16,11 @@ import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.PosixFileAttributeView
 import java.security.MessageDigest
+import java.util.UUID
 
 /** [FileStore] over the local disk, confined to [projectRoot]. */
 public class LocalFileStore(projectRoot: Path) : FileStore {
@@ -27,8 +29,10 @@ public class LocalFileStore(projectRoot: Path) : FileStore {
     override fun resolve(path: String): Path? {
         val candidate = root.resolve(path).normalize()
         if (!candidate.startsWith(root)) return null
-        // Follow symlinks for files that exist, so a link inside the project cannot point outside it.
-        if (Files.exists(candidate) && !candidate.toRealPath().startsWith(root)) return null
+        // Follow symlinks, so a link inside the project cannot point outside it; for a path that doesn't exist yet, such
+        // as a file an Edit creates, through its nearest existing ancestor.
+        val existing = generateSequence(candidate) { it.parent }.first { Files.exists(it) }
+        if (!existing.toRealPath().startsWith(root)) return null
         return candidate
     }
 
@@ -92,6 +96,27 @@ public class LocalFileStore(projectRoot: Path) : FileStore {
             Files.delete(file)
             WriteResult.Written
         }
+
+    /**
+     * Creates [file]'s missing parent directories, writes a temp file next to it and moves it to [file] without replacing
+     * anything. The temp file is created like any new file (the umask decides its permissions), not private like
+     * [Files.createTempFile]'s.
+     */
+    override suspend fun writeIfAbsent(file: Path, document: TextDocument): WriteResult = withContext(Dispatchers.IO) {
+        if (Files.exists(file, LinkOption.NOFOLLOW_LINKS)) return@withContext WriteResult.ChangedOnDisk
+        Files.createDirectories(file.parent)
+        val temp = file.resolveSibling(".${file.fileName}.${UUID.randomUUID()}.kronstadt")
+        try {
+            Files.write(temp, document.text.encodeToByteArray(), StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
+            // Without REPLACE_EXISTING, a file that appeared since the check fails the move instead of being replaced.
+            Files.move(temp, file)
+        } catch (_: FileAlreadyExistsException) {
+            return@withContext WriteResult.ChangedOnDisk
+        } finally {
+            Files.deleteIfExists(temp)
+        }
+        WriteResult.Written
+    }
 
     override fun display(file: Path): String = root.relativize(file).toString()
 

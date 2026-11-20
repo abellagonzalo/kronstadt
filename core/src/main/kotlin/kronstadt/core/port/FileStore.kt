@@ -5,7 +5,8 @@ import java.nio.file.Path
 
 /** Access to project files, confined to the project root (one Git worktree per Kronstadt instance). */
 public interface FileStore {
-    /** Resolves a path given by the agent (absolute or project-relative). Returns null if it is outside the project. */
+    /** Resolves a path given by the agent (absolute or project-relative). Returns null if it is outside the project, even
+ * through a symlink, for a path that doesn't exist yet too. */
     public fun resolve(path: String): Path?
 
     /** Reads [file], or returns null if it does not exist. */
@@ -27,6 +28,13 @@ public interface FileStore {
      * permissions and appears whole, through a temp file and a rename.
      */
     public suspend fun moveIfUnchanged(file: Path, basedOn: ContentHash, target: Path, document: TextDocument): WriteResult
+
+    /**
+     * Write-back of a file the Edit creates: writes [document] to [file], creating its missing parent directories, but
+     * only if [file] doesn't exist (an existing file is never overwritten; [WriteResult.ChangedOnDisk] then). The file
+     * appears whole, through a temp file and a rename.
+     */
+    public suspend fun writeIfAbsent(file: Path, document: TextDocument): WriteResult
 
     /** Path as it should be shown to the agent: relative to the project root. */
     public fun display(file: Path): String

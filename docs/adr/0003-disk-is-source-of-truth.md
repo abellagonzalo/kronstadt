@@ -6,6 +6,7 @@ kotlin-lsp treats an open document as authoritative over disk, so a document lef
 
 Write-back is guarded:
 - Kronstadt writes only if the file's current content hash still matches the bytes the edit was based on. On a mismatch it rejects the edit with "changed on disk since read; re-read and retry". It never merges.
+- A file the edit creates ([#70](https://github.com/abellagonzalo/kronstadt/issues/70)) has no bytes to hash, so its check is that it is still absent. If it appeared on disk in the meantime, the edit is rejected the same way. It is written through a temp file and a rename that never replaces an existing file, after creating its missing parent directories.
 - It writes through a temp file and an atomic rename, keeping the file's permissions.
 - Write tools run one at a time under a single lock per Kronstadt instance. Read tools don't take the lock.
 

@@ -106,7 +106,7 @@ class KtRenameSymbolToolTest {
 
         assertEquals(true, failed)
         assertEquals(
-            "Operation 0: unsupported type 'rename'; use replace, insert_before, insert_after, delete or edit_in, and " +
+            "Operation 0: unsupported type 'rename'; use replace, insert_before, insert_after, delete, edit_in or create, and " +
                 "kt_rename_symbol for renames, on its own. Nothing written.",
             text,
         )

@@ -35,11 +35,14 @@ import kronstadt.workspace.LocalFileStore
 import java.lang.reflect.Proxy
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.io.path.listDirectoryEntries
+import kotlin.io.path.name
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 import kotlin.time.Duration
 
 /** The kt_edit tool's arguments as an agent sends them, through to the file on disk. */
@@ -143,6 +146,38 @@ class KtEditToolTest {
             text,
         )
         assertEquals(before, file.readText())
+    }
+
+    @Test
+    fun `the schema offers create, and a create writes the new file, its directories with it, and says it was created`() = runTest {
+        val schema = checkNotNull(server.tools["kt_edit"]).tool.inputSchema.properties.toString()
+        assertTrue("\"create\"" in schema, schema)
+
+        val (failed, text) = ktEdit(
+            """{"operations": [{"type": "create", "file": "src/b/B.kt", "code": "package b\r\n\r\nclass B\r\n"}]}""",
+        )
+
+        assertEquals(false, failed, text)
+        assertEquals("Created src/b/B.kt", text)
+        assertEquals("package b\n\nclass B\n", root.resolve("src/b/B.kt").readText())
+    }
+
+    @Test
+    fun `a create needs a file and code, takes no symbol, and fails on a file that exists, writing nothing`() = runTest {
+        val before = file.readText()
+
+        val (_, noFile) = ktEdit("""{"operations": [{"type": "create", "code": "class B"}]}""")
+        val (_, noCode) = ktEdit("""{"operations": [{"type": "create", "file": "B.kt"}]}""")
+        val (_, withSymbol) = ktEdit("""{"operations": [{"type": "create", "file": "B.kt", "symbol": "B", "code": "class B"}]}""")
+        val (failed, exists) = ktEdit("""{"operations": [{"type": "create", "file": "A.kt", "code": "class B"}]}""")
+
+        assertEquals("Operation 0: missing 'file', which 'create' needs. Nothing written.", noFile)
+        assertEquals("Operation 0: missing 'code', which 'create' needs. Nothing written.", noCode)
+        assertEquals("Operation 0: 'create' takes no 'symbol', only the new 'file' and its 'code'. Nothing written.", withSymbol)
+        assertEquals(true, failed)
+        assertEquals("Operation 0: A.kt already exists; change it with the other Operations, or edit_in on the whole file. Nothing written.", exists)
+        assertEquals(before, file.readText())
+        assertEquals(listOf("A.kt"), root.listDirectoryEntries().map { it.name })
     }
 }
 

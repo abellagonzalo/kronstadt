@@ -13,8 +13,8 @@ import kronstadt.core.domain.TextEdit
 import kronstadt.core.domain.Validation
 import kronstadt.core.domain.packageName
 import kronstadt.core.port.AnalysisSession
+import kronstadt.core.port.ContentHash
 import kronstadt.core.port.FileStore
-import kronstadt.core.port.HashedDocument
 import kronstadt.core.port.WriteResult
 import java.nio.file.Path
 import kotlin.time.Duration
@@ -26,7 +26,7 @@ import kotlin.time.Duration
  *
  * It lives in the tool call's [AnalysisSession], which closes every document it opened when the call ends. A file is
  * read from disk the first time it's touched; that read is its base, which Validation compares with and whose hash
- * Write-back checks.
+ * Write-back checks. A file the Edit creates has an empty base, and Write-back checks that it is still absent.
  */
 internal class ShadowWorkspace(
     private val files: FileStore,
@@ -36,23 +36,47 @@ internal class ShadowWorkspace(
     private val validationTimeout: Duration,
 ) : DocumentSource {
     /**
-     * A touched file: its [base] as read from disk, its [current] text and the line ranges edited in [current] (a
-     * deletion edits the file but leaves no edited lines).
+     * A touched file: its [base] as read from disk with the [baseHash] Write-back checks, its [current] text and the line
+     * ranges edited in [current] (a deletion edits the file but leaves no edited lines). A file the Edit creates has an
+     * empty [base] and no [baseHash]: Write-back checks that it is still absent instead.
      */
-    private class Touched(val base: HashedDocument) {
-        var current: TextDocument = base.document
+    private class Touched(val base: TextDocument, val baseHash: ContentHash?) {
+        var current: TextDocument = base
         val edited = mutableListOf<IntRange>()
         var isEdited = false
 
         /** Where Write-back moves the file to, if it is renamed. */
         var movedTo: Path? = null
+
+        val isCreated: Boolean get() = baseHash == null
     }
 
     /** In the order the Edit first touched them. */
     private val touched = linkedMapOf<Path, Touched>()
 
     private suspend fun touch(file: Path): Touched? =
-        touched[file] ?: files.readHashed(file)?.let { Touched(it).also { touched[file] = it } }
+        touched[file] ?: files.readHashed(file)?.let { Touched(it.document, it.hash).also { touched[file] = it } }
+
+    /** Why [create] made no file. */
+    enum class NotCreated {
+        /** The file exists on disk. */
+        ON_DISK,
+
+        /** An earlier Operation of this Edit created or touched it. */
+        IN_EDIT,
+    }
+
+    /**
+     * Adds [file], which mustn't exist, with [lines] joined by `\n` as its text: its base is empty, so every line is edited
+     * and every error in it is new, and Write-back creates it only if it is still absent. Null once created.
+     */
+    suspend fun create(file: Path, lines: List<String>): NotCreated? {
+        if (file in touched) return NotCreated.IN_EDIT
+        if (files.readHashed(file) != null) return NotCreated.ON_DISK
+        touched[file] = Touched(TextDocument(""), baseHash = null)
+        replaceLines(file, 0..0, lines)
+        return null
+    }
 
     override suspend fun analysed(file: Path): AnalysedFile? {
         val document = touch(file)?.current ?: return null
@@ -78,7 +102,7 @@ internal class ShadowWorkspace(
     suspend fun current(file: Path): TextDocument? = touch(file)?.current
 
     /** Each file the Edit changed so far, with its text as read from disk. */
-    fun editedBases(): Map<Path, TextDocument> = touched.filterValues { it.isEdited }.mapValues { it.value.base.document }
+    fun editedBases(): Map<Path, TextDocument> = touched.filterValues { it.isEdited }.mapValues { it.value.base }
 
     /** Resolves [parsed] against [file]'s current text, loading the file from disk on first touch. */
     suspend fun resolve(file: Path, parsed: ParsedLookup): Lookup {
@@ -95,7 +119,7 @@ internal class ShadowWorkspace(
     /** Whether [parsed] resolves in [file] as read from disk, which differs from its current text only once edited. */
     private suspend fun inBase(file: Path, parsed: ParsedLookup): Boolean {
         val target = touched[file]?.takeIf { it.isEdited } ?: return false
-        val base = DocumentSource { analyse(file, target.base.document) }
+        val base = DocumentSource { analyse(file, target.base) }
         val resolution = resolver.resolveIn(base, file, parsed)
         return !(resolution is Outcome.Failed && resolution.failure is LookupFailure.NotFound)
     }
@@ -185,7 +209,12 @@ internal class ShadowWorkspace(
     suspend fun validate(inBase: (String) -> String = { it }): Validated {
         val edited = touched.filterValues { it.isEdited }.entries.toList()
         val pulled = withTimeoutOrNull(validationTimeout) {
-            val before = edited.map { (file, it) -> relevant(file, session.diagnostics(file, it.base.document)).map { d -> d.copy(message = inBase(d.message)) } }
+            val before = edited.map { (file, it) ->
+                // A created file is pulled at its empty base too, so other files' base diagnostics don't see its
+                // declarations; it had no errors before the Edit.
+                val diagnostics = session.diagnostics(file, it.base)
+                if (it.isCreated) emptyList() else relevant(file, diagnostics).map { d -> d.copy(message = inBase(d.message)) }
+            }
             // Analysing every current text first is what changes every file to it.
             val trees = edited.map { (file, it) -> SymbolTree(session.documentSymbols(file, it.current)) }
             val after = edited.map { (file, it) -> relevant(file, session.diagnostics(file, it.current)) }
@@ -228,6 +257,7 @@ internal class ShadowWorkspace(
                 newWarnings = newWarnings.take(MAX_WARNINGS).map(::problem),
                 moreWarnings = maxOf(newWarnings.size - MAX_WARNINGS, 0),
                 preexistingErrors = after.count { it.severity == Severity.ERROR } - newErrors.size,
+                created = touched.isCreated,
             )
         }
 
@@ -259,15 +289,17 @@ internal class ShadowWorkspace(
     }
 
     /**
-     * Write-back of every edited file, all-or-nothing as far as it can be: every hash, and that no file is moved onto an
-     * existing one, is checked before anything is written; then each file is written (a moved one at its new path, its
-     * old one deleted), then the code intelligence is told each file written in place is saved. A write that fails after
-     * others succeeded leaves those on disk (ADR 0003, Consequences); one that fails first throws.
+     * Write-back of every edited file, all-or-nothing as far as it can be: every hash, that every created file is still
+     * absent, and that no file is moved onto an existing one, is checked before anything is written; then each file is
+     * written (a moved one at its new path, its old one deleted; a created one with its missing parent directories),
+     * then the code intelligence is told each file written in place is saved. A write that fails after others succeeded
+     * leaves those on disk (ADR 0003, Consequences); one that fails first throws.
      */
     suspend fun writeBack(): WriteBack {
         val edited = touched.filterValues { it.isEdited }
         for ((file, it) in edited) {
-            if (files.readHashed(file)?.hash != it.base.hash) return WriteBack.ChangedOnDisk(files.display(file))
+            // A created file has no base hash, so this also checks that it is still absent.
+            if (files.readHashed(file)?.hash != it.baseHash) return WriteBack.ChangedOnDisk(files.display(file))
             val target = it.movedTo ?: continue
             if (files.read(target) != null) return WriteBack.TargetExists(files.display(file), files.display(target))
         }
@@ -276,10 +308,11 @@ internal class ShadowWorkspace(
             for ((file, it) in edited) {
                 val target = it.movedTo
                 val reason = try {
-                    val result = if (target == null) {
-                        files.writeIfUnchanged(file, it.base.hash, it.current)
-                    } else {
-                        files.moveIfUnchanged(file, it.base.hash, target, it.current)
+                    val baseHash = it.baseHash
+                    val result = when {
+                        baseHash == null -> files.writeIfAbsent(file, it.current)
+                        target == null -> files.writeIfUnchanged(file, baseHash, it.current)
+                        else -> files.moveIfUnchanged(file, baseHash, target, it.current)
                     }
                     when (result) {
                         WriteResult.Written -> null

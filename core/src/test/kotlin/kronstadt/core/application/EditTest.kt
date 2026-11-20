@@ -450,4 +450,130 @@ class EditTest {
         assertEquals(listOf(path to hello), files.written)
         intelligence.assertOneSessionClosedEverything()
     }
+
+    private val created = "src/b/B.kt"
+    private val hello1 = """
+        |package a
+        |
+        |class Hello {
+        |    fun hi(): Int = 1
+        |}
+        |""".trimMargin()
+    private val hello2 = hello1.replace("= 1", "= 2")
+    private fun helloSymbols() = listOf(
+        symbol("Hello", SymbolKind.CLASS, range(2, 0, 4, 1), 2, 6, children = listOf(symbol("hi", SymbolKind.FUNCTION, range(3, 4, 3, 21), 3, 8, parameterTypes = "", type = "(): Int"))),
+    )
+    private fun createIntelligence(diagnosticsByText: Map<String, List<Diagnostic>> = emptyMap(), beforeDiagnostics: suspend () -> Unit = {}) =
+        FakeCodeIntelligence(
+            symbolsByText = mapOf(source to listOf(greeter(greet, other)), hello1 to helloSymbols(), hello2 to helloSymbols()),
+            diagnosticsByText = diagnosticsByText,
+            beforeDiagnostics = beforeDiagnostics,
+        )
+
+    @Test
+    fun `a create makes a new file with its line breaks as newlines, a later Operation targets its Symbols, and it is written as a whole`() = runTest {
+        val files = FakeFileStore(root, mapOf(path to source))
+        val intelligence = createIntelligence()
+
+        val result = edit(intelligence, files)(
+            listOf(Create(created, hello1.replace("\n", "\r\n")), Replace(created, "Hello/hi", "fun hi(): Int = 2")),
+        )
+
+        assertEquals(EditResult.Written(listOf(EditedFile(created, listOf(EditedSymbol("Hello", 3, 5)), emptyList(), 0, 0, created = true))), result)
+        assertEquals(listOf(created to hello2), files.written)
+        intelligence.assertOneSessionClosedEverything()
+    }
+
+    @Test
+    fun `a create and an edit of an existing file that uses the new class are one Edit, validated and written back together`() = runTest {
+        val files = FakeFileStore(root, mapOf(path to source))
+        val using = source.replace("fun other(): Int = 1", "fun other(): Int = Hello().hi()")
+        val intelligence = FakeCodeIntelligence(
+            symbolsByText = mapOf(
+                source to listOf(greeter(greet, other)),
+                using to listOf(greeter(greet, symbol("other", SymbolKind.FUNCTION, range(6, 4, 6, 35), 6, 8, parameterTypes = "", type = "(): Int"))),
+                hello1 to helloSymbols(),
+            ),
+        )
+
+        val result = edit(intelligence, files)(
+            listOf(Create(created, hello1), EditIn(path, null, "fun other(): Int = 1", "fun other(): Int = Hello().hi()")),
+        )
+
+        val written = assertIs<EditResult.Written>(result, "$result").files
+        assertEquals(listOf(created, path), written.map { it.file })
+        assertEquals(listOf(true, false), written.map { it.created })
+        assertEquals(listOf(created, path), files.written.map { it.first })
+        assertEquals(hello1, files.content(created))
+        intelligence.assertOneSessionClosedEverything()
+    }
+
+    @Test
+    fun `a created file with a compile error rejects the whole Edit, and nothing is written or created`() = runTest {
+        val files = FakeFileStore(root, mapOf(path to source))
+        val intelligence = createIntelligence(diagnosticsByText = mapOf(hello1 to listOf(error(3, 20, "Return type mismatch"))))
+
+        val result = edit(intelligence, files)(
+            listOf(Create(created, hello1), Replace(path, "Greeter/greet", "fun greet(): String =\n    \"hello\"")),
+        )
+
+        assertEquals(EditResult.Rejected(listOf(Problem(created, "hi", 4, "Return type mismatch", "fun hi(): Int = 1"))), result)
+        assertEquals(emptyList(), files.written)
+        assertEquals(null, files.content(created))
+        intelligence.assertOneSessionClosedEverything()
+    }
+
+    @Test
+    fun `a created file counts no errors as already there, even ones its empty base would have`() = runTest {
+        val files = FakeFileStore(root, mapOf(path to source))
+        val intelligence = createIntelligence(diagnosticsByText = mapOf("" to listOf(error(0, 0, "Return type mismatch")), hello1 to listOf(error(0, 0, "Return type mismatch"))))
+
+        val result = edit(intelligence, files)(Create(created, hello1))
+
+        assertIs<EditResult.Rejected>(result, "$result")
+        assertEquals(emptyList(), files.written)
+    }
+
+    @Test
+    fun `a create fails, naming the Operation, for a file that exists, is outside the project, isn't Kotlin or was created earlier`() = runTest {
+        val files = FakeFileStore(root, mapOf(path to source))
+        suspend fun failure(vararg operations: Operation) = edit(createIntelligence(), files)(operations.toList())
+
+        assertEquals(EditResult.OperationFailed(0, OperationFailure.FileExists(path, inEdit = false)), failure(Create(path, hello1)))
+        assertEquals(LookupFailure.OutsideProject("../B.kt"), failure(Create("../B.kt", hello1)).lookupFailure())
+        assertEquals(LookupFailure.NotKotlin("src/b/B.java"), failure(Create("src/b/B.java", hello1)).lookupFailure())
+        assertEquals(
+            EditResult.OperationFailed(1, OperationFailure.FileExists(created, inEdit = true)),
+            failure(Create(created, hello1), Create(created, hello2)),
+        )
+        assertEquals(emptyList(), files.written)
+    }
+
+    @Test
+    fun `a file that appears on disk where the Edit creates one is not overwritten, and nothing is written`() = runTest {
+        val files = FakeFileStore(root, mapOf(path to source))
+        val intelligence = createIntelligence(beforeDiagnostics = { files.writeOutside(created, "// theirs\n") })
+
+        val result = edit(intelligence, files)(
+            listOf(Replace(path, "Greeter/greet", "fun greet(): String =\n    \"hello\""), Create(created, hello1)),
+        )
+
+        assertEquals(EditResult.ChangedOnDisk(created), result)
+        assertEquals("// theirs\n", files.content(created))
+        assertEquals(source, files.content(path))
+        assertEquals(emptyList(), files.written)
+        intelligence.assertOneSessionClosedEverything()
+    }
+
+    @Test
+    fun `a create's imports go after its package line, or at the top of a file without one`() = runTest {
+        val files = FakeFileStore(root, mapOf(path to source))
+        val imports = listOf("kotlin.time.Duration")
+
+        edit(createIntelligence(), files)(Create(created, "package a\n\nclass Wait(val d: Duration)\n", imports))
+        edit(createIntelligence(), files)(Create("src/C.kt", "class Wait(val d: Duration)\n", imports))
+
+        assertEquals("package a\n\nimport kotlin.time.Duration\n\nclass Wait(val d: Duration)\n", files.content(created))
+        assertEquals("import kotlin.time.Duration\n\nclass Wait(val d: Duration)\n", files.content("src/C.kt"))
+    }
 }
