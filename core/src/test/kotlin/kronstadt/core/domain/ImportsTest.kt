@@ -85,6 +85,18 @@ class ImportsTest {
     }
 
     @Test
+    fun `leading comments are skipped the same with CRLF line breaks, an empty block comment, or no final line break`() {
+        val crlf = TextDocument("/* Licence */\r\n\r\nfun f() = 1\r\n").addingImports(imports("b.B"))!!
+        assertEquals(1, crlf.lines.first)
+        assertEquals(listOf("", "import b.B"), crlf.newLines)
+        assertEquals(
+            "/**/\n\nimport b.B\n\nfun f() = 1\n",
+            adding("/**/\n\nfun f() = 1\n", "b.B"),
+        )
+        assertEquals("/* Licence */\n\nimport b.B", adding("/* Licence */", "b.B"))
+    }
+
+    @Test
     fun `each missing import goes right after the existing one sorting just before it, leaving the others in place`() {
         // IntelliJ's layout puts java and kotlin last, so the block as a whole isn't sorted.
         val source = """
