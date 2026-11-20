@@ -911,6 +911,37 @@ private val symCheckPath = "src/test/kotlin/fixture/SymCheck.kt"
         )
         assertEquals(sym.replace("val signature", "val parameterTypes"), Files.readString(symFile))
     }
+
+    // #56: kotlin-lsp analyses other files against a written document Kronstadt keeps open, not against disk.
+
+    @Test
+    @Order(29)
+    fun `an outside change to a file kt_edit wrote reaches other files' diagnostics at the next session`() = runBlocking<Unit> {
+        val answerPath = "src/main/kotlin/fixture/delta/Answer.kt"
+        val answerFile = project.resolve(answerPath)
+        val useFile = project.resolve("src/main/kotlin/fixture/delta/UseAnswer.kt")
+        val use = TextDocument("package fixture.delta\n\nfun useAnswer(): Int = answer()\n")
+        suspend fun useErrors() = lsp.session { session -> session.diagnostics(useFile, use) }.filter { it.severity == Severity.ERROR }
+        Files.createDirectories(answerFile.parent)
+        try {
+            Files.writeString(answerFile, "package fixture.delta\n\nfun answer(): Int = 41\n")
+            Files.writeString(useFile, use.text)
+            // New files kotlin-lsp never had open: its own watcher picks them up.
+            withTimeout(1.minutes) {
+                while (useErrors().isNotEmpty()) delay(100.milliseconds)
+            }
+
+            assertIs<EditResult.Written>(Edit(files, lsp)(Replace(answerPath, "answer", "fun answer(): Int = 42")))
+            Files.writeString(answerFile, "package fixture.delta\n\nfun answer(): String = \"42\"\n")
+
+            // No session touches Answer.kt in between: the next one, about UseAnswer.kt only, already sees the new signature.
+            val errors = useErrors()
+            assertEquals(listOf("RETURN_TYPE_MISMATCH"), errors.map { it.code }, "diagnostics: $errors")
+        } finally {
+            Files.deleteIfExists(answerFile)
+            Files.deleteIfExists(useFile)
+        }
+    }
 }
 
 /** The [LookupFailure] a read reports; fails unless it reports one. */

@@ -73,6 +73,7 @@ import org.eclipse.lsp4j.jsonrpc.services.JsonNotification
 import org.eclipse.lsp4j.launch.LSPLauncher
 import org.eclipse.lsp4j.services.LanguageClient
 import org.eclipse.lsp4j.services.LanguageServer
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
@@ -107,18 +108,29 @@ public class LspCodeIntelligence private constructor(
     private val syncLock = Mutex()
     private val openDocuments = mutableMapOf<String, OpenDocument>()
 
-    /** Ending the session closes its documents even if the caller was cancelled: a leaked document goes stale (ADR 0003). */
-    override suspend fun <T> session(block: suspend (AnalysisSession) -> T): T {
+    override suspend fun <T> session(block: suspend (AnalysisSession) -> T): T = holding(block)
+
+    /**
+     * Runs [block] with a [Session] holding what it analyses. Ending it closes its documents even if the caller was
+     * cancelled: a leaked document goes stale (ADR 0003). Before [block] analyses anything, the retained documents are
+     * checked against disk (see [Session.syncRetained]).
+     */
+    private suspend fun <T> holding(block: suspend (Session) -> T): T {
         val session = Session()
         try {
+            session.syncRetained()
             return block(session)
         } finally {
             withContext(NonCancellable) { session.end() }
         }
     }
 
+    /**
+     * Under an internal hold, not a port session (a tool call opens at most one, and may search inside it), so an
+     * outside change to a retained document reaches the index first and stays open until the index answered.
+     */
     override suspend fun workspaceSymbols(query: String): SymbolSearch {
-        val result = request { server.workspaceService.symbol(WorkspaceSymbolParams(query)) }
+        val result = holding { request { server.workspaceService.symbol(WorkspaceSymbolParams(query)) } }
         return SymbolSearch(LspMapping.workspaceSymbols(result), LspMapping.workspaceSymbolCompleteness(result, query))
     }
 
@@ -272,6 +284,63 @@ public class LspCodeIntelligence private constructor(
             } catch (e: ResponseErrorException) {
                 Rename.Refused(e.responseError.message)
             }
+        }
+
+        /**
+         * Syncs each retained document whose file changed on disk since Kronstadt wrote it. kotlin-lsp analyses every file
+         * against the open text of the others, so until then an outside change to a retained file stays invisible to
+         * analyses of other files, not only its own (#56). A changed document is synced to the disk text and held by this
+         * session, no longer retained, so it closes when the session ends, handing the file back to the watcher. A deleted
+         * one is no longer retained, and closed now unless another session holds it; as in [end], the table is settled
+         * first and every close is attempted. An unchanged one, or one that can't be read, stays retained. Disk is read
+         * outside [syncLock]; a document another session synced meanwhile is left alone, since that sync is newer than the read.
+         */
+        suspend fun syncRetained() {
+            val retainedVersions = syncLock.withLock { openDocuments.filterValues { it.retained }.mapValues { it.value.version } }
+            if (retainedVersions.isEmpty()) return
+            val onDisk = withContext(Dispatchers.IO) {
+                buildMap { retainedVersions.keys.forEach { uri -> diskText(uri).onSuccess { put(uri, it) } } }
+            }
+            syncLock.withLock {
+                check(!ended) { "analysis session used after it ended" }
+                val stale = onDisk.filter { (uri, text) ->
+                    val open = openDocuments[uri]
+                    open != null && open.retained && open.version == retainedVersions[uri] && open.text != text
+                }
+                val closing = stale.filterValues { it == null }.keys.filter { uri ->
+                    val open = openDocuments.getValue(uri)
+                    if (open.holders > 0) {
+                        openDocuments[uri] = open.copy(retained = false)
+                        false
+                    } else {
+                        openDocuments.remove(uri)
+                        true
+                    }
+                }
+                val failures = closing.mapNotNull { uri ->
+                    runCatching { server.textDocumentService.didClose(DidCloseTextDocumentParams(TextDocumentIdentifier(uri))) }.exceptionOrNull()
+                }
+                failures.firstOrNull()?.let { throw it }
+                for ((uri, text) in stale) {
+                    if (text == null) continue
+                    val open = openDocuments.getValue(uri)
+                    val version = open.version + 1
+                    server.textDocumentService.didChange(
+                        DidChangeTextDocumentParams(
+                            VersionedTextDocumentIdentifier(uri, version),
+                            listOf(TextDocumentContentChangeEvent(text)),
+                        ),
+                    )
+                    openDocuments[uri] = OpenDocument(version, text, open.holders + if (uri in held) 0 else 1)
+                    held += uri
+                }
+            }
+        }
+
+        /** [uri]'s file content on disk, decoded as the FileStore decodes it; null if it is no longer a file. */
+        private fun diskText(uri: String): Result<String?> = runCatching {
+            val file = LspMapping.localPath(uri) ?: error("not a local file: $uri")
+            if (Files.isRegularFile(file)) Files.readAllBytes(file).decodeToString() else null
         }
 
         /**

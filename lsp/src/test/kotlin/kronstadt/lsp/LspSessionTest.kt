@@ -7,7 +7,9 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.TextDocument
+import org.eclipse.lsp4j.DidChangeConfigurationParams
 import org.eclipse.lsp4j.DidChangeTextDocumentParams
+import org.eclipse.lsp4j.DidChangeWatchedFilesParams
 import org.eclipse.lsp4j.DidCloseTextDocumentParams
 import org.eclipse.lsp4j.DidOpenTextDocumentParams
 import org.eclipse.lsp4j.DidSaveTextDocumentParams
@@ -19,12 +21,15 @@ import org.eclipse.lsp4j.InitializeParams
 import org.eclipse.lsp4j.InitializeResult
 import org.eclipse.lsp4j.RelatedFullDocumentDiagnosticReport
 import org.eclipse.lsp4j.SymbolInformation
+import org.eclipse.lsp4j.WorkspaceSymbol
+import org.eclipse.lsp4j.WorkspaceSymbolParams
 import org.eclipse.lsp4j.jsonrpc.messages.Either
 import org.eclipse.lsp4j.services.LanguageServer
 import org.eclipse.lsp4j.services.TextDocumentService
 import org.eclipse.lsp4j.services.WorkspaceService
 import java.io.InputStream
 import java.io.OutputStream
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
 import kotlin.test.Test
@@ -34,7 +39,9 @@ import kotlin.time.Duration.Companion.seconds
 
 /** Sessions in the lsp adapter, against a stubbed language server that records what it was told. */
 class LspSessionTest {
-    private val file = Path.of("/project/src/A.kt")
+    private val file = Files.createTempDirectory("kronstadt-session").resolve("A.kt")
+
+    private val other = file.resolveSibling("B.kt")
     private val disk = TextDocument("class A\n")
     private val written = TextDocument("class B\n")
     private val outside = TextDocument("class C\n")
@@ -102,11 +109,7 @@ class LspSessionTest {
 
     @Test
     fun `a written document stays open past its session while the disk holds what was written`() = runTest {
-        lsp.session { session ->
-            session.documentSymbols(file, disk)
-            session.diagnostics(file, written)
-            session.writtenBack(file, written)
-        }
+        writeBack(written)
         lsp.session { session -> session.documentSymbols(file, written) }
 
         assertEquals(listOf("open A.kt v1", "change A.kt v2", "save A.kt"), server.events)
@@ -114,20 +117,90 @@ class LspSessionTest {
 
     @Test
     fun `the first session that reads other text from disk syncs the written document and closes it`() = runTest {
-        lsp.session { session ->
-            session.documentSymbols(file, disk)
-            session.diagnostics(file, written)
-            session.writtenBack(file, written)
-        }
+        writeBack(written)
+        Files.writeString(file, outside.text)
         lsp.session { session -> session.documentSymbols(file, outside) }
 
         assertEquals(listOf("open A.kt v1", "change A.kt v2", "save A.kt", "change A.kt v3", "close A.kt"), server.events)
+    }
+
+    @Test
+    fun `a written document unchanged on disk is not re-sent when a session analyses another file`() = runTest {
+        writeBack(written)
+        lsp.session { session -> session.diagnostics(other, disk) }
+
+        assertEquals(listOf("open A.kt v1", "change A.kt v2", "save A.kt", "open B.kt v1", "close B.kt"), server.events)
+    }
+
+    @Test
+    fun `a written document changed on disk is synced before a session analyses another file, and closed when it ends`() = runTest {
+        writeBack(written)
+        Files.writeString(file, outside.text)
+        lsp.session { session -> session.diagnostics(other, disk) }
+
+        assertEquals(
+            listOf("open A.kt v1", "change A.kt v2", "save A.kt", "change A.kt v3", "open B.kt v1", "close A.kt", "close B.kt"),
+            server.events,
+        )
+    }
+
+    @Test
+    fun `a written document deleted on disk is closed before a session analyses another file`() = runTest {
+        writeBack(written)
+        Files.delete(file)
+        lsp.session { session -> session.diagnostics(other, disk) }
+        lsp.session { session -> session.diagnostics(other, disk) }
+
+        assertEquals(
+            listOf("open A.kt v1", "change A.kt v2", "save A.kt", "close A.kt", "open B.kt v1", "close B.kt", "open B.kt v1", "close B.kt"),
+            server.events,
+        )
+    }
+
+    @Test
+    fun `every deleted written document is closed even when closing one fails`() = runTest {
+        writeBack(written)
+        writeBack(written, other)
+        Files.delete(file)
+        Files.delete(other)
+        server.failingCloses += "A.kt"
+
+        val failure = assertFailsWith<IllegalStateException> { lsp.session { error("never analyses") } }
+
+        assertEquals("server is gone", failure.message)
+        assertEquals(
+            listOf("open A.kt v1", "change A.kt v2", "save A.kt", "open B.kt v1", "change B.kt v2", "save B.kt", "close A.kt", "close B.kt"),
+            server.events,
+        )
+    }
+
+    @Test
+    fun `a written document changed on disk is synced before a workspace symbol search, and closed after it`() = runTest {
+        writeBack(written)
+        Files.writeString(file, outside.text)
+        lsp.workspaceSymbols("C")
+
+        assertEquals(listOf("open A.kt v1", "change A.kt v2", "save A.kt", "change A.kt v3", "close A.kt"), server.events)
+    }
+
+    /** A session that edits [target] from [disk] to [document] and writes it back, as `kt_edit` does. */
+    private suspend fun writeBack(document: TextDocument, target: Path = file) {
+        Files.writeString(target, disk.text)
+        lsp.session { session ->
+            session.documentSymbols(target, disk)
+            session.diagnostics(target, document)
+            Files.writeString(target, document.text)
+            session.writtenBack(target, document)
+        }
     }
 }
 
 /** A language server that answers every analysis with nothing and records document notifications, in order. */
 private class RecordingServer : LanguageServer {
     val events = mutableListOf<String>()
+
+    /** Files whose `didClose` fails, after being recorded, as when the server is gone. */
+    val failingCloses = mutableSetOf<String>()
 
     private fun name(uri: String) = uri.substringAfterLast('/')
 
@@ -142,6 +215,7 @@ private class RecordingServer : LanguageServer {
 
         override fun didClose(params: DidCloseTextDocumentParams) {
             events += "close ${name(params.textDocument.uri)}"
+            check(name(params.textDocument.uri) !in failingCloses) { "server is gone" }
         }
 
         override fun didSave(params: DidSaveTextDocumentParams) {
@@ -156,7 +230,13 @@ private class RecordingServer : LanguageServer {
     }
 
     override fun getTextDocumentService(): TextDocumentService = documents
-    override fun getWorkspaceService(): WorkspaceService = error("not stubbed")
+    override fun getWorkspaceService(): WorkspaceService = object : WorkspaceService {
+        override fun symbol(params: WorkspaceSymbolParams): CompletableFuture<Either<List<SymbolInformation>, List<WorkspaceSymbol>>> =
+            CompletableFuture.completedFuture(Either.forRight(emptyList()))
+
+        override fun didChangeConfiguration(params: DidChangeConfigurationParams) {}
+        override fun didChangeWatchedFiles(params: DidChangeWatchedFilesParams) {}
+    }
     override fun initialize(params: InitializeParams): CompletableFuture<InitializeResult> = error("not stubbed")
     override fun shutdown(): CompletableFuture<Any> = CompletableFuture.completedFuture(null)
     override fun exit() {}
