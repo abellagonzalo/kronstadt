@@ -205,7 +205,8 @@ internal class KronstadtTools(
                 "'\\n'), validated and written with the rest of the Edit, its missing directories created then; use it " +
                 "instead of Write for a new Kotlin file. It fails if the file exists. " +
                 "Any Operation may list 'imports' its code needs: each missing one is added to the target's file, " +
-                "sorted in among the others (or in a new block after the package line); none is reordered, and " +
+                "next to the one sharing most of its package, else in its group of IntelliJ's default layout (or in a " +
+                "new block after the package line); none is reordered, and " +
                 "nothing is imported unless asked. The Edit removes the imports it made unused (used before it, " +
                 "unused after it, in the files it changed) unless an Operation listed them, and lists them in the " +
                 "result; imports that were already unused are never touched. " +

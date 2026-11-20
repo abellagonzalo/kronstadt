@@ -4,7 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/** Adding imports to a file: missing ones only, sorted in, nothing existing moved or removed. */
+/** Adding imports to a file: missing ones only, each by its closest neighbours, nothing existing moved or removed. */
 class ImportsTest {
     private fun imports(vararg raw: String) = raw.map { ImportDirective.parse(it).getOrThrow() }
 
@@ -79,6 +79,66 @@ class ImportsTest {
         assertEquals(
             "package a\n\nimport b.B; import d.D\nimport a.A\nimport c.C\nimport e.E\n",
             adding("package a\n\nimport b.B; import d.D\nimport e.E\n", "c.C", "a.A"),
+        )
+    }
+
+    @Test
+    fun `a missing import goes by the existing one sharing the longest package prefix, in whole segments`() {
+        val source = "package a\n\nimport kotlinx.coroutines.flow.first\nimport kronstadt.core.X\nimport kotlin.time.Duration\n"
+
+        assertEquals(
+            "package a\n\nimport kotlinx.coroutines.channels.BufferOverflow\nimport kotlinx.coroutines.flow.first\nimport kronstadt.core.X\nimport kotlin.time.Duration\n",
+            adding(source, "kotlinx.coroutines.channels.BufferOverflow"),
+        )
+        assertEquals(
+            "package a\n\nimport kotlinx.coroutines.flow.MutableSharedFlow\nimport kotlinx.coroutines.flow.MutableStateFlow\nimport kotlinx.coroutines.flow.first\nimport kronstadt.core.X\nimport kotlin.time.TimeSource\n",
+            adding(
+                "package a\n\nimport kotlinx.coroutines.flow.MutableStateFlow\nimport kotlinx.coroutines.flow.first\nimport kronstadt.core.X\nimport kotlin.time.TimeSource\n",
+                "kotlinx.coroutines.flow.MutableSharedFlow",
+            ),
+        )
+        assertEquals(
+            "package a\n\nimport kronstadt.core.domain.FileHeader\nimport kronstadt.core.domain.FileLayout\nimport java.nio.file.Path\nimport kotlin.time.Duration\n",
+            adding(
+                "package a\n\nimport kronstadt.core.domain.FileLayout\nimport java.nio.file.Path\nimport kotlin.time.Duration\n",
+                "kronstadt.core.domain.FileHeader",
+            ),
+        )
+    }
+
+    @Test
+    fun `a missing import sharing no segment goes into its group of IntelliJ's default layout`() {
+        val source = "package a\n\nimport b.B\nimport java.io.File\nimport kotlin.time.Duration\n"
+
+        assertEquals(
+            "package a\n\nimport b.B\nimport java.io.File\nimport javax.inject.Inject\nimport kotlin.time.Duration\n",
+            adding(source, "javax.inject.Inject"),
+        )
+        assertEquals(
+            "package a\n\nimport b.B\nimport kotlinx.io.Source\nimport java.io.File\nimport kotlin.time.Duration\n",
+            adding(source, "kotlinx.io.Source"),
+        )
+    }
+
+    @Test
+    fun `an aliased import is only a neighbour of aliased ones, and without one goes last`() {
+        val source = "package a\n\nimport b.B\nimport x.y.P as Q\nimport kotlin.time.Duration\n"
+
+        assertEquals(
+            "package a\n\nimport b.B\nimport x.y.P as Q\nimport kotlin.time.Duration\nimport kotlin.time.Instant as I\n",
+            adding(source, "kotlin.time.Instant as I"),
+        )
+        assertEquals(
+            "package a\n\nimport b.B\nimport x.y.P as Q\nimport x.y.R as S\nimport kotlin.time.Duration\n",
+            adding(source, "x.y.R as S"),
+        )
+    }
+
+    @Test
+    fun `each missing import has the ones added before it in the same call as neighbours`() {
+        assertEquals(
+            "package a\n\nimport b.B\nimport kotlinx.io.Sink\nimport kotlinx.io.Source\nimport kotlin.time.Duration\n",
+            adding("package a\n\nimport b.B\nimport kotlin.time.Duration\n", "kotlinx.io.Source", "kotlinx.io.Sink"),
         )
     }
 

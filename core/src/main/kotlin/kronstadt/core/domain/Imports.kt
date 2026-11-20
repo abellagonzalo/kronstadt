@@ -20,7 +20,17 @@ internal class ImportDirective(
 
     /** Whether [star], a star import, brings this directive's name into scope too: it imports from that package, without an alias. */
     fun isCoveredBy(star: ImportDirective): Boolean =
-        star.isStar && !isStar && " as " !in key && key.substringBeforeLast('.') + ".*" == star.key
+        star.isStar && !isStar && !isAliased && key.substringBeforeLast('.') + ".*" == star.key
+
+    /** Whether this directive imports its name under an alias, e.g. `a.b.C as D`. */
+    val isAliased: Boolean get() = " as " in key
+
+    /** How many leading dot-separated segments of its imported name this directive shares with [other]'s. */
+    fun sharedSegments(other: ImportDirective): Int =
+        segments.zip(other.segments).takeWhile { (a, b) -> a == b }.size
+
+    /** The dot-separated segments of the imported name, alias aside, e.g. `a`, `b`, `*` for `a.b.*`. */
+    val segments: List<String> get() = key.substringBefore(" as ").split('.')
 
     /** The directive as a line of a file. */
     val line: String get() = "import $text"
@@ -39,8 +49,13 @@ internal data class LineSplice(val lines: IntRange, val newLines: List<String>)
 
 /**
  * The splice that adds those of [imports] this file doesn't have yet, or null if it has them all. Nothing already in
- * the file moves or goes: each missing import goes on its own line right after the import that sorts just before it,
- * or before the first in order if none does, so a block laid out in sorted groups stays that way. Without an import
+ * the file moves or goes: each missing import, in sorted order, goes on its own line next to its closest neighbours,
+ * and those added before it count as neighbours too. Its neighbours are the imports sharing the most leading
+ * dot-separated segments of the name with it (`kotlin` and `kotlinx` share none), aliased only with aliased ones; it
+ * goes right after the one of them that sorts just before it, or before the first in order if none does. If no import
+ * shares a segment with it, it goes into its group of IntelliJ's default layout (others, `java.*`, `javax.*`,
+ * `kotlin.*`, then aliased ones): after the last import in an earlier group or sorting before it in its own, else
+ * before the first. So a block in that layout, or in sorted groups by package, stays that way. Without an import
  * list, a new one, sorted, goes after the package line (else after the file annotations, else at the top), one blank
  * line from what comes before and after it.
  */
@@ -75,13 +90,34 @@ private fun TextDocument.insertedInto(scanned: List<FileHeader.ScannedImport>, m
     }
     missing.forEach { directive ->
         val anchors = lines.withIndex().mapNotNull { (index, line) -> line.anchor?.let { index to it } }
-        val at = anchors.filter { it.second < directive }.maxByOrNull { it.second }?.let { it.first + 1 }
-            ?: anchors.minByOrNull { it.second }?.first
-            ?: lines.size
+        val at = slotFor(directive, anchors) ?: lines.size
         lines.add(at, ListLine(directive.line, directive))
     }
     return LineSplice(first..last, lines.map { it.text })
 }
+
+/**
+ * The index [directive] goes at among [anchors], the neighbour lines of an import list by index, or null with none.
+ * It goes by those sharing the most leading segments with it, if any share one; else by its group in IntelliJ's
+ * default layout, after the last line in an earlier group or sorting before it in its own, else before the first.
+ */
+private fun slotFor(directive: ImportDirective, anchors: List<Pair<Int, ImportDirective>>): Int? {
+    val kin = anchors.filter { it.second.isAliased == directive.isAliased }
+    val longest = kin.maxOfOrNull { directive.sharedSegments(it.second) } ?: 0
+    if (longest > 0) {
+        val nearest = kin.filter { directive.sharedSegments(it.second) == longest }
+        return nearest.filter { it.second < directive }.maxByOrNull { it.second }?.let { it.first + 1 }
+            ?: nearest.minBy { it.second }.first
+    }
+    val group = directive.layoutGroup
+    return anchors.lastOrNull { (_, it) -> it.layoutGroup < group || it.layoutGroup == group && it < directive }
+        ?.let { it.first + 1 }
+        ?: anchors.firstOrNull()?.first
+}
+
+/** The directive's group in IntelliJ's default Kotlin import layout: others, `java.*`, `javax.*`, `kotlin.*`, then aliased ones. */
+private val ImportDirective.layoutGroup: Int
+    get() = if (isAliased) 4 else listOf("java", "javax", "kotlin").indexOf(segments.first()) + 1
 
 /** The imports [removingImports] removes, and the [splice] that removes them. */
 internal class ImportRemoval(val removed: List<ImportDirective>, val splice: LineSplice)
