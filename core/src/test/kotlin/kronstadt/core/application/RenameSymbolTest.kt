@@ -150,9 +150,10 @@ class RenameSymbolTest {
         assertEquals(greeting, files.content(classPath))
     }
 
-    @Test
-    fun `imports kotlin-lsp removes are accepted and reported, and aren't counted as Usages`() = runTest {
-        val withUnused = main.replace("import a.Greeter\n", "import a.Greeter\nimport a.Unused\n")
+    private val withUnused = main.replace("import a.Greeter\n", "import a.Greeter\nimport a.Unused\n")
+
+    /** Renames `Greeter` in [withUnused] the way kotlin-lsp does: its answer also deletes `import a.Unused`, in one edit across lines. */
+    private suspend fun renameDroppingUnused(organizedByText: Map<String, String>): Pair<FakeFileStore, RenameResult> {
         val files = FakeFileStore(root, mapOf(classPath to greeting, mainPath to withUnused))
         fun renamed(newName: String) = Rename.Changes(
             listOf(
@@ -171,9 +172,17 @@ class RenameSymbolTest {
         val intelligence = FakeCodeIntelligence(
             symbolsByText = mapOf(greeting to greeter("greet"), greeting.replace("Greeter", "Host") to host()),
             renames = mapOf((classFile to Position(2, 6)) to ::renamed),
+            organizedByText = organizedByText,
         )
+        return files to RenameSymbol(files, intelligence)("Greeter", "Host", file = classPath)
+    }
 
-        val result = RenameSymbol(files, intelligence)("Greeter", "Host", file = classPath)
+    @Test
+    fun `an import kotlin-lsp removes that the rename made unused goes, is reported, and isn't counted as a Usage`() = runTest {
+        // Organize-imports keeps a.Unused before the rename and drops it after.
+        val (files, result) = renameDroppingUnused(
+            mapOf(withUnused to withUnused, withUnused.replace("Greeter", "Host") to main.replace("Greeter", "Host")),
+        )
 
         assertEquals(main.replace("Greeter", "Host"), files.content(mainPath))
         assertEquals(
@@ -184,6 +193,25 @@ class RenameSymbolTest {
             ),
             result,
         )
+    }
+
+    @Test
+    fun `an import kotlin-lsp removes that was already unused stays, like kt_edit leaves it`() = runTest {
+        // Organize-imports drops a.Unused before the rename too.
+        val (files, result) = renameDroppingUnused(
+            mapOf(withUnused to main, withUnused.replace("Greeter", "Host") to main.replace("Greeter", "Host")),
+        )
+
+        assertEquals(withUnused.replace("Greeter", "Host"), files.content(mainPath))
+        assertEquals(emptyList(), assertIs<RenameResult.Renamed>(result).importsRemoved)
+    }
+
+    @Test
+    fun `an import kotlin-lsp removes stays when organize-imports gives no answer`() = runTest {
+        val (files, result) = renameDroppingUnused(emptyMap())
+
+        assertEquals(withUnused.replace("Greeter", "Host"), files.content(mainPath))
+        assertEquals(emptyList(), assertIs<RenameResult.Renamed>(result).importsRemoved)
     }
 
     @Test
@@ -301,6 +329,31 @@ class RenameSymbolTest {
         assertEquals(
             listOf(RenamedFile(greeterPath, usages = 0), RenamedFile(mainPath, usages = 2)),
             assertIs<RenameResult.Renamed>(result).files,
+        )
+    }
+
+    @Test
+    fun `a name kotlin-lsp renames in several character-level edits counts once, as a Usage or an import`() = runTest {
+        val files = FakeFileStore(root, mapOf(classPath to greeting, mainPath to main))
+        // Greeter -> Greatest arrives as two edits per name: its 4th letter 'e' -> 'a' and its 7th 'r' -> 'st'.
+        fun split(line: Int, char: Int) = listOf(TextEdit(name(line, char + 3, 1), "a"), TextEdit(name(line, char + 6, 1), "st"))
+        fun renamed(newName: String) = Rename.Changes(
+            listOf(
+                FileChange.Edited(mainFile, split(2, 9) + split(5, 12) + split(6, 4)),
+                FileChange.Edited(classFile, split(2, 6)),
+            ),
+        )
+        val intelligence = FakeCodeIntelligence(
+            symbolsByText = mapOf(greeting to greeter("greet")),
+            renames = mapOf((classFile to Position(2, 6)) to ::renamed),
+        )
+
+        val result = RenameSymbol(files, intelligence)("Greeter", "Greatest", file = classPath)
+
+        assertEquals(main.replace("Greeter", "Greatest"), files.content(mainPath))
+        assertEquals(
+            listOf(RenamedFile(classPath, usages = 0), RenamedFile(mainPath, usages = 2, imports = 1)),
+            assertIs<RenameResult.Renamed>(result, "$result").files,
         )
     }
 

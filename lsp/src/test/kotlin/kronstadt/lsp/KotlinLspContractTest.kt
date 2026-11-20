@@ -794,6 +794,52 @@ class KotlinLspContractTest {
             Files.deleteIfExists(file)
         }
     }
+
+    // kt_rename_symbol's counts and imports (#85): kotlin-lsp answers a rename with minimal character-level diffs, and
+    // also deletes imports that were already unused in the files it touches.
+
+    private val symPath = "src/main/kotlin/fixture/gamma/Sym.kt"
+    /** Two Usages of `signature`, an import of `Sym` the rename doesn't change, and the already unused `java.io.File`. */
+private val symCheckPath = "src/test/kotlin/fixture/SymCheck.kt"
+    @Test
+    @Order(28)
+    fun `kt_rename_symbol counts renamed names, not kotlin-lsp's edits, and keeps an import that was already unused`() = runBlocking<Unit> {
+        val symFile = project.resolve(symPath)
+        val symCheckFile = project.resolve(symCheckPath)
+        val sym = Files.readString(symFile)
+        val symCheck = Files.readString(symCheckFile)
+        val name = sym.lines().withIndex().first { "val signature" in it.value }.let { (line, text) -> Position(line, text.indexOf("signature")) }
+        val answer = lsp.session { session -> session.rename(symFile, TextDocument(sym), name, "parameterTypes") }
+        val checkEdits = assertIs<Rename.Changes>(answer, "$answer").changes
+            .filterIsInstance<FileChange.Edited>().singleOrNull { it.file == symCheckFile }.let { assertNotNull(it, "$answer") }.edits
+        val importLine = symCheck.lines().indexOf("import java.io.File")
+        val (removingImport, renaming) = checkEdits.partition { it.range.start.line <= importLine + 1 }
+        // signature -> parameterTypes comes as 5 edits per name, two names in the code.
+        assertEquals(10, renaming.size, "$checkEdits")
+        // The already unused import goes too: emptied by an edit within its line, so counting edits on import lines
+        // reported it as an import of the Symbol; its blank line goes in an edit across lines.
+        assertEquals(
+            listOf(TextRange(Position(importLine, 0), Position(importLine, 19)), TextRange(Position(importLine + 1, 0), Position(importLine + 2, 0))),
+            removingImport.map { it.range },
+            "$checkEdits",
+        )
+
+        val result = RenameSymbol(files, lsp)("Sym/signature", "parameterTypes", file = symPath)
+
+        assertEquals(
+            RenameResult.Renamed(
+                "parameterTypes",
+                listOf(RenamedFile(symPath, usages = 0), RenamedFile(symCheckPath, usages = 2)),
+            ),
+            result,
+        )
+        // The import stays where it was; the KDoc's `signature` is no reference, so it stays too.
+        assertEquals(
+            symCheck.replace("signature = ", "parameterTypes = ").replace("s.signature", "s.parameterTypes"),
+            Files.readString(symCheckFile),
+        )
+        assertEquals(sym.replace("val signature", "val parameterTypes"), Files.readString(symFile))
+    }
 }
 
 /** The [LookupFailure] a read reports; fails unless it reports one. */

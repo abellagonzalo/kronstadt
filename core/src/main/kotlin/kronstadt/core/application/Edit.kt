@@ -1,25 +1,17 @@
 package kronstadt.core.application
 
-import kronstadt.core.domain.FileHeader
 import kronstadt.core.domain.FileLayout
 import kronstadt.core.domain.ImportDirective
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
-import kronstadt.core.domain.Severity
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.addingImports
-import kronstadt.core.domain.importsOrganizedIn
-import kronstadt.core.domain.removingImports
 import kronstadt.core.domain.Validation
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.core.port.FileStore
 import java.nio.file.Path
 import kotlin.time.Duration
-import kotlin.time.TimeMark
-import kotlin.time.TimeSource
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.withTimeoutOrNull
 
 /** A single step inside an Edit, aimed at one Symbol Path, in [file] if it is given, at a whole [file], or creating one. */
 public sealed interface Operation {
@@ -144,7 +136,8 @@ public class Edit(
                         is Applied.Failed -> return@session EditResult.OperationFailed(index, applied.failure)
                     }
                 }
-                val removed = removeImportsMadeUnused(session, shadow, listed)
+                val removed = shadow.removeImportsMadeUnused(session, validationTimeout) { file, suspects -> suspects - listed[file].orEmpty() }
+                    .mapKeys { files.display(it.key) }
                 when (val validated = shadow.validate()) {
                     is ShadowWorkspace.Validated.Passed -> when (val writeBack = shadow.writeBack()) {
                         ShadowWorkspace.WriteBack.Written ->
@@ -264,71 +257,6 @@ public class Edit(
         val document = checkNotNull(shadow.current(file)) { "$file was applied to, so it is in the Shadow Workspace" }
         val splice = document.addingImports(imports) ?: return
         shadow.replaceLines(file, splice.lines, splice.newLines)
-    }
-
-    /**
-     * Removes from each file the Edit changed the imports it made unused (ADR 0004): those the code intelligence finds
-     * unused in the file's current text but not in its base, other than those its Operations [listed] for it. Its
-     * organize-imports decides, except for an import a star import new in its answer covers (#81): that one is unused if
-     * removing it adds no error. Without an answer an import counts as used. Returns those removed, by displayed file.
-     */
-    private suspend fun removeImportsMadeUnused(
-        session: AnalysisSession,
-        shadow: ShadowWorkspace,
-        listed: Map<Path, Set<ImportDirective>>,
-    ): Map<String, List<String>> {
-        // The diagnostics that settle star-covered imports share one budget, as long as Validation's.
-        val deadline = TimeSource.Monotonic.markNow() + validationTimeout
-        return shadow.editedBases().mapNotNull { (file, base) ->
-            val current = checkNotNull(shadow.current(file)) { "$file was edited, so it is in the Shadow Workspace" }
-            val before = FileHeader.of(base.text).imports.map { it.directive }.toSet()
-            if (before.isEmpty()) return@mapNotNull null
-            val now = current.importsOrganizedIn(session.organizeImports(file, current) ?: return@mapNotNull null)
-            // Only an import the base had can have been used before; most Edits stop here, with no second round-trip.
-            val suspects = (now.dropped + now.undecided).intersect(before) - listed[file].orEmpty()
-            if (suspects.isEmpty()) return@mapNotNull null
-            val candidates = suspects.intersect(now.dropped + session.unusedAmong(file, current, now.undecided.intersect(suspects), deadline))
-            if (candidates.isEmpty()) return@mapNotNull null
-            val then = base.importsOrganizedIn(session.organizeImports(file, base) ?: return@mapNotNull null)
-            val unusedBefore = then.dropped + session.unusedAmong(file, base, then.undecided.intersect(candidates), deadline)
-            val removal = current.removingImports(candidates - unusedBefore) ?: return@mapNotNull null
-            shadow.replaceLines(file, removal.splice.lines, removal.splice.newLines)
-            files.display(file) to removal.removed.map { it.text }
-        }.toMap()
-    }
-
-    /**
-     * Those of [suspects], imports of [document] (the content of [file]), that are unused: removing them from it adds no
-     * error. All of them are tried together first, then each alone. Without an answer by [deadline], or with a failed one,
-     * an import counts as used.
-     */
-    private suspend fun AnalysisSession.unusedAmong(
-        file: Path,
-        document: TextDocument,
-        suspects: Set<ImportDirective>,
-        deadline: TimeMark,
-    ): Set<ImportDirective> {
-        if (suspects.isEmpty()) return emptySet()
-        val remaining = -deadline.elapsedNow()
-        if (!remaining.isPositive()) return emptySet()
-        val unused = try {
-            withTimeoutOrNull(remaining) {
-                val errors = diagnostics(file, document)
-                suspend fun removable(drop: Set<ImportDirective>): Set<ImportDirective> {
-                    val removal = document.removingImports(drop) ?: return emptySet()
-                    val without = document.replaceLines(removal.splice.lines, removal.splice.newLines, FileLayout.of(document).lineSeparator)
-                    val added = Validation.introduced(errors, diagnostics(file, without), Severity.ERROR, emptyList())
-                    return if (added.isEmpty()) removal.removed.toSet() else emptySet()
-                }
-                val together = if (suspects.size > 1) removable(suspects) else emptySet()
-                together.ifEmpty { suspects.flatMapTo(mutableSetOf()) { removable(setOf(it)) } }
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            null
-        }
-        return unused.orEmpty()
     }
 
     /** [EditIn]'s change to a document: whole [lines] (0-based) to replace with [newLines]. */

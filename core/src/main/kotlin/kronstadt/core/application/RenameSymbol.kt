@@ -2,6 +2,8 @@ package kronstadt.core.application
 
 import kronstadt.core.domain.FileChange
 import kronstadt.core.domain.FileHeader
+import kronstadt.core.domain.ImportDirective
+import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
 import kronstadt.core.domain.RenamePreparation
@@ -9,7 +11,9 @@ import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolTree
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.TextEdit
+import kronstadt.core.domain.TextRange
 import kronstadt.core.domain.Validation
+import kronstadt.core.domain.addingImports
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.core.port.FileStore
@@ -64,6 +68,7 @@ public class RenameSymbol(
         }
         touchedPaths.firstOrNull { files.resolve(it.toString()) != it }
             ?.let { return RenameResult.CannotRename(canonical, "it would change $it, outside the project") }
+        val oldWord = wholeWord(node.symbol.name)
         val counts = linkedMapOf(target to Counts())
         val before = mutableMapOf<Path, TextDocument>()
         // A moved file stays at its old path in the Shadow Workspace until Write-back; edits may name either path.
@@ -77,10 +82,7 @@ public class RenameSymbol(
                         ?: return RenameResult.CannotRename(canonical, "it would change ${files.display(file)}, which doesn't exist")
                     before.putIfAbsent(file, document)
                     shadow.applyEdits(file, change.edits)
-                    counts.getOrPut(file) { Counts() }.add(document, change.edits) { edit ->
-                        // Edits are minimal, e.g. an insertion right after the name: the declaration's lies within its name, ends included.
-                        file == target && edit.range.start >= name.start && edit.range.end <= name.end
-                    }
+                    counts.getOrPut(file) { Counts() }.add(document, change.edits, oldWord, declaration = name.takeIf { file == target })
                 }
                 is FileChange.Moved -> {
                     if (files.read(change.to) != null) return RenameResult.TargetExists(files.display(change.from), files.display(change.to))
@@ -92,8 +94,16 @@ public class RenameSymbol(
                 }
             }
         }
-        val oldName = wholeWord(node.symbol.name)
-        return when (val validated = shadow.validate { it.replace(oldName, newName) }) {
+        // kotlin-lsp's rename also drops imports that were already unused. They go back, and only those the rename made
+        // unused go again, as kt_edit decides it (ADR 0004).
+        val restored = before.mapNotNull { (file, document) ->
+            val current = checkNotNull(shadow.current(file))
+            val dropped = removedImports(document, current, node.symbol.name, newName)
+            current.addingImports(dropped)?.let { shadow.replaceLines(file, it.lines, it.newLines) } ?: return@mapNotNull null
+            file to dropped.toSet()
+        }.toMap()
+        val removed = shadow.removeImportsMadeUnused(session, validationTimeout) { file, suspects -> suspects.intersect(restored[file].orEmpty()) }
+        return when (val validated = shadow.validate { it.replace(oldWord, newName) }) {
             is ShadowWorkspace.Validated.Passed -> when (val writeBack = shadow.writeBack()) {
                 ShadowWorkspace.WriteBack.Written -> {
                     val renamedFiles = counts.entries.sortedWith(compareBy({ it.key != target }, { files.display(it.key) }))
@@ -108,10 +118,7 @@ public class RenameSymbol(
                         newPath(shadow, target, node, newName),
                         renamedFiles,
                         fileRenamed,
-                        before.flatMap { (file, document) ->
-                            removedImports(document, checkNotNull(shadow.current(file)), node.symbol.name, newName)
-                                .map { RemovedImport(files.display(file), it) }
-                        },
+                        removed.flatMap { (file, imports) -> imports.map { RemovedImport(files.display(file), it) } },
                     )
                 }
                 is ShadowWorkspace.WriteBack.ChangedOnDisk -> RenameResult.ChangedOnDisk(writeBack.file)
@@ -124,11 +131,11 @@ public class RenameSymbol(
     }
 
     /** Imports in [before] that [after] lacks, other than those it has with [oldName] renamed to [newName]. */
-    private fun removedImports(before: TextDocument, after: TextDocument, oldName: String, newName: String): List<String> {
+    private fun removedImports(before: TextDocument, after: TextDocument, oldName: String, newName: String): List<ImportDirective> {
         val kept = FileHeader.of(after.text).imports.map { it.directive.text }.toSet()
         val renamed = wholeWord(oldName)
-        return FileHeader.of(before.text).imports.map { it.directive.text }
-            .filter { it !in kept && it.replace(renamed, newName) !in kept }
+        return FileHeader.of(before.text).imports.map { it.directive }
+            .filter { it.text !in kept && it.text.replace(renamed, newName) !in kept }
     }
 
     private fun wholeWord(name: String) = Regex("\\b${Regex.escape(name)}\\b")
@@ -149,15 +156,25 @@ public class RenameSymbol(
         var imports = 0
 
         /**
-         * Counts [edits] to [document]: a Usage is renamed within one line, an import line counts apart, and an edit
-         * across lines removes an import rather than renaming anything. The [declaration]'s own edit isn't counted.
+         * Counts the occurrences of [oldName], a whole-word pattern, in [document] that [edits] change, however the code
+         * intelligence splits them: kotlin-lsp sends minimal diffs, often several to one name (#85). One on an import line
+         * counts that import once, any other is a Usage. The one within [declaration], the Symbol's own name, isn't counted.
          */
-        fun add(document: TextDocument, edits: List<TextEdit>, declaration: (TextEdit) -> Boolean) {
-            for (edit in edits) {
-                if (edit.range.start.line != edit.range.end.line || declaration(edit)) continue
-                if (document.line(edit.range.start.line).trimStart().startsWith("import ")) imports++ else usages++
+        fun add(document: TextDocument, edits: List<TextEdit>, oldName: Regex, declaration: TextRange?) {
+            val importLines = mutableSetOf<Int>()
+            for (match in oldName.findAll(document.text)) {
+                val start = document.positionOf(match.range.first)
+                val end = document.positionOf(match.range.last + 1)
+                if (declaration != null && start >= declaration.start && end <= declaration.end) continue
+                if (edits.none { it.changes(start, end) }) continue
+                if (document.line(start.line).trimStart().startsWith("import ")) importLines += start.line else usages++
             }
+            imports += importLines.size
         }
+
+        /** Whether this edit changes the text from [start] to [end]: overlaps it, or inserts at it, ends included. */
+        private fun TextEdit.changes(start: Position, end: Position): Boolean =
+            if (range.start == range.end) range.start in start..end else range.start < end && range.end > start
     }
 
     private companion object {

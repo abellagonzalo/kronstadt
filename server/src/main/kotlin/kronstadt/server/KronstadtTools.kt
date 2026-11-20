@@ -286,8 +286,9 @@ internal class KronstadtTools(
                 "are validated against the compiler before anything is written: if they add compiler errors to any " +
                 "changed file, nothing is written and the errors are listed; otherwise every changed file is written, " +
                 "or none is. A class named like its file also renames the file (refused if the new file exists). " +
-                "The result lists each changed file with its Usages and imports, any file rename, any unused imports the " +
-                "language server removed, and the Symbol's new canonical path. A rename is its own call, never an " +
+                "The rename removes the imports it made unused (used before it, unused after it); imports that were " +
+                "already unused are never touched. The result lists each changed file with its Usages and imports, " +
+                "any file rename, the imports removed, and the Symbol's new canonical path. A rename is its own call, never an " +
                 "Operation of a kt_edit batch. Prefer it over kt_edit or text edits to rename anything.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
@@ -429,7 +430,7 @@ internal class KronstadtTools(
         }
         result.fileRenamed?.let { append("File renamed: ").append(it.from).append(" -> ").append(it.to).append('\n') }
         if (result.importsRemoved.isNotEmpty()) {
-            append("Unused imports kotlin-lsp removed:\n")
+            append("Removed imports it made unused:\n")
             result.importsRemoved.forEach { append("  ").append(it.file).append(": ").append(it.import).append('\n') }
         }
     }.trimEnd()
