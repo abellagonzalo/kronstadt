@@ -35,12 +35,18 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 
 /**
- * Seam 2, #92: does kotlin-lsp see a file that kt_edit's `create` wrote after the import, so that kt_find_usages lists
- * its Usages and kt_rename_symbol renames them, right away, before its file watcher could have caught up?
+ * Seam 2, #92: does kotlin-lsp see a file that kt_edit's `create` wrote after kotlin-lsp imported the project, so that
+ * kt_find_usages lists its Usages and kt_rename_symbol renames them, right away, before its file watcher could have
+ * caught up?
  *
- * Each test creates the file through [Edit], the path kt_edit takes: Write-back writes it and tells the session it was
- * written back, which keeps it open in kotlin-lsp. Then, in the same project, it asks for the Usages of an existing
- * property and renames it.
+ * Each test creates the file through [Edit], the path kt_edit takes: Validation opens it, Write-back writes it and tells
+ * the session it was written back. Then, in the same project, it asks for the Usages of an existing property and
+ * renames it. Uses its own copy of the fixture, and so its own kotlin-lsp, because it renames fixture properties.
+ *
+ * Outcome (kotlin-lsp 271.2085.0): yes, in an existing package and in a new package directory, with no
+ * `workspace/didChangeWatchedFiles`. It holds even when the written-back document isn't retained but closed at the end
+ * of the Edit: the `didOpen` and `didSave` kotlin-lsp got are enough, unlike the file
+ * #92 reports as only written to disk.
  */
 @Tag("contract")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
