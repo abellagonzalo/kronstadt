@@ -39,16 +39,18 @@ public class GetDefinition(
         val document = found.document
         val (first, last) = SymbolSpan.lines(document, found.node.symbol)
         val span = document.offsetOf(Position(first, 0)) until document.offsetOf(Position(last, Int.MAX_VALUE))
-        fun notExactlyOnce(text: String, matches: List<IntRange>) = GetDefinitionResult.NotExactlyOnce(
+        fun notExactlyOnce(text: String, matches: List<IntRange>, indentation: IndentationHint? = null) = GetDefinitionResult.NotExactlyOnce(
             text,
             found.canonical,
             files.display(found.file),
             occurrenceLines(document, matches.map { it.first }),
+            indentation,
         )
         // The name is looked up inside the `at` snippet when there is one, else inside the whole span.
         val scope = if (at == null) span else {
             val snippets = exactOccurrences(document, at, span).map { it until it + at.length }
-            snippets.singleOrNull() ?: return notExactlyOnce(at, snippets)
+            snippets.singleOrNull()
+                ?: return notExactlyOnce(at, snippets, if (snippets.isEmpty()) indentationHint(document, at, span) else null)
         }
         // Searched in the whole text, so the identifier boundaries see past the scope's ends.
         val names = identifier(name).findAll(document.text, scope.first).map { it.range }.takeWhile { it.last <= scope.last }.toList()
@@ -144,8 +146,17 @@ public sealed interface GetDefinitionResult {
     public data class Found(val text: String) : GetDefinitionResult
     public data class LookupFailed(val failure: LookupFailure) : GetDefinitionResult
 
-    /** [text] (the name, or the `at` snippet) doesn't occur exactly once in [symbol]'s span in [file]; [lines] are where it does. */
-    public data class NotExactlyOnce(val text: String, val symbol: String, val file: String, val lines: List<Occurrence>) : GetDefinitionResult
+    /**
+     * [text] (the name, or the `at` snippet) doesn't occur exactly once in [symbol]'s span in [file]; [lines] are where it
+     * does. With no occurrence of an `at` snippet, [indentation] says where it would occur once if indentation were ignored.
+     */
+    public data class NotExactlyOnce(
+        val text: String,
+        val symbol: String,
+        val file: String,
+        val lines: List<Occurrence>,
+        val indentation: IndentationHint? = null,
+    ) : GetDefinitionResult
 
     /**
      * [name] (on 1-based [line] of [symbol]) resolves to no declaration: a keyword, a literal or an unresolved

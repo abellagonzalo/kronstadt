@@ -289,7 +289,7 @@ public class Edit(
     private fun applySplice(shadow: ShadowWorkspace, file: Path, splice: Splice, operation: EditIn, scope: EditInScope): Applied {
         when (splice) {
             is Splice.Done -> shadow.replaceLines(file, splice.lines, splice.newLines)
-            is Splice.NotExactlyOnce -> return Applied.Failed(OperationFailure.NotExactlyOnce(operation.old, scope, splice.count, splice.lines))
+            is Splice.NotExactlyOnce -> return Applied.Failed(OperationFailure.NotExactlyOnce(operation.old, scope, splice.count, splice.lines, splice.indentation))
             is Splice.StartsInIndentation -> return Applied.Failed(OperationFailure.StartsInIndentation(scope, splice.line + 1))
         }
         return Applied.Done(file)
@@ -327,8 +327,8 @@ public class Edit(
     /** [EditIn]'s change to a document: whole [lines] (0-based) to replace with [newLines]. */
     private sealed interface Splice {
         data class Done(val lines: IntRange, val newLines: List<String>) : Splice
-        /** `old` occurs [count] times, on [lines]. */
-        data class NotExactlyOnce(val count: Int, val lines: List<Occurrence>) : Splice
+        /** `old` occurs [count] times, on [lines]; with none, [indentation] is where it occurs once with indentation ignored. */
+        data class NotExactlyOnce(val count: Int, val lines: List<Occurrence>, val indentation: IndentationHint?) : Splice
         /** `old` starts inside [line]'s (0-based) indentation: after some of its leading whitespace, not all of it. */
         data class StartsInIndentation(val line: Int) : Splice
 
@@ -347,7 +347,11 @@ public class Edit(
                 val start = document.offsetOf(Position(scope.first, 0))
                 val end = document.offsetOf(Position(scope.last, Int.MAX_VALUE))
                 val matches = exactOccurrences(document, old, start until end)
-                val match = matches.singleOrNull() ?: return NotExactlyOnce(matches.size, occurrenceLines(document, matches))
+                val match = matches.singleOrNull() ?: return NotExactlyOnce(
+                    matches.size,
+                    occurrenceLines(document, matches),
+                    if (matches.isEmpty()) indentationHint(document, old, start until end) else null,
+                )
                 val at = document.positionOf(match)
                 if (FileLayout.isInsideIndent(document.line(at.line), at.character)) return StartsInIndentation(at.line)
                 val lines = replaced(at.line..document.positionOf(match + old.length).line)
@@ -438,8 +442,17 @@ public sealed interface OperationFailure {
      */
     public data class NeedsFile(val symbol: String, val candidates: List<SymbolCandidate>) : OperationFailure
 
-    /** An `edit_in`'s [text] occurs [count] times, not exactly once, in [scope]; [lines] are where. */
-    public data class NotExactlyOnce(val text: String, val scope: EditInScope, val count: Int, val lines: List<Occurrence>) : OperationFailure
+    /**
+     * An `edit_in`'s [text] occurs [count] times, not exactly once, in [scope]; [lines] are where. With no occurrence,
+     * [indentation] says where it would occur once if indentation were ignored.
+     */
+    public data class NotExactlyOnce(
+        val text: String,
+        val scope: EditInScope,
+        val count: Int,
+        val lines: List<Occurrence>,
+        val indentation: IndentationHint? = null,
+    ) : OperationFailure
 
     /**
      * An `edit_in`'s text, in [scope], starts inside the indentation of its file's [line] (1-based): after some of the

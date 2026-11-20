@@ -207,6 +207,41 @@ class KtEditToolTest {
     }
 
     @Test
+    fun `an edit_in whose old matches only with different indentation fails, saying where and how it differs`() = runTest {
+        val source = "package a\n\nfun greet(): Int {\n    val n = 1\n    return n\n}\n"
+        file.writeText(source)
+        symbols += CodeSymbol(
+            "greet",
+            SymbolKind.FUNCTION,
+            TextRange(Position(2, 0), Position(5, 1)),
+            TextRange(Position(2, 4), Position(2, 9)),
+            emptyList(),
+            parameterTypes = "",
+            type = "(): Int",
+        )
+
+        val (uniform, uniformText) =
+            ktEdit("""{"operations": [{"type": "edit_in", "file": "A.kt", "symbol": "greet", "old": "  val n = 1\n  return n", "new": ""}]}""")
+        val (mixed, mixedText) =
+            ktEdit("""{"operations": [{"type": "edit_in", "file": "A.kt", "old": "\tval n = 1\n  return n", "new": ""}]}""")
+
+        assertEquals(true, uniform)
+        assertEquals(
+            "Operation 0: 'old' doesn't occur in greet in A.kt exactly as written, but occurs once at line 4 if indentation " +
+                "is ignored: the file indents it by 4 spaces, 'old' by 2 spaces. Copy 'old' from kt_read_symbol output. " +
+                "Nothing written.",
+            uniformText,
+        )
+        assertEquals(true, mixed)
+        assertEquals(
+            "Operation 0: 'old' doesn't occur in A.kt exactly as written, but occurs once at line 4 if indentation is " +
+                "ignored, where its lines are indented differently from the file's. Read the file to copy it. Nothing written.",
+            mixedText,
+        )
+        assertEquals(source, file.readText())
+    }
+
+    @Test
     fun `an insert whose code has no non-blank line fails, naming its Operation's type, writing nothing`() = runTest {
         val before = file.readText()
 

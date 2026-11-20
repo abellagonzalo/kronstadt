@@ -1,5 +1,6 @@
 package kronstadt.core.application
 
+import kronstadt.core.domain.FileLayout
 import kronstadt.core.domain.TextDocument
 
 /**
@@ -21,3 +22,56 @@ internal fun exactOccurrences(document: TextDocument, snippet: String, range: In
 /** The lines (1-based, trimmed) the occurrences starting at [offsets] are on, each once. */
 internal fun occurrenceLines(document: TextDocument, offsets: List<Int>): List<Occurrence> =
     offsets.map { document.positionOf(it).line }.distinct().map { Occurrence(it + 1, document.line(it).trim()) }
+
+/**
+ * Where [snippet], which doesn't occur exactly as written within [range] (offsets) of [document], occurs once if each
+ * line's leading whitespace is ignored, or null if it occurs there zero or several times or its lines' indentation
+ * doesn't differ. A first line without leading whitespace may end a line of the file, as an exact match may; one with
+ * leading whitespace must cover a whole line's text after its indentation.
+ */
+internal fun indentationHint(document: TextDocument, snippet: String, range: IntRange): IndentationHint? {
+    val lines = snippet.lines()
+    val first = lines.first()
+    // A one-line snippet without leading whitespace reads the same with indentation ignored.
+    if (lines.size == 1 && FileLayout.indentOf(first).isEmpty()) return null
+    val scope = document.positionOf(range.first).line..document.positionOf(range.last + 1).line
+
+    /** How the file and [snippet] indent each line both indent, if [snippet] matches from [start] with indentation ignored, else null. */
+    fun indentsFrom(start: Int): List<IndentationHint.Indents>? {
+        val indents = mutableListOf<IndentationHint.Indents>()
+        for ((j, line) in lines.withIndex()) {
+            val fileLine = document.line(start + j)
+            val indent = FileLayout.indentOf(line)
+            val text = line.substring(indent.length)
+            val fileText = fileLine.substring(FileLayout.indentOf(fileLine).length)
+            val lineMatches = when {
+                j == 0 && indent.isEmpty() -> lines.size > 1 && fileLine.endsWith(line)
+                j == lines.lastIndex -> fileText.startsWith(text)
+                else -> fileText == text
+            }
+            if (!lineMatches) return null
+            if (text.isNotEmpty() && (j > 0 || indent.isNotEmpty())) indents += IndentationHint.Indents(FileLayout.indentOf(fileLine), indent)
+        }
+        return indents
+    }
+
+    val matches = (scope.first..scope.last - lines.lastIndex).mapNotNull { start -> indentsFrom(start)?.let { start to it } }
+    val (start, indents) = matches.singleOrNull() ?: return null
+    if (indents.all { it.file == it.snippet }) return null
+    // Each line differs the same way when, past the indentation the two share at its end, every line has the same difference.
+    val differences = indents.map { (file, snippet) ->
+        val sharedEnd = file.reversed().commonPrefixWith(snippet.reversed()).length
+        IndentationHint.Indents(file.dropLast(sharedEnd), snippet.dropLast(sharedEnd))
+    }
+    return IndentationHint(start + 1, indents.first().takeIf { differences.distinct().size == 1 })
+}
+
+/**
+ * A snippet that doesn't occur exactly as written occurs once if each line's leading whitespace is ignored, starting on
+ * 1-based [line]. [indents] are how the file and the snippet indent it, when every line differs the same way; null when
+ * the lines differ in different ways. Only a hint: nothing ever matches this way (ADR 0004).
+ */
+public data class IndentationHint(val line: Int, val indents: Indents?) {
+    /** The leading whitespace the [file] and the [snippet] put on the first line they both indent. */
+    public data class Indents(val file: String, val snippet: String)
+}
