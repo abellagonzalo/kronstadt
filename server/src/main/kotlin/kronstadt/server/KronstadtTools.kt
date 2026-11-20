@@ -31,6 +31,7 @@ import kronstadt.core.application.FindUsages
 import kronstadt.core.application.FindUsagesResult
 import kronstadt.core.application.GetDefinition
 import kronstadt.core.application.GetDefinitionResult
+import kronstadt.core.application.IndentationHint
 import kronstadt.core.application.InsertAfter
 import kronstadt.core.application.InsertBefore
 import kronstadt.core.application.OperationFailure
@@ -480,7 +481,11 @@ internal class KronstadtTools(
                 "file is looked up on disk; pass its file:\n" + candidates(failure.candidates, withFiles = true) + "\n"
         is OperationFailure.NotExactlyOnce -> {
             val where = where(failure.scope)
-            if (failure.lines.isEmpty()) {
+            val hint = failure.indentation
+            if (failure.lines.isEmpty() && hint != null) {
+                "'old' doesn't occur in $where exactly as written, but " + indentationHint(hint, "'old'") + " " +
+                    (if (failure.scope.wholeFile) "Read the file to copy it." else "Copy 'old' from kt_read_symbol output.")
+            } else if (failure.lines.isEmpty()) {
                 "'old' doesn't occur in $where, exactly as written (whitespace included). " +
                     (if (failure.scope.wholeFile) "Read the file to copy it." else "Use kt_read_symbol to see its source.")
             } else {
@@ -506,6 +511,21 @@ internal class KronstadtTools(
 
     /** An `edit_in`'s [scope] as the agent named it: the Symbol and its file, or just the file. */
     private fun where(scope: EditInScope) = (scope.symbol?.let { "$it in " } ?: "") + scope.file
+
+    /** Where a snippet, [named] as the agent passed it (`'old'`), occurs with indentation ignored, and how it differs: a sentence's end. */
+    private fun indentationHint(hint: IndentationHint, named: String): String {
+        val indents = hint.indents ?: return "occurs once at line ${hint.line} if indentation is ignored, where its lines are " +
+            "indented differently from the file's."
+        return "occurs once at line ${hint.line} if indentation is ignored: the file indents it by ${indent(indents.file)}, " +
+            "$named by ${indent(indents.snippet)}."
+    }
+
+    /** Leading whitespace in words: `4 spaces`, `1 tab`, `1 tab and 2 spaces`, `nothing`. */
+    private fun indent(whitespace: String): String {
+        fun count(n: Int, unit: String) = if (n == 0) null else "$n $unit" + if (n == 1) "" else "s"
+        val tabs = whitespace.count { it == '\t' }
+        return listOfNotNull(count(tabs, "tab"), count(whitespace.length - tabs, "space")).joinToString(" and ").ifEmpty { "nothing" }
+    }
 
     private suspend fun readStructure(args: JsonObject): CallToolResult {
         val path = args.string("file") ?: return error("Missing required argument: file")
@@ -595,8 +615,12 @@ internal class KronstadtTools(
             is GetDefinitionResult.NotExactlyOnce -> {
                 val what = "'${result.text}'" + if (result.text == name) " (as a whole identifier)" else ""
                 val where = "${result.symbol} in ${result.file}"
+                val hint = result.indentation
                 error(
-                    if (result.lines.isEmpty()) {
+                    if (result.lines.isEmpty() && hint != null) {
+                        "$what doesn't occur in $where exactly as written, but " +
+                            indentationHint(hint, "'at'") + " Copy 'at' from kt_read_symbol output."
+                    } else if (result.lines.isEmpty()) {
                         "$what doesn't occur in $where. Use kt_read_symbol to see its source."
                     } else {
                         "$what occurs more than once in $where; " +

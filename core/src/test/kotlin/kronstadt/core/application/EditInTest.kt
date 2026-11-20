@@ -8,6 +8,7 @@ import kronstadt.core.domain.TextRange
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 
 /** `edit_in` Operations of an Edit: an exact string replaced once, inside a Symbol Span or a whole file. */
 class EditInTest {
@@ -107,13 +108,53 @@ class EditInTest {
     }
 
     @Test
-    fun `edit_in matches whitespace exactly, so a differently indented text doesn't match`() = runTest {
-        val (result, _) = run(emptyMap(), EditIn(path, "greet", old = "  val n = 1\n  return n", new = ""))
+    fun `edit_in matches whitespace exactly, so a differently indented text doesn't match, but says where it would`() = runTest {
+        val (result, files) = run(emptyMap(), EditIn(path, "greet", old = "  val n = 1\n  return n", new = ""))
 
         assertEquals(
-            EditResult.OperationFailed(0, OperationFailure.NotExactlyOnce("  val n = 1\n  return n", EditInScope("greet", path), 0, emptyList())),
+            EditResult.OperationFailed(
+                0,
+                OperationFailure.NotExactlyOnce(
+                    "  val n = 1\n  return n",
+                    EditInScope("greet", path),
+                    0,
+                    emptyList(),
+                    IndentationHint(6, IndentationHint.Indents(file = "    ", snippet = "  ")),
+                ),
+            ),
             result,
         )
+        assertEquals(source, files.content(path))
+    }
+
+    /** The indentation hint of [result], an Edit failed on an `edit_in` that occurs nowhere. */
+    private fun hintOf(result: EditResult): IndentationHint? {
+        val failure = assertIs<OperationFailure.NotExactlyOnce>(assertIs<EditResult.OperationFailed>(result).failure)
+        assertEquals(0, failure.count)
+        return failure.indentation
+    }
+
+    @Test
+    fun `edit_in text whose lines are each indented differently from the file's gets a hint without indents`() = runTest {
+        val (result, _) = run(emptyMap(), EditIn(path, "greet", old = "  val n = 1\n      return n", new = ""))
+
+        assertEquals(IndentationHint(6, null), hintOf(result))
+    }
+
+    @Test
+    fun `edit_in on a whole file gets the indentation hint too, but not when the text occurs more than once that way`() = runTest {
+        val (once, _) = run(emptyMap(), EditIn(path, null, old = "fun other(): Int {\n  val n = 1", new = ""))
+        val (twice, _) = run(emptyMap(), EditIn(path, null, old = "  val n = 1\n  return n", new = ""))
+
+        assertEquals(IndentationHint(10, IndentationHint.Indents(file = "    ", snippet = "  ")), hintOf(once))
+        assertEquals(null, hintOf(twice))
+    }
+
+    @Test
+    fun `edit_in text that differs in more than indentation gets no hint`() = runTest {
+        val (result, _) = run(emptyMap(), EditIn(path, "greet", old = "  val n = 2\n  return n", new = ""))
+
+        assertEquals(null, hintOf(result))
     }
 
     @Test
