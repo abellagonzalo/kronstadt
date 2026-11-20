@@ -6,12 +6,16 @@ import kronstadt.core.application.SymbolCandidate
 /**
  * What every tool tells the agent when a Symbol Path or file names no one Symbol: one wording for all of them. [tool]
  * names the tool, e.g. `kt_read_symbol`, where the message says what it supports or what to do instead. Messages with
- * a list end with its last line; the others end without a period only after a quoted reason.
+ * a list end with its last line; the others end without a period only after a quoted reason. A tool that takes two
+ * files names the [argument] a file check's failure came from, as its prefix.
  */
-internal fun describe(failure: LookupFailure, tool: String): String = when (failure) {
+internal fun describe(failure: LookupFailure, tool: String, argument: String? = null): String =
+    argument?.let { "$it: " }.orEmpty() + message(failure, tool)
+
+private fun message(failure: LookupFailure, tool: String): String = when (failure) {
     is LookupFailure.InvalidPath -> "Invalid Symbol Path '${failure.symbol}': ${failure.reason}"
-    // kt_find_usages takes no file for the Symbol itself, so only the path can tell candidates apart.
-    is LookupFailure.Ambiguous -> if (tool == FIND_USAGES) {
+    // Resolved project-wide, kt_find_usages's path is what tells candidates apart; its file only filters Usages.
+    is LookupFailure.Ambiguous -> if (tool == FIND_USAGES && failure.file == null) {
         "'${failure.symbol}' matches ${failure.candidates.size} symbols; tell them apart with a package prefix or a " +
             "signature, e.g. 'com.example/Greeter/greet(String)':\n" + candidates(failure.candidates, withFiles = true)
     } else {
@@ -27,7 +31,7 @@ internal fun describe(failure: LookupFailure, tool: String): String = when (fail
     is LookupFailure.TooManyDeclarations ->
         "'${failure.symbol}' can't be resolved without a file: so many declarations are named '${failure.name}', " +
             "dependencies' included, that $INDEX_STOPS and may not list them all; " +
-            if (tool == FIND_USAGES) "$tool takes no file to look in instead" else "pass its file"
+            if (tool == FIND_USAGES) "pass the file that declares it as declaredIn" else "pass its file"
     is LookupFailure.OutOfSync ->
         "Index out of sync for ${failure.symbol} in ${failure.file}: its name is not where kotlin-lsp says; retry"
     is LookupFailure.SharedLine ->

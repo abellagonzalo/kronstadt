@@ -31,11 +31,19 @@ class LookupFailuresTest {
     }
 
     @Test
-    fun `kt_find_usages, which takes no file for the Symbol, asks for a package prefix or signature instead`() {
+    fun `kt_find_usages, resolving project-wide, asks for a package prefix or signature instead`() {
         assertEquals(
             "'greet' matches 2 symbols; tell them apart with a package prefix or a signature, e.g. " +
                 "'com.example/Greeter/greet(String)':\n  Greeter/greet — src/A.kt\n  greet — src/B.kt",
             describe(LookupFailure.Ambiguous("greet", null, listOf(a, b)), "kt_find_usages"),
+        )
+    }
+
+    @Test
+    fun `kt_find_usages, resolving in declaredIn, asks for one of the paths in it`() {
+        assertEquals(
+            "'greet' matches 2 symbols in src/A.kt; pass one of:\n  Greeter/greet\n  greet",
+            describe(LookupFailure.Ambiguous("greet", "src/A.kt", listOf(a, b)), "kt_find_usages"),
         )
     }
 
@@ -60,12 +68,12 @@ class LookupFailuresTest {
     }
 
     @Test
-    fun `too many declarations asks for the file, except where the tool takes none`() {
+    fun `too many declarations asks for the file, as declaredIn for kt_find_usages`() {
         val cause = "'greet' can't be resolved without a file: so many declarations are named 'greet', dependencies' " +
             "included, that the project index stops at a maximum number of results and may not list them all; "
         assertEquals(cause + "pass its file", describe(LookupFailure.TooManyDeclarations("greet", "greet"), "kt_rename_symbol"))
         assertEquals(
-            cause + "kt_find_usages takes no file to look in instead",
+            cause + "pass the file that declares it as declaredIn",
             describe(LookupFailure.TooManyDeclarations("greet", "greet"), "kt_find_usages"),
         )
     }
@@ -94,6 +102,18 @@ class LookupFailuresTest {
             describe(LookupFailure.NotKotlin("README.md"), "kt_find_usages"),
         )
         assertEquals("Path is outside the project root: ../B.kt", describe(LookupFailure.OutsideProject("../B.kt"), "kt_edit"))
+    }
+
+    @Test
+    fun `a file that can't be looked in names the argument it was passed as, when the tool takes two`() {
+        assertEquals(
+            "declaredIn: File not found: src/Missing.kt",
+            describe(LookupFailure.FileNotFound("src/Missing.kt"), "kt_find_usages", argument = "declaredIn"),
+        )
+        assertEquals(
+            "file: Path is outside the project root: ../B.kt",
+            describe(LookupFailure.OutsideProject("../B.kt"), "kt_find_usages", argument = "file"),
+        )
     }
 
     @Test

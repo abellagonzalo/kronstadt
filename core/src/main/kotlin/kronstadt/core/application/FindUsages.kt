@@ -18,11 +18,20 @@ public class FindUsages(
 ) {
     private val resolver = SymbolResolver(files, intelligence)
 
-    /** Finds every Usage of [symbol], resolved project-wide; with a [file], only the Usages in that file. */
-    public suspend operator fun invoke(symbol: String, file: String? = null): FindUsagesResult {
-        // [file] filters the Usages; the Symbol itself is always resolved project-wide.
-        val parsed = SymbolResolver.parse(null, symbol).getOrElse { return FindUsagesResult.LookupFailed(it) }
-        val fileFilter = file?.let { path -> files.classify(path).getOrElse { return FindUsagesResult.LookupFailed(it) } }
+    /**
+     * Finds every Usage of [symbol], declared in [declaredIn] or, without it, resolved project-wide; with a [file], only
+     * the Usages in that file.
+     */
+    public suspend operator fun invoke(symbol: String, file: String? = null, declaredIn: String? = null): FindUsagesResult {
+        // [declaredIn] is where the Symbol is resolved; [file] only filters the Usages.
+        val parsed = SymbolResolver.parse(declaredIn, symbol).getOrElse { return FindUsagesResult.LookupFailed(it) }
+        // Both files are checked before waiting for the index, each failure naming its argument.
+        declaredIn?.let { path ->
+            files.classify(path).getOrElse { return FindUsagesResult.LookupFailed(it, FindUsagesResult.FileArgument.DECLARED_IN) }
+        }
+        val fileFilter = file?.let { path ->
+            files.classify(path).getOrElse { return FindUsagesResult.LookupFailed(it, FindUsagesResult.FileArgument.FILE) }
+        }
         val readiness = intelligence.awaitReady(readinessTimeout)
         if (readiness is Readiness.NotReady) return FindUsagesResult.NotReady(readiness)
         return intelligence.session { session -> usages(session, parsed, fileFilter) }
@@ -107,8 +116,14 @@ public sealed interface FindUsagesResult {
     /** [symbol] (its canonical path) has no Usages in any of [searchedFiles] files, other than [imports] imports. */
     public data class NoUsages(val symbol: String, val searchedFiles: Int, val imports: Int = 0) : FindUsagesResult
 
-    /** The Symbol, resolved project-wide, or the file to list Usages in, is not one. */
-    public data class LookupFailed(val failure: LookupFailure) : FindUsagesResult
+    /**
+     * The Symbol, or a file to resolve it in or list Usages in, is not one. A file check's failure names the [argument] the
+     * file was passed as, so the agent knows which path is wrong; it is null for the Symbol Path's own failures.
+     */
+    public data class LookupFailed(val failure: LookupFailure, val argument: FileArgument? = null) : FindUsagesResult
+
+    /** The two files the use case takes: the one [DECLARED_IN] that declares the Symbol, and the [FILE] to list Usages in. */
+    public enum class FileArgument { DECLARED_IN, FILE }
 
     /** The index was still incomplete after waiting. */
     public data class NotReady(val readiness: Readiness.NotReady) : FindUsagesResult
