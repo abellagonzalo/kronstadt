@@ -87,17 +87,22 @@ private fun TextDocument.insertedInto(scanned: List<FileHeader.ScannedImport>, m
 internal class ImportRemoval(val removed: List<ImportDirective>, val splice: LineSplice)
 
 /**
- * The imports of this file that [organized], its text after the code intelligence organized its imports, no longer has:
- * those it found unused. One it merely respelled is kept: an explicit import whose package [organized] newly imports
- * with a star, and a star import whose package it newly imports by name.
+ * What [organized], a file's text after the code intelligence organized its imports, tells of the file's own imports:
+ * those it [dropped], found unused, and those it left [undecided]: explicit imports it dropped only because a star
+ * import of their package, new in [organized], now brings them in. kotlin-lsp collapses a package into a star once
+ * enough of its names are used, whether or not one of them still is (#81). Every other import is kept: one still in
+ * [organized], and a star import whose package it newly imports by name.
  */
-internal fun TextDocument.importsDroppedIn(organized: TextDocument): Set<ImportDirective> {
+internal class OrganizedImports(val dropped: Set<ImportDirective>, val undecided: Set<ImportDirective>)
+
+/** What [organized], this file's text after the code intelligence organized its imports, tells of its imports. */
+internal fun TextDocument.importsOrganizedIn(organized: TextDocument): OrganizedImports {
     val own = FileHeader.of(text).imports.map { it.directive }
     val left = FileHeader.of(organized.text).imports.map { it.directive }.toSet()
     val (newStars, newNames) = left.filter { it !in own }.partition { it.isStar }
-    return own.filterTo(mutableSetOf()) { directive ->
-        directive !in left && newStars.none(directive::isCoveredBy) && newNames.none { it.isCoveredBy(directive) }
-    }
+    val gone = own.filter { directive -> directive !in left && newNames.none { it.isCoveredBy(directive) } }
+    val (undecided, dropped) = gone.partition { directive -> newStars.any(directive::isCoveredBy) }
+    return OrganizedImports(dropped.toSet(), undecided.toSet())
 }
 
 /**

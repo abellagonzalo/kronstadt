@@ -2,7 +2,9 @@ package kronstadt.core.application
 
 import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.CodeSymbol
+import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Position
+import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.TextRange
 import java.nio.file.Path
@@ -25,16 +27,24 @@ class EditImportsTest {
 
     /**
      * Runs [operations] on a file holding [source]; the fake reports the Symbols [symbolsByText] give for each exact
-     * text, and organizes imports as [organizedByText] gives.
+     * text, organizes imports as [organizedByText] gives, reports [diagnosticsByText] and fails to pull diagnostics for the
+     * texts in [failingDiagnostics].
      */
     private suspend fun run(
         source: String,
         symbolsByText: Map<String, List<CodeSymbol>>,
         vararg operations: Operation,
         organizedByText: Map<String, String> = emptyMap(),
+        diagnosticsByText: Map<String, List<Diagnostic>> = emptyMap(),
+        failingDiagnostics: Set<String> = emptySet(),
     ): Pair<EditResult, FakeFileStore> {
         val files = FakeFileStore(root, mapOf(path to source))
-        val intelligence = FakeCodeIntelligence(symbolsByText = symbolsByText, organizedByText = organizedByText)
+        val intelligence = FakeCodeIntelligence(
+            symbolsByText = symbolsByText,
+            organizedByText = organizedByText,
+            diagnosticsByText = diagnosticsByText,
+            failingDiagnostics = failingDiagnostics,
+        )
         val result = Edit(files, intelligence)(operations.toList())
         intelligence.assertOneSessionClosedEverything()
         return result to files
@@ -197,5 +207,83 @@ class EditImportsTest {
 
         assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0))), result)
         assertEquals(expected, files.content(path))
+    }
+
+    // kotlin-lsp's organize-imports collapses a package into a star import once 5 of its names are used, used or not (#81).
+    private val starSource = "package a\n\nimport c.C1\nimport c.C2\n\nfun greet() = C1\n\nfun make() = C2\n"
+    private val starAfterDelete = "package a\n\nimport c.C1\nimport c.C2\n\nfun greet() = C1\n"
+    private val starExpected = "package a\n\nimport c.C1\n\nfun greet() = C1\n"
+    private val starTexts = mapOf(
+        starSource to listOf(function("greet", 5), function("make", 7)),
+        starAfterDelete to listOf(function("greet", 5)),
+        starExpected to listOf(function("greet", 4)),
+    )
+    private val starOrganized = mapOf(
+        starSource to "package a\n\nimport c.*\n\nfun greet() = C1\n\nfun make() = C2\n",
+        starAfterDelete to "package a\n\nimport c.*\n\nfun greet() = C1\n",
+    )
+
+    private fun unresolved(name: String, line: Int) =
+        Diagnostic(TextRange(Position(line, 14), Position(line, 16)), Severity.ERROR, "Unresolved reference '$name'.", "UNRESOLVED_REFERENCE")
+
+    /** Removing an import from these texts leaves a name unresolved; from any other, nothing. */
+    private val starDiagnostics = mapOf(
+        // Without both imports, after the delete.
+        "package a\n\nfun greet() = C1\n" to listOf(unresolved("C1", 2)),
+        // Without c.C1, after the delete.
+        "package a\n\nimport c.C2\n\nfun greet() = C1\n" to listOf(unresolved("C1", 4)),
+        // Without c.C2, before the delete.
+        "package a\n\nimport c.C1\n\nfun greet() = C1\n\nfun make() = C2\n" to listOf(unresolved("C2", 6)),
+    )
+
+    @Test
+    fun `an import a new star import covers is removed if removing it adds no error, and one still used stays`() = runTest {
+        val (result, files) = run(
+            starSource, starTexts, Delete(path, "make"), organizedByText = starOrganized, diagnosticsByText = starDiagnostics,
+        )
+
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0, importsRemoved = listOf("c.C2")))), result)
+        assertEquals(starExpected, files.content(path))
+    }
+
+    @Test
+    fun `an import a new star import covers that was already unused before the Edit stays`() = runTest {
+        val source = "package a\n\nimport c.C1\nimport c.C2\n\nfun greet() = C1\n\nfun make() = 1\n"
+        val texts = mapOf(source to listOf(function("greet", 5), function("make", 7)), starAfterDelete to listOf(function("greet", 5)))
+        val organized = starOrganized + (source to "package a\n\nimport c.*\n\nfun greet() = C1\n\nfun make() = 1\n")
+
+        val (result, files) = run(source, texts, Delete(path, "make"), organizedByText = organized, diagnosticsByText = starDiagnostics)
+
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0))), result)
+        assertEquals(starAfterDelete, files.content(path))
+    }
+
+    @Test
+    fun `an import an Operation lists stays, even if a new star import covers it and it is unused`() = runTest {
+        val (result, files) = run(
+            starSource,
+            starTexts,
+            Delete(path, "make", imports = listOf("c.C2")),
+            organizedByText = starOrganized,
+            diagnosticsByText = starDiagnostics,
+        )
+
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0))), result)
+        assertEquals(starAfterDelete, files.content(path))
+    }
+
+    @Test
+    fun `without a diagnostics answer, an import a new star import covers counts as used and stays`() = runTest {
+        val (result, files) = run(
+            starSource,
+            starTexts,
+            Delete(path, "make"),
+            organizedByText = starOrganized,
+            diagnosticsByText = starDiagnostics,
+            failingDiagnostics = setOf("package a\n\nfun greet() = C1\n"),
+        )
+
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0))), result)
+        assertEquals(starAfterDelete, files.content(path))
     }
 }

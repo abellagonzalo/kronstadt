@@ -111,7 +111,7 @@ fun EditResult.lookupFailure(): LookupFailure =
  * index entries whose name contains the query, ignoring case: kotlin-lsp 271.2085.0 matches substrings, not typos.
  * With a [searchCap], a search returns at most that many results, exact names first, possibly incomplete once it does.
  * Diagnostics are [diagnosticsByText] for the exact text, else none; each pull takes [diagnosticsDelay] and first runs
- * [beforeDiagnostics]. References are [references], and definitions [definitions], for the file and the exact position
+ * [beforeDiagnostics]; a pull of a text in [failingDiagnostics] fails. References are [references], and definitions [definitions], for the file and the exact position
  * asked about, else none. Organize-imports answers [organizedByText] for the exact text, else nothing.
  *
  * Documents are modelled like the language server sees them: a session's first analysis of a file opens it at
@@ -129,6 +129,7 @@ class FakeCodeIntelligence(
     private val symbolsByText: Map<String, List<CodeSymbol>> = emptyMap(),
     private val diagnosticsByText: Map<String, List<Diagnostic>> = emptyMap(),
     private val diagnosticsDelay: Duration = Duration.ZERO,
+    private val failingDiagnostics: Set<String> = emptySet(),
     private val beforeDiagnostics: suspend () -> Unit = {},
     private val references: Map<Pair<Path, Position>, List<SourceLocation>> = emptyMap(),
     private val definitions: Map<Pair<Path, Position>, List<Definition>> = emptyMap(),
@@ -224,6 +225,7 @@ class FakeCodeIntelligence(
             sync(file, document)
             beforeDiagnostics()
             delay(diagnosticsDelay)
+            check(document.text !in failingDiagnostics) { "diagnostics failed" }
             return diagnosticsByText[document.text].orEmpty()
         }
 

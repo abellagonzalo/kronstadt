@@ -723,6 +723,77 @@ class KotlinLspContractTest {
         assertEquals("package fixture.beta\n\nclass Polygon(val radius: Double)\n", Files.readString(project.resolve(moved)))
         assertTrue(Files.readString(project.resolve(check)).contains("import fixture.beta.Polygon"))
     }
+
+    // kt_edit import removal under a star import (#81): organize-imports collapses a package once 5 of its names are used.
+
+    private val streamsPath = "src/main/kotlin/fixture/gamma/Streams.kt"
+
+    /** 7 java.io names used, `IOException` only by `failure`, and `Serializable` not at all. */
+    private val streams = "package fixture.gamma\n\n" +
+        "import java.io.Closeable\nimport java.io.File\nimport java.io.IOException\nimport java.io.InputStream\n" +
+        "import java.io.OutputStream\nimport java.io.Reader\nimport java.io.Serializable\nimport java.io.Writer\n\n" +
+        "fun file(): File? = null\n\nfun input(): InputStream? = null\n\nfun output(): OutputStream? = null\n\n" +
+        "fun reader(): Reader? = null\n\nfun writer(): Writer? = null\n\nfun closeable(): Closeable? = null\n\n" +
+        "fun failure(): IOException? = null\n"
+
+    @Test
+    @Order(26)
+    fun `organize-imports answers a star import once 5 names of a package are used, whether the others are used or not`() = runBlocking<Unit> {
+        val file = project.resolve(streamsPath)
+        val header = "package fixture.gamma\n\n" +
+            "import java.io.File\nimport java.io.IOException\nimport java.io.InputStream\nimport java.io.Reader\nimport java.io.Writer\n\n"
+        val four = "fun f(): File? = null\nfun i(): InputStream? = null\nfun r(): Reader? = null\nfun w(): Writer? = null\n"
+        val five = four + "fun c(): java.io.Closeable? = null\nfun o(): java.io.OutputStream? = null\n"
+        val fiveNamed = header.replace("import java.io.File\n", "import java.io.Closeable\nimport java.io.File\n")
+            .replace("import java.io.Reader\n", "import java.io.OutputStream\nimport java.io.Reader\n") +
+            four + "fun c(): Closeable? = null\nfun o(): OutputStream? = null\n"
+        lsp.session { session ->
+            // 4 used: the unused IOException is dropped by name.
+            assertEquals(
+                TextDocument(header.replace("import java.io.IOException\n", "") + four),
+                session.organizeImports(file, TextDocument(header + four)),
+            )
+            // Fully qualified names don't count towards the star.
+            assertEquals(
+                TextDocument(header.replace("import java.io.IOException\n", "") + five),
+                session.organizeImports(file, TextDocument(header + five)),
+            )
+            // 6 imported, 5 used, IOException unused: only the star import is left, so its answer can't tell IOException is unused.
+            assertEquals(
+                TextDocument("package fixture.gamma\n\nimport java.io.*\n\n" + four + "fun c(): Closeable? = null\nfun o(): OutputStream? = null\n"),
+                session.organizeImports(file, TextDocument(fiveNamed)),
+            )
+        }
+        assertTrue(Files.notExists(file))
+    }
+
+    @Test
+    @Order(27)
+    fun `kt_edit removes an import it made unused under a star import, keeps the used, the already unused and the listed ones`() = runBlocking<Unit> {
+        val file = project.resolve(streamsPath)
+        Files.createDirectories(file.parent)
+        Files.writeString(file, streams)
+        try {
+            val failure = Edit(files, lsp)(Delete(streamsPath, "failure"))
+
+            val written = assertIs<EditResult.Written>(failure, "$failure").files.single()
+            assertEquals(listOf("java.io.IOException"), written.importsRemoved)
+            val withoutFailure = streams.replace("import java.io.IOException\n", "").replace("\n\nfun failure(): IOException? = null\n", "\n")
+            assertEquals(withoutFailure, Files.readString(file))
+
+            // Still 5 java.io names used after it, so organize-imports answers a star again; the listed Closeable stays.
+            val closeable = Edit(files, lsp)(Delete(streamsPath, "closeable", imports = listOf("java.io.Closeable")))
+
+            assertEquals(emptyList(), assertIs<EditResult.Written>(closeable, "$closeable").files.single().importsRemoved)
+            assertEquals(withoutFailure.replace("\n\nfun closeable(): Closeable? = null\n", "\n"), Files.readString(file))
+            lsp.session { session ->
+                val errors = session.diagnostics(file, TextDocument(Files.readString(file))).filter { it.severity == Severity.ERROR }
+                assertEquals(emptyList(), errors)
+            }
+        } finally {
+            Files.deleteIfExists(file)
+        }
+    }
 }
 
 /** The [LookupFailure] a read reports; fails unless it reports one. */
