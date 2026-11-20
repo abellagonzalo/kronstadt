@@ -157,16 +157,82 @@ class EditInTest {
         assertEquals(null, hintOf(result))
     }
 
-    @Test
-    fun `edit_in text that splits a CRLF line break doesn't match`() = runTest {
-        val crlf = "package a\r\n\r\nfun greet(): Int = 1\r\n"
+    /** Runs [operation] on a CRLF file holding [crlf], whose symbols the fake gives by text in [texts]. */
+    private suspend fun runCrlf(crlf: String, texts: Map<String, List<CodeSymbol>>, operation: Operation): Pair<EditResult, FakeFileStore> {
         val files = FakeFileStore(root, mapOf(path to crlf))
-        val intelligence = FakeCodeIntelligence(documentSymbols = listOf(function("greet", 2, 2)))
+        val intelligence = FakeCodeIntelligence(symbolsByText = texts)
+        val result = Edit(files, intelligence)(operation)
+    intelligence.assertOneSessionClosedEverything()
+    return result to files
+    }
 
-        val result = Edit(files, intelligence)(EditIn(path, null, old = "package a\r", new = "package b\r"))
+    private val crlf = "package a\r\n\r\nfun greet(): Int {\r\n    val n = 1\r\n    return n\r\n}\r\n"
 
-        assertEquals(EditResult.OperationFailed(0, OperationFailure.NotExactlyOnce("package a\r", EditInScope(null, path), 0, emptyList())), result)
+    @Test
+    fun `edit_in text with LF line breaks matches in a CRLF file, which keeps CRLF throughout`() = runTest {
+        val expected = "package a\r\n\r\nfun greet(): Int {\r\n    val n = 2\r\n    return n + 1\r\n}\r\n"
+        val texts = mapOf(crlf to listOf(function("greet", 2, 5)), expected to listOf(function("greet", 2, 5)))
+
+        val (result, files) = runCrlf(crlf, texts, EditIn(path, "greet", old = "val n = 1\n    return n", new = "val n = 2\n    return n + 1"))
+
+        assertEquals(expected, files.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 3, 6)), emptyList(), 0, 0))), result)
+    }
+
+    @Test
+    fun `edit_in text with CRLF line breaks matches in an LF file`() = runTest {
+        val expected = source.replaceFirst("    val n = 1\n    return n\n", "    return 1\n")
+        val texts = mapOf(expected to listOf(function("greet", 4, 6), function("other", 8, 11)))
+
+        val (result, files) = run(texts, EditIn(path, "greet", old = "val n = 1\r\n    return n", new = "return 1"))
+
+        assertEquals(expected, files.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 5, 7)), emptyList(), 0, 0))), result)
+    }
+
+    @Test
+    fun `edit_in in a CRLF file still matches indentation exactly`() = runTest {
+        val (result, files) = runCrlf(crlf, mapOf(crlf to listOf(function("greet", 2, 5))), EditIn(path, "greet", old = "val n = 1\n  return n", new = ""))
+
+        assertEquals(IndentationHint(4, IndentationHint.Indents(file = "    ", snippet = "  ")), hintOf(result))
         assertEquals(crlf, files.content(path))
+    }
+
+    @Test
+    fun `edit_in on a whole CRLF file replaces only the lines its multi-line text is on`() = runTest {
+        val file = "package a\r\n\r\n// one\r\n// two\r\n// three\r\n\r\nfun greet(): Int = 1\r\n"
+        val expected = "package a\r\n\r\n// one and two\r\n// three\r\n\r\nfun greet(): Int = 1\r\n"
+        val texts = mapOf(file to listOf(function("greet", 6, 6)), expected to listOf(function("greet", 5, 5)))
+
+        val (result, files) = runCrlf(file, texts, EditIn(path, null, old = "one\n// two", new = "one and two"))
+
+        assertEquals(expected, files.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0))), result)
+    }
+
+    @Test
+    fun `edit_in text ending in a lone CR matches a whole CRLF line break`() = runTest {
+        val file = "package a\r\n\r\nfun greet(): Int = 1\r\n"
+        val expected = "package b\r\n\r\nfun greet(): Int = 1\r\n"
+        val texts = mapOf(file to listOf(function("greet", 2, 2)), expected to listOf(function("greet", 2, 2)))
+
+        val (result, files) = runCrlf(file, texts, EditIn(path, null, old = "package a\r", new = "package b\r"))
+
+        assertEquals(expected, files.content(path))
+        assertIs<EditResult.Written>(result)
+    }
+
+    @Test
+    fun `edit_in text's line break never matches half of a CRLF, so it occurs once`() = runTest {
+        val file = "package a\r\n\r\nfun greet(): Int = 1\r\n"
+        // If a "\n" could take the "\n" half of the first "\r\n", this would also occur from there, twice in all.
+        val expected = "package a\r\n\r\n\r\nfun greet(): Int = 1\r\n"
+        val texts = mapOf(file to listOf(function("greet", 2, 2)), expected to listOf(function("greet", 3, 3)))
+
+        val (result, files) = runCrlf(file, texts, EditIn(path, null, old = "\n\nfun", new = "\n\n\nfun"))
+
+        assertEquals(expected, files.content(path))
+        assertIs<EditResult.Written>(result)
     }
 
     @Test

@@ -4,20 +4,24 @@ import kronstadt.core.domain.FileLayout
 import kronstadt.core.domain.TextDocument
 
 /**
- * Start offsets of [snippet], exactly as written, within [range] (offsets) of [document]'s text; overlapping
- * occurrences included ("aa" occurs twice in "aaa"). An occurrence never starts or ends inside a `\r\n` line break.
+ * The ranges (offsets) [snippet] occurs at within [range] of [document]'s text, overlapping occurrences included ("aa"
+ * occurs twice in "aaa"). Each line break in [snippet] (`\n`, `\r\n` or a lone `\r`) matches one whole line break of
+ * the text, of any of those kinds, so an occurrence may be longer or shorter than [snippet]; everything else matches
+ * exactly as written, whitespace included (ADR 0004). An occurrence never starts or ends inside a `\r\n`.
  */
-internal fun exactOccurrences(document: TextDocument, snippet: String, range: IntRange): List<Int> {
+internal fun exactOccurrences(document: TextDocument, snippet: String, range: IntRange): List<IntRange> {
     if (snippet.isEmpty()) return emptyList()
     val text = document.text
-    fun splitsLineBreak(offset: Int) = offset in 1 until text.length && text[offset - 1] == '\r' && text[offset] == '\n'
-    return generateSequence(text.indexOf(snippet, range.first).takeIf { it >= 0 }) { from ->
-        text.indexOf(snippet, from + 1).takeIf { it >= 0 }
-    }
-        .takeWhile { it + snippet.length <= range.last + 1 }
-        .filterNot { splitsLineBreak(it) || splitsLineBreak(it + snippet.length) }
+    // A `\r` before a `\n`, or a `\n` after a `\r`, is half of a `\r\n`, never a line break of its own.
+    val pattern = Regex(snippet.split(LINE_BREAK).joinToString("""(?:\r\n|\r(?!\n)|(?<!\r)\n)""") { Regex.escape(it) })
+    return generateSequence(pattern.find(text, range.first)) { pattern.find(text, it.range.first + 1) }
+        .map { it.range }
+        .takeWhile { it.first <= range.last }
+        .filter { it.last <= range.last }
         .toList()
 }
+
+private val LINE_BREAK = Regex("\r\n|\r|\n")
 
 /** The lines (1-based, trimmed) the occurrences starting at [offsets] are on, each once. */
 internal fun occurrenceLines(document: TextDocument, offsets: List<Int>): List<Occurrence> =
