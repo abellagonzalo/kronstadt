@@ -32,6 +32,20 @@ class LspMappingTest {
         assertEquals("(String): Repo?", mapped.children.single().type)
     }
 
+    @Test
+    fun `init blocks are dropped at any depth, constructors with no parameters kept`() {
+        fun init(line: Int) = DocumentSymbol("<class initializer>", LspSymbolKind.Constructor, range(line, line + 1), range(line, line + 1), null)
+        val noArgs = DocumentSymbol("Box", LspSymbolKind.Constructor, range(2, 2), range(2, 2), "()")
+        val nested = DocumentSymbol("Inner", LspSymbolKind.Class, range(5, 8), range(5, 5), null, listOf(init(6)))
+        val clazz = DocumentSymbol("Box", LspSymbolKind.Class, range(0, 9), range(0, 0), null, listOf(init(1), noArgs, init(3), nested))
+
+        val mapped = LspMapping.documentSymbols(listOf(Either.forRight(clazz)), TextDocument("")).single()
+
+        assertEquals(listOf("Box" to SymbolKind.CONSTRUCTOR, "Inner" to SymbolKind.CLASS), mapped.children.map { it.name to it.kind })
+        assertEquals("", mapped.children.first().parameterTypes)
+        assertEquals(emptyList(), mapped.children.last().children)
+    }
+
     /** The receiver, Signature and type mapped from a kotlin-lsp `documentSymbol` of [kind] whose `detail` is [detail]. */
     private fun parts(kind: LspSymbolKind, detail: String?) =
         LspMapping.documentSymbol(DocumentSymbol("s", kind, range(0, 1), range(0, 0), detail), TextDocument(""))

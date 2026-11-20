@@ -259,6 +259,60 @@ class KotlinLspContractTest {
         )
     }
 
+    /**
+     * kotlin-lsp reports an `init` block as a constructor named `<class initializer>` with no `detail`, at any depth. A
+     * secondary constructor with no parameters is named after its class, with `()` as its `detail`. An `init` block isn't a
+     * Symbol, so none reaches the tree, and `<Class>/constructor` isn't made ambiguous by one.
+     */
+    @Test
+    @Order(9)
+    fun `init blocks are reported as constructors named class initializer, and dropped from the tree`() = runBlocking<Unit> {
+        val path = "src/main/kotlin/fixture/Initializers.kt"
+        val file = project.resolve(path)
+        val document = TextDocument(Files.readString(file))
+
+        val reported = lsp.reportedDocumentSymbols(file, document)
+        fun reported(vararg path: String): DocumentSymbol =
+            path.drop(1).fold(reported.single { it.name == path[0] }) { parent, name -> parent.children.single { it.name == name } }
+        fun constructors(symbol: DocumentSymbol) =
+            symbol.children.orEmpty().filter { it.kind == LspSymbolKind.Constructor }.map { it.name to it.detail }
+        val initializer = "<class initializer>" to null
+        assertEquals(
+            listOf("Initialized" to "(Int)", initializer, "Initialized" to "()", initializer),
+            constructors(reported("Initialized")),
+        )
+        assertEquals(
+            "init {\n        total = seed\n    }",
+            document.slice(LspMapping.range(reported("Initialized").children.first { it.name == initializer.first }.range)),
+        )
+        listOf("Nested", "Single", "Companion").forEach { assertEquals(listOf(initializer), constructors(reported("Initialized", it)), it) }
+        assertEquals(listOf("Checked" to "(String?, String?)", initializer), constructors(reported("Checked")))
+
+        val structure = assertIs<ReadStructureResult.Structure>(ReadStructure(files, lsp)(path, xml = false)).text
+        assertEquals(
+            """
+        class Initialized  // L3-35
+          constructor(Int)  // L4-4
+          val seed  : Int  // L4-4
+          var total  : Int  // L5-5
+          constructor()  // L11-11
+          class Nested  // L17-22
+          object Single  // L24-28
+          object Companion  // L30-34
+        class Checked  // L37-45
+          constructor(String?, String?)  // L38-41
+          val first  : String?  // L39-39
+          val second  : String?  // L40-40
+        """.trimIndent(),
+            structure,
+        )
+
+        val read = ReadSymbol(files, lsp)
+        assertEquals("// constructor() in $path, L11-11", assertIs<ReadSymbolResult.Found>(read(path, "Initialized/constructor()")).text.lines().first())
+        // The primary constructor shares its first line with the class head, a span problem of its own (#68).
+        assertIs<LookupFailure.SharedLine>(read(path, "Checked/constructor").lookupFailure())
+    }
+
     private val files by lazy { LocalFileStore(project) }
 
     @Test

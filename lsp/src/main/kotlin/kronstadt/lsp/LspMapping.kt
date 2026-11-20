@@ -58,6 +58,15 @@ internal object LspMapping {
         else -> SymbolKind.OTHER
     }
 
+    /**
+     * kotlin-lsp reports an `init` block as a constructor named `<class initializer>`, with no `detail` (pinned by the
+     * contract test). It isn't a Symbol (GLOSSARY.md): it's edited through its class, so it is dropped with what it holds.
+     * The name can't be a real constructor's, which is named after its class.
+     */
+    private fun isClassInitializer(s: DocumentSymbol): Boolean = s.kind == LspSymbolKind.Constructor && s.name == CLASS_INITIALIZER
+
+    private const val CLASS_INITIALIZER = "<class initializer>"
+
     fun documentSymbol(s: DocumentSymbol, document: TextDocument): CodeSymbol {
         val kind = kind(s.kind)
         val parts = detailParts(kind, s.detail)
@@ -66,7 +75,7 @@ internal object LspMapping {
             kind = kind,
             range = range(s.range),
             selectionRange = range(s.selectionRange),
-            children = s.children.orEmpty().map { documentSymbol(it, document) },
+            children = s.children.orEmpty().filterNot(::isClassInitializer).map { documentSymbol(it, document) },
             receiver = parts.receiver,
             parameterTypes = parts.parameterTypes,
             type = parts.type,
