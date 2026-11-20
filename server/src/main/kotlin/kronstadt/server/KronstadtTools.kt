@@ -501,10 +501,10 @@ internal class KronstadtTools(
                 "what that Operation left." +
                 (if (failure.suggestions.isEmpty()) "" else " Close names:\n" + candidates(failure.suggestions, withFiles = false) + "\n")
         is OperationFailure.RemovedEarlierInFiles -> {
-            val shown = failure.removals.map { it.file }
+            val files = failure.removals.map { it.file }
             val suggestions = failure.removals.flatMap { it.suggestions }
             "'${failure.symbol}' was removed or renamed by earlier Operations of this Edit in " +
-                shown.dropLast(1).joinToString(", ") + " and " + shown.last() + "; target what those Operations left." +
+                files.dropLast(1).joinToString(", ") + " and " + files.last() + "; target what those Operations left." +
                 (if (suggestions.isEmpty()) "" else " Close names:\n" + candidates(suggestions, withFiles = true) + "\n")
         }
         is OperationFailure.NeedsFile ->

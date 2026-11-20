@@ -342,8 +342,8 @@ class KtEditToolTest {
 }
 
 /**
- * Always ready, and knows next to nothing: every file has [symbols], and there are no diagnostics, references or
- * definitions, so every Edit validates.
+ * Always ready, and knows next to nothing: every file has [symbols] unless [symbolsByText] has its exact text, the
+ * project index lists only [index], and there are no diagnostics, references or definitions, so every Edit validates.
  * Organize-imports answers [organized] for the exact text, else nothing. A search for a query in [cutOff] may miss
  * symbols named exactly like it, as when the index stops at its maximum.
  */

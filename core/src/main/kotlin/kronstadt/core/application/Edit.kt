@@ -231,19 +231,24 @@ public class Edit(
 
     /**
      * The failure for [parsed] when earlier Operations removed or renamed it in every file of [onDisk], its matches on
-     * disk, each named with close names in its current text; null if there are none, or any is still there or unreadable.
+     * disk, each named with close names in its current text: [OperationFailure.RemovedEarlier] if they're all in one file.
+     * Null if there are none, or any is still there or unreadable.
      */
     private suspend fun removedEarlier(
         shadow: ShadowWorkspace,
         parsed: ParsedLookup,
         onDisk: List<Pair<SymbolCandidate, Path?>>,
-    ): OperationFailure.RemovedEarlierInFiles? {
-        if (onDisk.isEmpty()) return null
-        val removals = onDisk.map { (shown, file) ->
-            val lookup = file?.let { shadow.resolve(it, parsed) } as? ShadowWorkspace.Lookup.RemovedEarlier ?: return null
-            OperationFailure.RemovedEarlierInFiles.Removal(shown.file, lookup.suggestions)
+    ): OperationFailure? {
+        val removals = onDisk.distinctBy { (shown, _) -> shown.file }.map { (shown, file) ->
+            val removed = file?.let { shadow.resolve(it, parsed) } as? ShadowWorkspace.Lookup.RemovedEarlier ?: return null
+            OperationFailure.RemovedEarlierInFiles.Removal(shown.file, removed.suggestions)
         }
-        return OperationFailure.RemovedEarlierInFiles(parsed.symbol, removals)
+        val only = removals.singleOrNull()
+        return when {
+            removals.isEmpty() -> null
+            only != null -> OperationFailure.RemovedEarlier(parsed.symbol, only.file, only.suggestions)
+            else -> OperationFailure.RemovedEarlierInFiles(parsed.symbol, removals)
+        }
     }
 
     /**
@@ -457,7 +462,7 @@ public sealed interface OperationFailure {
     public data class RemovedEarlier(val symbol: String, val file: String, val suggestions: List<SymbolCandidate>) : OperationFailure
 
     /**
-     * [symbol], passed without a file, is in several files on disk, but earlier Operations of this Edit removed or renamed
+     * [symbol], passed without a file, is in two or more files on disk, but earlier Operations of this Edit removed or renamed
      * it in every one of them; each of [removals] names one such file with close names in what those Operations left.
      */
     public data class RemovedEarlierInFiles(val symbol: String, val removals: List<Removal>) : OperationFailure {
