@@ -103,10 +103,11 @@ class GetDefinitionTest {
         notReadyPhase: String? = null,
         diagnosticsByText: Map<String, List<Diagnostic>> = emptyMap(),
         beforeDiagnostics: suspend () -> Unit = {},
+        caller: String = callerSource,
     ): Pair<FakeFileStore, FakeCodeIntelligence> {
         val files = FakeFileStore(
             root,
-            mapOf(greeterKt to greeterSource, callerKt to callerSource, listsKt to listsSource, legacyJava to legacySource),
+            mapOf(greeterKt to greeterSource, callerKt to caller, listsKt to listsSource, legacyJava to legacySource),
         )
         val symbols = mapOf(greeterKt to listOf(greeter), callerKt to listOf(welcome), listsKt to listOf(names))
         val index = symbols.flatMap { (file, roots) ->
@@ -192,6 +193,19 @@ class GetDefinitionTest {
             assertIs<GetDefinitionResult.Found>(result).text,
         )
         intelligence.assertOneSessionClosedEverything()
+    }
+
+    @Test
+    fun `a multi-line at snippet with LF line breaks matches in a CRLF file`() = runTest {
+        val (files, intelligence) = project(mapOf(inCaller(4, 11) to listOf(inCallerAt(3, 8, 7))), caller = callerSource.replace("\n", "\r\n"))
+
+        val result = GetDefinition(files, intelligence)("welcome", "greeter", at = "Greeter(\"Hi\")\n    return greeter.greet")
+
+        assertEquals(
+            "// greeter is local to welcome in src/main/kotlin/com/example/Caller.kt, not addressable; declared at L4\n" +
+                "val greeter = Greeter(\"Hi\")",
+            assertIs<GetDefinitionResult.Found>(result).text,
+        )
     }
 
     @Test

@@ -62,7 +62,7 @@ public data class Delete(
 /**
  * Replaces the one occurrence of [old], exactly as written, whitespace included, inside the Symbol Span of [symbol],
  * or anywhere in [file] when there is no [symbol], with [new] as written: no re-indentation, no fuzzy matching. Only
- * the line breaks in [new] become the file's.
+ * line breaks are loose: each in [old] matches any line ending in the file, and those in [new] become the file's.
  */
 public data class EditIn(
     override val file: String?,
@@ -349,15 +349,15 @@ public class Edit(
                 val matches = exactOccurrences(document, old, start until end)
                 val match = matches.singleOrNull() ?: return NotExactlyOnce(
                     matches.size,
-                    occurrenceLines(document, matches),
+                    occurrenceLines(document, matches.map { it.first }),
                     if (matches.isEmpty()) indentationHint(document, old, start until end) else null,
                 )
-                val at = document.positionOf(match)
+                val at = document.positionOf(match.first)
                 if (FileLayout.isInsideIndent(document.line(at.line), at.character)) return StartsInIndentation(at.line)
-                val lines = replaced(at.line..document.positionOf(match + old.length).line)
+                val lines = replaced(at.line..document.positionOf(match.last + 1).line)
                 val linesStart = document.offsetOf(Position(lines.first, 0))
                 val linesEnd = document.offsetOf(Position(lines.last, Int.MAX_VALUE))
-                val spliced = text.substring(linesStart, match) + operation.new + text.substring(match + old.length, linesEnd)
+                val spliced = text.substring(linesStart, match.first) + operation.new + text.substring(match.last + 1, linesEnd)
                 return Done(lines, spliced.lines())
             }
         }

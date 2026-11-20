@@ -48,7 +48,7 @@ public class GetDefinition(
         )
         // The name is looked up inside the `at` snippet when there is one, else inside the whole span.
         val scope = if (at == null) span else {
-            val snippets = exactOccurrences(document, at, span).map { it until it + at.length }
+            val snippets = exactOccurrences(document, at, span)
             snippets.singleOrNull()
                 ?: return notExactlyOnce(at, snippets, if (snippets.isEmpty()) indentationHint(document, at, span) else null)
         }
