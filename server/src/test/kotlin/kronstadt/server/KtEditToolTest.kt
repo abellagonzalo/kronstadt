@@ -25,6 +25,7 @@ import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
 import kronstadt.core.domain.RenamePreparation
+import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
@@ -61,12 +62,15 @@ class KtEditToolTest {
     /** The Symbols every file has; filled by a test before it calls the tool. */
     private val symbols = mutableListOf<CodeSymbol>()
 
+    /** Diagnostics by exact text; filled by a test before it calls the tool. */
+    private val diagnostics = mutableMapOf<String, List<Diagnostic>>()
+
     private val server = Server(
         Implementation(name = "kronstadt-test", version = "0"),
         ServerOptions(capabilities = ServerCapabilities(tools = ServerCapabilities.Tools(listChanged = false))),
     ).also { server ->
         val files = LocalFileStore(root)
-        val intelligence = EmptyIntelligence(organized, cutOff, symbols)
+        val intelligence = EmptyIntelligence(organized, cutOff, symbols, diagnostics)
         KronstadtTools(
             ReadStructure(files, intelligence),
             FindSymbol(files, intelligence),
@@ -98,6 +102,39 @@ class KtEditToolTest {
 
         assertEquals(false, failed, text)
         assertEquals("package a\n\nimport a.x.Alpha\nimport b.Bravo\n\nfun greet(): Int = 2\n", file.readText())
+    }
+
+    @Test
+    fun `a rejected Edit gives an id to amend, and an amend with only the fix writes the combined Edit`() = runTest {
+        val broken = "package a\n\nfun greet(): Int = Bravo.one\n"
+        diagnostics[broken] = listOf(
+            Diagnostic(TextRange(Position(2, 19), Position(2, 24)), Severity.ERROR, "Unresolved reference 'Bravo'.", "UNRESOLVED_REFERENCE"),
+        )
+
+        val (rejected, rejectedText) = ktEdit("""{"operations": [{"type": "edit_in", "file": "A.kt", "old": "= 1", "new": "= Bravo.one"}]}""")
+        val (amended, amendedText) = ktEdit("""{"amend": "e1", "operations": [{"type": "edit_in", "file": "A.kt", "old": "= Bravo", "new": "= Bravo", "imports": ["b.Bravo"]}]}""")
+        val (stale, staleText) = ktEdit("""{"amend": "e1", "operations": [{"type": "edit_in", "file": "A.kt", "old": "= Bravo", "new": "= Bravo"}]}""")
+
+        assertEquals(true, rejected)
+        assertEquals(
+            "Edit rejected (id: e1): 1 new error; nothing written.\n" +
+                "  A.kt:L3 in (file level): Unresolved reference 'Bravo'.\n" +
+                "      fun greet(): Int = Bravo.one\n" +
+                "Fix with kt_edit amend: \"e1\" and only the fixing Operations, or resend the whole batch.",
+            rejectedText,
+        )
+        assertEquals(false, amended, amendedText)
+        assertEquals("package a\n\nimport b.Bravo\n\nfun greet(): Int = Bravo.one\n", file.readText())
+        assertEquals(true, stale)
+        assertEquals("no rejected Edit e1 to amend; resend the whole batch", staleText)
+    }
+
+    @Test
+    fun `the kt_edit description and schema explain amend`() {
+        val tool = checkNotNull(server.tools["kt_edit"]).tool
+
+        assertTrue("'amend'" in checkNotNull(tool.description), tool.description)
+        assertTrue("amend" in tool.inputSchema.properties.toString())
     }
 
     @Test
@@ -246,10 +283,12 @@ private class EmptyIntelligence(
     private val organized: Map<String, String>,
     private val cutOff: Set<String>,
     private val symbols: List<CodeSymbol>,
+    /** Diagnostics by exact text; none for any other. */
+    private val diagnostics: Map<String, List<Diagnostic>> = emptyMap(),
 ) : CodeIntelligence {
     override suspend fun <T> session(block: suspend (AnalysisSession) -> T): T = block(object : AnalysisSession {
         override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> = symbols
-        override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> = emptyList()
+        override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> = diagnostics[document.text].orEmpty()
         override suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation> = emptyList()
         override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> = emptyList()
         override suspend fun prepareRename(file: Path, document: TextDocument, position: Position) = RenamePreparation.Refused("unsupported")

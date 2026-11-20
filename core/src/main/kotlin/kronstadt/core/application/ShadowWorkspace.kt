@@ -104,6 +104,9 @@ internal class ShadowWorkspace(
     /** Each file the Edit changed so far, with its text as read from disk. */
     fun editedBases(): Map<Path, TextDocument> = touched.filterValues { it.isEdited }.mapValues { it.value.base }
 
+    /** The content hash of each file the Edit touched so far, as read from disk; null for one it creates. */
+    fun baseHashes(): Map<Path, ContentHash?> = touched.mapValues { it.value.baseHash }
+
     /** Resolves [parsed] against [file]'s current text, loading the file from disk on first touch. */
     suspend fun resolve(file: Path, parsed: ParsedLookup): Lookup {
         val resolution = resolver.resolveIn(this, file, parsed)

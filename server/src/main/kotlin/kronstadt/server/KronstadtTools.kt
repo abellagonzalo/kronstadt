@@ -219,8 +219,14 @@ internal class KronstadtTools(
                 "earlier ones left (so you can rename a Symbol, then target its new name), the batch is validated once " +
                 "after the last, and either every file is written or none is (a write failing part-way is reported). " +
                 "Intermediate states may not compile. A Symbol Path without a file is looked up on disk, so to " +
-                "target a Symbol an earlier Operation added, renamed or created a file for, pass its file. The result lists each written file. Prefer this over Edit and other text " +
-                "edits of Kotlin files: nothing is written that fails Validation.",
+                "target a Symbol an earlier Operation added, renamed or created a file for, pass its file. The result lists each written file. " +
+                "A rejected Edit gets an id and is kept until the next kt_edit or kt_rename_symbol call: to fix it, " +
+                "call kt_edit with 'amend' set to that id and only the fixing Operations (e.g. an 'edit_in' on the " +
+                "whole file adding a missing import). They are appended after its Operations, each resolving against " +
+                "the code the earlier ones left, and the combined Edit is validated and written as one, or rejected " +
+                "with a new id you can amend in turn. An amend can't change or drop the rejected Edit's Operations, " +
+                "and is refused if a file it touched changed on disk since; then resend the whole batch. " +
+                "Prefer this over Edit and other text edits of Kotlin files: nothing is written that fails Validation.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
                     putJsonObject("operations") {
@@ -278,6 +284,11 @@ internal class KronstadtTools(
                             }
                         }
                     }
+                    stringProperty(
+                        "amend",
+                        "Optional id of the last rejected Edit, e.g. 'e1', as its result gives it. 'operations' are " +
+                            "then appended to its Operations, and the combined Edit is validated and written as one.",
+                    )
                 },
                 required = listOf("operations"),
             ),
@@ -350,14 +361,19 @@ internal class KronstadtTools(
                 )
             }
         }
-        return when (val result = edit(parsed.map { it.second })) {
+        val amend = when (val raw = args["amend"]) {
+            null, JsonNull -> null
+            else -> (raw as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
+                ?: return error("'amend' must be the id of a rejected Edit, e.g. \"e1\". Nothing written.")
+        }
+        return when (val result = edit(parsed.map { it.second }, amend)) {
             is EditResult.Written -> text(result.files.joinToString("\n") { written(it) })
             is EditResult.Rejected -> error(
                 buildString {
                     val count = result.newErrors.size
-                    append("Edit rejected: $count new error${if (count == 1) "" else "s"}; nothing written.\n")
+                    append("Edit rejected (id: ${result.id}): $count new error${if (count == 1) "" else "s"}; nothing written.\n")
                     result.newErrors.forEach { append(problem(it, withFile = true)) }
-                    append("fix and resend the whole batch")
+                    append("Fix with kt_edit amend: \"${result.id}\" and only the fixing Operations, or resend the whole batch.")
                 },
             )
             is EditResult.ChangedOnDisk -> error("${result.file} changed on disk since read; re-read and retry")
@@ -369,7 +385,15 @@ internal class KronstadtTools(
             EditResult.ValidationTimedOut -> error("validation timed out; nothing written")
             is EditResult.NotReady -> notReady(result.readiness)
             is EditResult.OperationFailed ->
-                error("Operation ${result.index}: ${failure(result.failure, parsed[result.index].first)} Nothing written.")
+                if (result.inRejected) {
+                    error(
+                        "The rejected Edit $amend no longer applies: ${failure(result.failure, "operation")} " +
+                            "Nothing written; resend the whole batch.",
+                    )
+                } else {
+                    error("Operation ${result.index}: ${failure(result.failure, parsed[result.index].first)} Nothing written.")
+                }
+            is EditResult.NoRejectedEdit -> error("no rejected Edit ${result.id} to amend; resend the whole batch")
         }
     }
 
