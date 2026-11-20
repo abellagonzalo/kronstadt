@@ -17,7 +17,10 @@ public val TextDocument.packageName: String
  */
 internal class FileHeader(
     val packageName: String,
-    /** Offset just past the package directive, else past the last file annotation or the shebang line; null if none. */
+    /**
+     * Offset just past the package directive, else past the last file annotation, else past the leading comments a
+     * blank line separates from the code (KDoc and what follows it aside), else past the shebang line; null if none.
+     */
     val preambleEnd: Int?,
     /** The import directives in order, with the offsets of `import` and of the directive's end. */
     val imports: List<ScannedImport>,
@@ -37,14 +40,16 @@ private class HeaderScanner(private val text: String) {
 
     fun header(): FileHeader {
         if (peek() == '\uFEFF') i++
-        var preambleEnd: Int? = null
+        var shebangEnd: Int? = null
         if (text.startsWith("#!", i)) {
             skipLine()
-            preambleEnd = i
+            shebangEnd = i
         }
+        val topEnd = detachedCommentsEnd() ?: shebangEnd
+        var preambleEnd: Int? = null
         skipWhitespace()
         while (peek() == '@') {
-            if (!skipFileAnnotation()) return FileHeader("", preambleEnd, emptyList())
+            if (!skipFileAnnotation()) return FileHeader("", preambleEnd ?: topEnd, emptyList())
             preambleEnd = i
             skipWhitespace()
         }
@@ -77,7 +82,7 @@ private class HeaderScanner(private val text: String) {
                 skipWhitespace()
             }
         }
-        return FileHeader(packageName, preambleEnd, imports)
+        return FileHeader(packageName, preambleEnd ?: topEnd, imports)
     }
 
     fun directive(): ImportDirective? {
@@ -88,6 +93,32 @@ private class HeaderScanner(private val text: String) {
         if (peek() == ';') i++
         skipWhitespace()
         return directive.takeIf { i == text.length }
+    }
+
+    /**
+     * Offset just past the last comment from [i] on that a blank line, or the end of the file, follows; null if none.
+     * Comments with no blank line between them and the next comment or code belong to what follows, and a KDoc documents
+     * the declaration below it, so the scan stops at either. [i] is left where it was.
+     */
+    private fun detachedCommentsEnd(): Int? {
+        val start = i
+        var end: Int? = null
+        while (true) {
+            while (i < text.length && text[i].isWhitespace()) i++
+            val kdoc = text.startsWith("/**", i) && !text.startsWith("/**/", i)
+            if (kdoc || !text.startsWith("//", i) && !text.startsWith("/*", i)) break
+            if (text.startsWith("//", i)) skipLine() else skipBlockComment()
+            val commentEnd = i
+            var lineBreaks = 0
+            while (i < text.length && text[i].isWhitespace()) {
+                if (text[i] == '\n' || text[i] == '\r' && text.getOrNull(i + 1) != '\n') lineBreaks++
+                i++
+            }
+            if (lineBreaks >= 2 || i == text.length) end = commentEnd
+            i = commentEnd
+        }
+        i = start
+        return end
     }
 
     /**

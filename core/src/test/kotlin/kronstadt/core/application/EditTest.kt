@@ -727,4 +727,18 @@ class EditTest {
         assertEquals("package a\n\nimport kotlin.time.Duration\n\nclass Wait(val d: Duration)\n", files.content(created))
         assertEquals("import kotlin.time.Duration\n\nclass Wait(val d: Duration)\n", files.content("src/C.kt"))
     }
+
+    @Test
+    fun `in a file without a package line, a create's imports go below a leading licence comment`() = runTest {
+        val files = FakeFileStore(root, mapOf(path to source))
+
+        edit(createIntelligence(), files)(
+            Create("src/C.kt", "/* Licence */\n\nclass Wait(val d: Duration)\n", listOf("kotlin.time.Duration")),
+        )
+
+        assertEquals(
+            "/* Licence */\n\nimport kotlin.time.Duration\n\nclass Wait(val d: Duration)\n",
+            files.content("src/C.kt"),
+        )
+    }
 }
