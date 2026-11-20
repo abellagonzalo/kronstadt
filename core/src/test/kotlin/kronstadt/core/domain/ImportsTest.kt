@@ -36,6 +36,67 @@ class ImportsTest {
     }
 
     @Test
+    fun `without a package line or file annotations, a new block goes after the leading comments a blank line ends`() {
+        assertEquals(
+            "/* Licence */\n\nimport b.B\n\nfun f() = 1\n",
+            adding("/* Licence */\n\nfun f() = 1\n", "b.B"),
+        )
+        assertEquals(
+            "// Licence\n// line two\n\nimport b.B\n\nfun f() = 1\n",
+            adding("// Licence\n// line two\n\nfun f() = 1\n", "b.B"),
+        )
+        assertEquals(
+            "/* Licence */\n\n// Notes\n\nimport b.B\n\nfun f() = 1\n",
+            adding("/* Licence */\n\n// Notes\n\nfun f() = 1\n", "b.B"),
+        )
+        assertEquals("/* Licence */\n\nimport b.B\n", adding("/* Licence */\n", "b.B"))
+    }
+
+    @Test
+    fun `a comment attached to the first declaration, or a KDoc, stays below a new block`() {
+        assertEquals(
+            "import b.B\n\n// Says one\nfun f() = 1\n",
+            adding("// Says one\nfun f() = 1\n", "b.B"),
+        )
+        assertEquals(
+            "/* Licence */\n\nimport b.B\n\n// Says one\nfun f() = 1\n",
+            adding("/* Licence */\n\n// Says one\nfun f() = 1\n", "b.B"),
+        )
+        assertEquals(
+            "import b.B\n\n/** Says one */\n\nfun f() = 1\n",
+            adding("/** Says one */\n\nfun f() = 1\n", "b.B"),
+        )
+        assertEquals(
+            "/* Licence */\n\nimport b.B\n\n/** Says one */\nfun f() = 1\n",
+            adding("/* Licence */\n\n/** Says one */\nfun f() = 1\n", "b.B"),
+        )
+    }
+
+    @Test
+    fun `after a shebang, a new block goes after the leading comments a blank line ends`() {
+        assertEquals(
+            "#!/usr/bin/env kotlin\n/* Licence */\n\nimport b.B\n\nprintln(1)\n",
+            adding("#!/usr/bin/env kotlin\n/* Licence */\n\nprintln(1)\n", "b.B"),
+        )
+        assertEquals(
+            "#!/usr/bin/env kotlin\n\nimport b.B\n\n// Says one\nprintln(1)\n",
+            adding("#!/usr/bin/env kotlin\n\n// Says one\nprintln(1)\n", "b.B"),
+        )
+    }
+
+    @Test
+    fun `leading comments are skipped the same with CRLF line breaks, an empty block comment, or no final line break`() {
+        val crlf = TextDocument("/* Licence */\r\n\r\nfun f() = 1\r\n").addingImports(imports("b.B"))!!
+        assertEquals(1, crlf.lines.first)
+        assertEquals(listOf("", "import b.B"), crlf.newLines)
+        assertEquals(
+            "/**/\n\nimport b.B\n\nfun f() = 1\n",
+            adding("/**/\n\nfun f() = 1\n", "b.B"),
+        )
+        assertEquals("/* Licence */\n\nimport b.B", adding("/* Licence */", "b.B"))
+    }
+
+    @Test
     fun `each missing import goes right after the existing one sorting just before it, leaving the others in place`() {
         // IntelliJ's layout puts java and kotlin last, so the block as a whole isn't sorted.
         val source = """

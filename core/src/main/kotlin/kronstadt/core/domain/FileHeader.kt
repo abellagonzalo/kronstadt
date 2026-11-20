@@ -17,7 +17,11 @@ public val TextDocument.packageName: String
  */
 internal class FileHeader(
     val packageName: String,
-    /** Offset just past the package directive, else past the last file annotation or the shebang line; null if none. */
+    /**
+     * Offset just past the package directive, else past the last file annotation, else past the last leading comment
+     * a blank line follows (stopping at a KDoc, which documents the declaration below it), else past the shebang line;
+     * null if none.
+     */
     val preambleEnd: Int?,
     /** The import directives in order, with the offsets of `import` and of the directive's end. */
     val imports: List<ScannedImport>,
@@ -42,6 +46,7 @@ private class HeaderScanner(private val text: String) {
             skipLine()
             preambleEnd = i
         }
+        detachedCommentsEnd()?.let { preambleEnd = it }
         skipWhitespace()
         while (peek() == '@') {
             if (!skipFileAnnotation()) return FileHeader("", preambleEnd, emptyList())
@@ -88,6 +93,43 @@ private class HeaderScanner(private val text: String) {
         if (peek() == ';') i++
         skipWhitespace()
         return directive.takeIf { i == text.length }
+    }
+
+    /**
+     * Offset just past the last comment from [i] on that a blank line, or the end of the file, follows; null if none.
+     * Comments with no blank line between them and the next comment or code belong to what follows, and a KDoc documents
+     * the declaration below it, so the scan stops at either. [i] is left where it was.
+     */
+    private fun detachedCommentsEnd(): Int? {
+        val start = i
+        var end: Int? = null
+        while (true) {
+            skipBlanks()
+            if (startsKDoc() || !skipComment()) break
+            if (blankLineFollows()) end = i
+        }
+        i = start
+        return end
+    }
+
+    /** Skips whitespace only, comments not included. */
+    private fun skipBlanks() {
+        while (i < text.length && text[i].isWhitespace()) i++
+    }
+
+    /** Whether a KDoc starts at [i]: a block comment opened with two stars, other than the empty one closed right away. */
+    private fun startsKDoc(): Boolean = text.startsWith("/**", i) && !text.startsWith("/**/", i)
+
+    /** Whether the whitespace from [i] on holds a blank line or runs to the end of the file. [i] doesn't move. */
+    private fun blankLineFollows(): Boolean {
+        var j = i
+        var lineBreaks = 0
+        while (j < text.length && text[j].isWhitespace()) {
+            val crlf = text[j] == '\r' && text.getOrNull(j + 1) == '\n'
+            if (text[j] == '\n' || (text[j] == '\r' && !crlf)) lineBreaks++
+            j++
+        }
+        return lineBreaks >= 2 || j == text.length
     }
 
     /**
@@ -143,11 +185,19 @@ private class HeaderScanner(private val text: String) {
         while (i < text.length) {
             when {
                 text[i].isWhitespace() -> i++
-                text.startsWith("//", i) -> skipLine()
-                text.startsWith("/*", i) -> skipBlockComment()
-                else -> return
+                !skipComment() -> return
             }
         }
+    }
+
+    /** Skips the line or (nested) block comment at [i]; false, with [i] unmoved, if none starts there. */
+    private fun skipComment(): Boolean {
+        when {
+            text.startsWith("//", i) -> skipLine()
+            text.startsWith("/*", i) -> skipBlockComment()
+            else -> return false
+        }
+        return true
     }
 
     private fun skipLine() {

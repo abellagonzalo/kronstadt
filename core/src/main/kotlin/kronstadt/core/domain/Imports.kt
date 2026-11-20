@@ -56,8 +56,9 @@ internal data class LineSplice(val lines: IntRange, val newLines: List<String>)
  * shares a segment with it, it goes into its group of IntelliJ's default layout (others, `java.*`, `javax.*`,
  * `kotlin.*`, then aliased ones): after the last import in an earlier group or sorting before it in its own, else
  * before the first. So a block in that layout, or in sorted groups by package, stays that way. Without an import
- * list, a new one, sorted, goes after the package line (else after the file annotations, else at the top), one blank
- * line from what comes before and after it.
+ * list, a new one, sorted, goes after the package line (else after the file annotations, else after the leading
+ * comments a blank line ends, such as a licence, but above a KDoc or a comment attached to the first declaration, else
+ * after the shebang line, else at the top), one blank line from what comes before and after it.
  */
 internal fun TextDocument.addingImports(imports: List<ImportDirective>): LineSplice? {
     val header = FileHeader.of(text)
