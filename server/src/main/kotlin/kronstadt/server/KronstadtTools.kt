@@ -135,18 +135,27 @@ internal class KronstadtTools(
                 "implementations), using the language server's index. A summary line comes first; then each file (main " +
                 "before test), the canonical Symbol Path containing its Usages (pass it with the file to kt_read_symbol " +
                 "or kt_edit; '(file level)' outside any Symbol) and one line per Usage. Imports are only counted. At most " +
-                "${FindUsages.MAX_USAGES} Usages, whole files only; the files left out are named, pass one as 'file' to see it. Prefer " +
-                "this over grep: it finds real Usages only, not same-named text.",
+                "${FindUsages.MAX_USAGES} Usages, whole files only; the files left out are named, pass one as 'file' to see it. " +
+                "'declaredIn' is the file that declares the Symbol, to resolve it there instead of across the project; " +
+                "'file' only filters which Usages are listed. Prefer this over grep: it finds real Usages only, not " +
+                "same-named text.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
                     stringProperty(
                         "symbol",
-                        "Symbol Path of the Symbol, as kt_read_symbol takes it, resolved across the project, e.g. " +
+                        "Symbol Path of the Symbol, as kt_read_symbol takes it, resolved across the project unless " +
+                            "'declaredIn' is given, e.g. " +
                             "'OrderController/create' or 'com.example.a/Config'.",
                     )
                     stringProperty(
                         "file",
                         "Optional .kt/.kts file, absolute or relative to the project root: list only the Usages in it.",
+                    )
+                    stringProperty(
+                        "declaredIn",
+                        "Optional .kt/.kts file, absolute or relative to the project root, that declares the Symbol: " +
+                            "the Symbol Path is resolved in it, as kt_read_symbol resolves a path with a file, not " +
+                            "across the project. Unlike 'file', it doesn't filter the Usages.",
                     )
                 },
                 required = listOf("symbol"),
@@ -613,14 +622,25 @@ internal class KronstadtTools(
     private suspend fun findUsages(args: JsonObject): CallToolResult {
         val symbol = args.string("symbol") ?: return error("Missing required argument: symbol")
         val file = args.string("file")?.takeIf { it.isNotBlank() }
-        return when (val result = findUsages(symbol, file)) {
+        val declaredIn = args.string("declaredIn")?.takeIf { it.isNotBlank() }
+        return when (val result = findUsages(symbol, file, declaredIn)) {
             is FindUsagesResult.Found -> text(result.text)
             is FindUsagesResult.NoUsages -> text(
                 "No usages of ${result.symbol}" +
                     (if (result.imports > 0) " other than ${result.imports} import${if (result.imports == 1) "" else "s"}" else "") +
                     " (searched ${result.searchedFiles} file${if (result.searchedFiles == 1) "" else "s"})",
             )
-            is FindUsagesResult.LookupFailed -> error(describe(result.failure, "kt_find_usages"))
+            is FindUsagesResult.LookupFailed -> error(
+                describe(
+                    result.failure,
+                    "kt_find_usages",
+                    when (result.argument) {
+                        FindUsagesResult.FileArgument.DECLARED_IN -> "declaredIn"
+                        FindUsagesResult.FileArgument.FILE -> "file"
+                        null -> null
+                    },
+                ),
+            )
             is FindUsagesResult.NotReady -> notReady(result.readiness)
         }
     }

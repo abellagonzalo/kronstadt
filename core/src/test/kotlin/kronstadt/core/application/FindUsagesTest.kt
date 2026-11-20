@@ -96,6 +96,7 @@ class FindUsagesTest {
         references: Map<Pair<Path, Position>, List<SourceLocation>>,
         notReadyPhase: String? = null,
         extra: List<Triple<String, String, CodeSymbol>> = emptyList(),
+        searchCap: Int? = null,
     ): Pair<FakeFileStore, FakeCodeIntelligence> {
         val files = FakeFileStore(
             root,
@@ -117,6 +118,7 @@ class FindUsagesTest {
             symbolsByFile = symbols.mapKeys { (file, _) -> root.resolve(file) },
             index = index,
             references = references,
+            searchCap = searchCap,
         )
         return files to intelligence
     }
@@ -271,10 +273,73 @@ class FindUsagesTest {
     }
 
     @Test
-    fun `a file filter the lookup module rejects is reported as its lookup failure`() = runTest {
+    fun `resolves the Symbol in declaredIn, so a name the index may have cut off is found`() = runTest {
+        // A full page that ends in 'greet': project-wide, the index may have left a declaration out.
+        val (files, intelligence) = project(mapOf(greetName to listOf(ref(callersKt, 4, 25))), searchCap = 1)
+        assertEquals(
+            FindUsagesResult.LookupFailed(LookupFailure.TooManyDeclarations("greet", "greet")),
+            FindUsages(files, intelligence)("greet"),
+        )
+
+        val result = FindUsages(files, intelligence)("greet", declaredIn = greeterKt)
+
+        assertEquals(
+            """
+        |1 usage in 1 file
+        |src/main/kotlin/com/example/Callers.kt
+        |  greeting
+        |    L5: val greeting = Greeter().greet("world")
+        """.trimMargin(),
+            assertIs<FindUsagesResult.Found>(result).text,
+        )
+    }
+
+    @Test
+    fun `with declaredIn and a file filter, resolves in the one and lists only the Usages in the other`() = runTest {
+        val (files, intelligence) = project(
+            mapOf(greetName to listOf(ref(greeterKt, 5, 43), ref(callersKt, 4, 25), ref(helloKts, 2, 18))),
+            searchCap = 1,
+        )
+
+        val result = FindUsages(files, intelligence)("greet", file = helloKts, declaredIn = greeterKt)
+
+        assertEquals(
+            """
+        |1 usage in 1 file
+        |scripts/hello.kts
+        |  (file level)
+        |    L3: println(Greeter().greet("script"))
+        """.trimMargin(),
+            assertIs<FindUsagesResult.Found>(result).text,
+        )
+    }
+
+    @Test
+    fun `a path declaredIn doesn't declare is not found, with close names from that file`() = runTest {
         val (files, intelligence) = project(emptyMap())
 
-        assertEquals(FindUsagesResult.LookupFailed(LookupFailure.NotKotlin("README.md")), FindUsages(files, intelligence)("greet", file = "README.md"))
+        val result = FindUsages(files, intelligence)("Greeter/gret", declaredIn = greeterKt)
+
+        assertEquals(
+            FindUsagesResult.LookupFailed(LookupFailure.NotFound("Greeter/gret", greeterKt, listOf(SymbolCandidate("greet", greeterKt)))),
+            result,
+        )
+    }
+
+    @Test
+    fun `a file filter or declaredIn the lookup module rejects is reported as its lookup failure, naming the argument`() = runTest {
+        val (files, intelligence) = project(emptyMap())
+        val findUsages = FindUsages(files, intelligence)
+        val rejected = listOf(
+            "README.md" to LookupFailure.NotKotlin("README.md"),
+            "../Outside.kt" to LookupFailure.OutsideProject("../Outside.kt"),
+            "src/main/kotlin/Missing.kt" to LookupFailure.FileNotFound("src/main/kotlin/Missing.kt"),
+        )
+
+        rejected.forEach { (path, failure) ->
+            assertEquals(FindUsagesResult.LookupFailed(failure, FindUsagesResult.FileArgument.FILE), findUsages("greet", file = path))
+            assertEquals(FindUsagesResult.LookupFailed(failure, FindUsagesResult.FileArgument.DECLARED_IN), findUsages("greet", declaredIn = path))
+        }
     }
 
     @Test
