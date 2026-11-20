@@ -500,6 +500,13 @@ internal class KronstadtTools(
             "'${failure.symbol}' in ${failure.file} was removed or renamed by an earlier Operation of this Edit; target " +
                 "what that Operation left." +
                 (if (failure.suggestions.isEmpty()) "" else " Close names:\n" + candidates(failure.suggestions, withFiles = false) + "\n")
+        is OperationFailure.RemovedEarlierInFiles -> {
+            val shown = failure.removals.map { it.file }
+            val suggestions = failure.removals.flatMap { it.suggestions }
+            "'${failure.symbol}' was removed or renamed by earlier Operations of this Edit in " +
+                shown.dropLast(1).joinToString(", ") + " and " + shown.last() + "; target what those Operations left." +
+                (if (suggestions.isEmpty()) "" else " Close names:\n" + candidates(suggestions, withFiles = true) + "\n")
+        }
         is OperationFailure.NeedsFile ->
             "'${failure.symbol}' exists only in what earlier Operations of this Edit wrote, and a Symbol Path without a " +
                 "file is looked up on disk; pass its file:\n" + candidates(failure.candidates, withFiles = true) + "\n"

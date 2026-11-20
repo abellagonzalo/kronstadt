@@ -495,6 +495,45 @@ class EditTest {
     }
 
     @Test
+    fun `an Operation without a file whose several disk matches earlier ones all renamed away says so for each file, and nothing is written`() = runTest {
+        val b = "src/B.kt"
+        val c = "src/C.kt"
+        val files = FakeFileStore(root, mapOf(b to source, c to source))
+        val greets = source.replace("    /** Says hi. */\n    fun greet(): String = \"hi\"\n", "    fun greets(): Int = 1\n")
+        val intelligence = FakeCodeIntelligence(
+            symbolsByText = mapOf(
+                source to listOf(greeter(greet, other)),
+                greets to listOf(greeter(symbol("greets", SymbolKind.FUNCTION, range(3, 4, 3, 25), 3, 8, parameterTypes = "", type = "(): Int"), symbol("other", SymbolKind.FUNCTION, range(5, 4, 5, 24), 5, 8, parameterTypes = "", type = "(): Int"), lastLine = 6)),
+            ),
+            index = listOf(b, c).map { SymbolLocation("greet", SymbolKind.FUNCTION, root.resolve(it), greet.range, "Greeter") },
+        )
+
+        val result = edit(intelligence, files)(
+            listOf(
+                Replace(b, "Greeter/greet", "fun greets(): Int = 1"),
+                Replace(c, "Greeter/greet", "fun greets(): Int = 1"),
+                Replace(null, "Greeter/greet", "fun greet() = 1"),
+            ),
+        )
+
+        assertEquals(
+            EditResult.OperationFailed(
+                2,
+                OperationFailure.RemovedEarlierInFiles(
+                    "Greeter/greet",
+                    listOf(
+                        OperationFailure.RemovedEarlierInFiles.Removal(b, listOf(SymbolCandidate("greets", b))),
+                        OperationFailure.RemovedEarlierInFiles.Removal(c, listOf(SymbolCandidate("greets", c))),
+                    ),
+                ),
+            ),
+            result,
+        )
+        assertEquals(emptyList(), files.written)
+        intelligence.assertOneSessionClosedEverything()
+    }
+
+    @Test
     fun `an Operation without a file can't target a Symbol an earlier one created, and is told where to find it`() = runTest {
         val files = FakeFileStore(root, mapOf(path to source))
         val intelligence = batchIntelligence()
