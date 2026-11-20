@@ -26,9 +26,11 @@ import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
 import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.SourceLocation
+import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.SymbolSearch
 import kronstadt.core.domain.TextDocument
+import kronstadt.core.domain.TextRange
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.workspace.LocalFileStore
@@ -56,12 +58,15 @@ class KtEditToolTest {
     /** Queries the index answers possibly incompletely; filled by a test before it calls the tool. */
     private val cutOff = mutableSetOf<String>()
 
+    /** The Symbols every file has; filled by a test before it calls the tool. */
+    private val symbols = mutableListOf<CodeSymbol>()
+
     private val server = Server(
         Implementation(name = "kronstadt-test", version = "0"),
         ServerOptions(capabilities = ServerCapabilities(tools = ServerCapabilities.Tools(listChanged = false))),
     ).also { server ->
         val files = LocalFileStore(root)
-        val intelligence = EmptyIntelligence(organized, cutOff)
+        val intelligence = EmptyIntelligence(organized, cutOff, symbols)
         KronstadtTools(
             ReadStructure(files, intelligence),
             FindSymbol(files, intelligence),
@@ -133,17 +138,35 @@ class KtEditToolTest {
 
     @Test
     fun `an edit_in whose old starts inside a line's indentation fails, naming the line, and writes nothing`() = runTest {
-        file.writeText("package a\n\nfun greet(): Int {\n    return 1\n}\n")
+        val source = "package a\n\nfun greet(): Int {\n    return 1\n}\n"
+        file.writeText(source)
+        symbols += CodeSymbol(
+            "greet",
+            SymbolKind.FUNCTION,
+            TextRange(Position(2, 0), Position(4, 1)),
+            TextRange(Position(2, 4), Position(2, 9)),
+            emptyList(),
+            parameterTypes = "",
+            type = "(): Int",
+        )
 
-        val (failed, text) = ktEdit("""{"operations": [{"type": "edit_in", "file": "A.kt", "old": "  return 1", "new": "  return 2"}]}""")
+        val (inFile, inFileText) = ktEdit("""{"operations": [{"type": "edit_in", "file": "A.kt", "old": "  return 1", "new": "  return 2"}]}""")
+        val (inSymbol, inSymbolText) =
+            ktEdit("""{"operations": [{"type": "edit_in", "file": "A.kt", "symbol": "greet", "old": "  return 1", "new": "  return 2"}]}""")
 
-        assertEquals(true, failed)
+        assertEquals(true, inFile)
         assertEquals(
             "Operation 0: 'old' starts inside line 4's indentation in A.kt; start it at the beginning of the line or after " +
                 "the indentation. Nothing written.",
-            text,
+            inFileText,
         )
-        assertEquals("package a\n\nfun greet(): Int {\n    return 1\n}\n", file.readText())
+        assertEquals(true, inSymbol)
+        assertEquals(
+            "Operation 0: 'old' starts inside line 4's indentation in greet in A.kt; start it at the beginning of the line " +
+                "or after the indentation. Nothing written.",
+            inSymbolText,
+        )
+        assertEquals(source, file.readText())
     }
 
     @Test
@@ -197,13 +220,18 @@ class KtEditToolTest {
 }
 
 /**
- * Always ready, and knows nothing: no Symbols, diagnostics, references or definitions, so every Edit validates.
+ * Always ready, and knows next to nothing: every file has [symbols], and there are no diagnostics, references or
+ * definitions, so every Edit validates.
  * Organize-imports answers [organized] for the exact text, else nothing. A search for a query in [cutOff] may miss
  * symbols named exactly like it, as when the index stops at its maximum.
  */
-private class EmptyIntelligence(private val organized: Map<String, String>, private val cutOff: Set<String>) : CodeIntelligence {
+private class EmptyIntelligence(
+    private val organized: Map<String, String>,
+    private val cutOff: Set<String>,
+    private val symbols: List<CodeSymbol>,
+) : CodeIntelligence {
     override suspend fun <T> session(block: suspend (AnalysisSession) -> T): T = block(object : AnalysisSession {
-        override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> = emptyList()
+        override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> = symbols
         override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> = emptyList()
         override suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation> = emptyList()
         override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> = emptyList()

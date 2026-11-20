@@ -323,7 +323,7 @@ public class Edit(
                 if (at.character > 0 && before.all(::isIndentation) && text.getOrNull(match)?.let(::isIndentation) == true) {
                     return StartsInIndentation(at.line + 1)
                 }
-                val lines = replaced(document.positionOf(match).line..document.positionOf(match + old.length).line)
+                val lines = replaced(at.line..document.positionOf(match + old.length).line)
                 val linesStart = document.offsetOf(Position(lines.first, 0))
                 val linesEnd = document.offsetOf(Position(lines.last, Int.MAX_VALUE))
                 val spliced = text.substring(linesStart, match) + operation.new + text.substring(match + old.length, linesEnd)
@@ -411,9 +411,9 @@ public sealed interface OperationFailure {
     ) : OperationFailure
 
     /**
-     * An `edit_in`'s text starts inside the indentation of [line] (1-based) of [symbol]'s span in [file], or of the
-     * whole file when [symbol] is null: after some of the line's leading whitespace but not all of it. `new` would keep
-     * the leftover indentation on its first line only, so its lines would no longer line up.
+     * An `edit_in`'s text, in [symbol]'s span in [file] or in the whole file when [symbol] is null, starts inside the
+     * indentation of [file]'s [line] (1-based): after some of the line's leading whitespace but not all of it. `new`
+     * would keep the leftover indentation on its first line only, so its lines would no longer line up.
      */
     public data class StartsInIndentation(val symbol: String?, val file: String, val line: Int) : OperationFailure
 
