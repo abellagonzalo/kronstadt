@@ -66,13 +66,13 @@ internal class KronstadtTools(
                 "instead of reading a whole file when you need an overview, then kt_read_symbol what you need.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
-                    stringProperty("filePath", "Path to a .kt/.kts file, absolute or relative to the project root.")
+                    stringProperty("file", "Path to a .kt/.kts file, absolute or relative to the project root.")
                     putJsonObject("formatOutputAsXml") {
                         put("type", "boolean")
                         put("description", "Wrap the result in <file_structure> tags. Default: true.")
                     }
                 },
-                required = listOf("filePath"),
+                required = listOf("file"),
             ),
         ) { request -> handle(request) { readStructure(it) } }
 
@@ -495,7 +495,7 @@ internal class KronstadtTools(
     }
 
     private suspend fun readStructure(args: JsonObject): CallToolResult {
-        val path = args.string("filePath") ?: return error("Missing required argument: filePath")
+        val path = args.string("file") ?: return error("Missing required argument: file")
         val xml = args.boolean("formatOutputAsXml") ?: true
         return when (val result = readStructure(path, xml)) {
             is ReadStructureResult.Structure -> text(result.text)
