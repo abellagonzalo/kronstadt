@@ -86,6 +86,14 @@ internal class ReadinessTracker(private val timeSource: TimeSource.WithComparabl
         }
     }
 
+    /**
+     * Whether the import [FINISHED] and no progress is open right now, without the settle period [awaitReady] adds and
+     * without waiting. For deciding at shutdown whether the index may become the Index Seed (#79), not for tool calls:
+     * the settle period guards tool calls from empty answers between progress runs, while a seed only needs a finished
+     * import, and a seed taken just before a re-import is still a fine warm start.
+     */
+    val indexComplete: Boolean get() = state.value.idle
+
     suspend fun awaitReady(timeout: Duration): Readiness {
         val start = timeSource.markNow()
         if (state.value.ready) return Readiness.Ready

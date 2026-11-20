@@ -11,6 +11,8 @@ import kotlinx.coroutines.test.testTimeSource
 import kronstadt.core.domain.Readiness
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
 class ReadinessTrackerTest {
@@ -106,5 +108,32 @@ class ReadinessTrackerTest {
         tracker.progressEnd("t3")
         tracker.importState("IN_PROGRESS")
         assertEquals(Readiness.NotReady("IN_PROGRESS", 5.seconds), tracker.awaitReady(5.seconds))
+    }
+
+    @Test
+    fun `the index is complete as soon as the import finished and the last progress ended, before readiness settles`() = runTest {
+        val tracker = tracker()
+        tracker.importState("FINISHED")
+        tracker.progressBegin("t1", "Indexing")
+        tracker.progressEnd("t1")
+        delay(ReadinessTracker.SETTLE / 2)
+        assertTrue(tracker.indexComplete)
+        assertEquals(Readiness.NotReady("Indexing", 0.seconds), tracker.awaitReady(0.seconds))
+    }
+
+    @Test
+    fun `the index is not complete while progress is open, even after the import finished`() = runTest {
+        val tracker = tracker()
+        tracker.importState("FINISHED")
+        tracker.progressBegin("t1", "Indexing")
+        assertFalse(tracker.indexComplete)
+    }
+
+    @Test
+    fun `the index is not complete before the import finished, even with all progress ended`() = runTest {
+        val tracker = tracker()
+        tracker.progressBegin("t1", "Importing")
+        tracker.progressEnd("t1")
+        assertFalse(tracker.indexComplete)
     }
 }

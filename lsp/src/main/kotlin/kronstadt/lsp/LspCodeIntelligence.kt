@@ -124,6 +124,9 @@ public class LspCodeIntelligence private constructor(
 
     override suspend fun awaitReady(timeout: Duration): Readiness = readiness.awaitReady(timeout)
 
+    /** Whether kotlin-lsp's index may become the Index Seed now; see [ReadinessTracker.indexComplete]. */
+    public val indexComplete: Boolean get() = readiness.indexComplete
+
     /** The readiness signals kotlin-lsp sends from here on; see [ReadinessTracker.signals]. */
     internal val readinessSignals: SharedFlow<ReadinessSignal> get() = readiness.signals
 

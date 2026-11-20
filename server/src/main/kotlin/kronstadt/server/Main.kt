@@ -23,7 +23,6 @@ import kronstadt.core.application.ReadStructure
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.RenameSymbol
 import kronstadt.core.application.WriteLock
-import kronstadt.core.domain.Readiness
 import kronstadt.lsp.LspCodeIntelligence
 import kronstadt.workspace.DetachedSeedRefresh
 import kronstadt.workspace.IndexDirectories
@@ -34,7 +33,6 @@ import kronstadt.workspace.Seeding
 import kronstadt.workspace.WorktreeIndex
 import java.io.PrintStream
 import kotlin.system.exitProcess
-import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 
 internal const val VERSION = "0.1.0"
@@ -141,15 +139,24 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
 private fun handOff(languageServer: Deferred<Result<LspCodeIntelligence>>, worktreeIndex: Deferred<WorktreeIndex>) {
     if (!languageServer.isCompleted || languageServer.isCancelled) return
     val started = runBlocking { languageServer.await() }.getOrNull() ?: return
-    val ready = runBlocking { started.awaitReady(Duration.ZERO) } == Readiness.Ready
+    val indexComplete = started.indexComplete
     val answered = started.requestExit(HAND_OFF_ANSWER_WAIT)
-    val message = when {
-        !ready -> "Index Seed not refreshed: kotlin-lsp had not finished indexing"
-        !answered -> "Index Seed not refreshed: kotlin-lsp did not answer shutdown"
-        else -> when (val start = DetachedSeedRefresh.start(started.processHandle, runBlocking { worktreeIndex.await() })) {
+    val message = handOffMessage(indexComplete, answered) {
+        DetachedSeedRefresh.start(started.processHandle, runBlocking { worktreeIndex.await() })
+    }
+    System.err.println("kronstadt: $message")
+}
+
+/**
+ * What [handOff] did with the Index Seed: [refresh] runs only if kotlin-lsp's index was complete when Kronstadt began
+ * ending it (see [LspCodeIntelligence.indexComplete]; no readiness settle period, #79) and it answered `shutdown`.
+ */
+internal fun handOffMessage(indexComplete: Boolean, answeredShutdown: Boolean, refresh: () -> SeedRefreshStart): String =
+    when {
+        !indexComplete -> "Index Seed not refreshed: kotlin-lsp had not finished indexing"
+        !answeredShutdown -> "Index Seed not refreshed: kotlin-lsp did not answer shutdown"
+        else -> when (val start = refresh()) {
             is SeedRefreshStart.Started -> "refreshing the Index Seed once kotlin-lsp exits, in the background; see ${start.log}"
             is SeedRefreshStart.Skipped -> "Index Seed not refreshed: ${start.reason}"
         }
     }
-    System.err.println("kronstadt: $message")
-}
