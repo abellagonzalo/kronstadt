@@ -160,6 +160,40 @@ public class Edit(
         data class Failed(val failure: OperationFailure) : Applied
     }
 
+    private sealed interface Located {
+        data class In(val file: Path) : Located
+        data class Failed(val failure: OperationFailure) : Located
+    }
+
+    /**
+     * The file of [parsed], which has none. The project lookup sees only the disk, so its candidates in files this Edit
+     * has edited give way to those in their current text ([ShadowWorkspace.findInEdited]). One candidate left is the
+     * target if the disk has it too, else it needs its file; several are ambiguous. None leaves the disk lookup's answer:
+     * a Symbol it found in an edited file is then said to be removed earlier.
+     */
+    private suspend fun locate(session: AnalysisSession, shadow: ShadowWorkspace, parsed: ParsedLookup): Located {
+        val lookup = resolver.resolve(session, parsed)
+        val onDisk: List<Pair<SymbolCandidate, Path?>> = when (lookup) {
+            is Outcome.Ok -> listOf(SymbolCandidate(lookup.value.canonical, files.display(lookup.value.file)) to lookup.value.file)
+            is Outcome.Failed -> when (val failure = lookup.failure) {
+                is LookupFailure.Ambiguous -> failure.candidates.map { it to files.resolve(it.file) }
+                is LookupFailure.NotFound -> emptyList()
+                else -> return Located.Failed(OperationFailure.LookupFailed(failure))
+            }
+        }
+        val candidates = onDisk.filterNot { (_, file) -> file != null && shadow.isEdited(file) }.map { it.first } + shadow.findInEdited(parsed)
+        val candidate = candidates.singleOrNull()
+        return when {
+            candidates.size > 1 -> Located.Failed(OperationFailure.LookupFailed(LookupFailure.Ambiguous(parsed.symbol, null, candidates)))
+            candidate != null -> onDisk.firstOrNull { (shown, _) -> shown.file == candidate.file }?.second
+                ?.let { Located.In(it) }
+                ?: Located.Failed(OperationFailure.NeedsFile(parsed.symbol, candidates))
+            lookup is Outcome.Ok -> Located.In(lookup.value.file)
+            lookup is Outcome.Failed && lookup.failure is LookupFailure.NotFound -> Located.Failed(OperationFailure.LookupFailed(lookup.failure))
+            else -> Located.Failed(OperationFailure.LookupFailed(LookupFailure.NotFound(parsed.symbol, null, emptyList())))
+        }
+    }
+
     /**
      * Resolves [operation]'s Symbol against the Shadow Workspace's current text and changes the lines around its span;
      * new code is re-indented to the span's column, except an [EditIn]'s. An [EditIn] without a Symbol works on its
@@ -168,15 +202,12 @@ public class Edit(
     private suspend fun apply(session: AnalysisSession, shadow: ShadowWorkspace, operation: Operation, parsed: ParsedLookup?): Applied {
         if (parsed == null) return if (operation is Create) create(shadow, operation) else applyToFile(shadow, operation as EditIn)
         // Without a file, the Symbol Path is resolved project-wide only to find its file; it is resolved again in the
-        // Shadow Workspace, against the text the earlier Operations left. The project index sees only the disk, so a
-        // Symbol that exists only in that text needs its file.
+        // Shadow Workspace, against the text the earlier Operations left.
         val file = parsed.file?.let { path -> classify(shadow, path).getOrElse { return Applied.Failed(OperationFailure.LookupFailed(it)) } }
-            ?: resolver.resolve(session, parsed).getOrElse { failure ->
-                val inEdit = if (failure is LookupFailure.NotFound) shadow.findInEdited(parsed) else emptyList()
-                return Applied.Failed(
-                    if (inEdit.isNotEmpty()) OperationFailure.NeedsFile(parsed.symbol, inEdit) else OperationFailure.LookupFailed(failure),
-                )
-            }.file
+            ?: when (val located = locate(session, shadow, parsed)) {
+                is Located.In -> located.file
+                is Located.Failed -> return Applied.Failed(located.failure)
+            }
         val shown = files.display(file)
         val found = when (val lookup = shadow.resolve(file, parsed)) {
             is ShadowWorkspace.Lookup.Found -> lookup

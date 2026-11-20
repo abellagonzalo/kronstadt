@@ -124,6 +124,9 @@ internal class ShadowWorkspace(
         return !(resolution is Outcome.Failed && resolution.failure is LookupFailure.NotFound)
     }
 
+    /** Whether an Operation of this Edit has changed [file], so that its current text, not the disk's, is what counts. */
+    fun isEdited(file: Path): Boolean = touched[file]?.isEdited == true
+
     /**
      * Where [parsed] is in the current text of the files this Edit has edited, in its package if it names one: what
      * a project-wide lookup, which sees only the disk, can't find.

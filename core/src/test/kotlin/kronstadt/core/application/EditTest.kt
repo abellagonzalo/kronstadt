@@ -457,6 +457,86 @@ class EditTest {
         intelligence.assertOneSessionClosedEverything()
     }
 
+    private fun hiAt(file: String) = SymbolLocation("hi", SymbolKind.FUNCTION, root.resolve(file), range(3, 4, 3, 21), "Greeter")
+
+    @Test
+    fun `an Operation without a file whose Symbol is on disk in an unedited file and was made earlier in another is ambiguous between both`() = runTest {
+        val b = "src/B.kt"
+        val files = FakeFileStore(root, mapOf(path to source, b to renamed))
+        val intelligence = batchIntelligence(index = listOf(hiAt(b)))
+
+        val result = edit(intelligence, files)(
+            listOf(Replace(path, "Greeter/greet", "fun hi(): Int = 1"), Replace(null, "Greeter/hi", "fun hi(): Int = 2")),
+        )
+
+        assertEquals(
+            EditResult.OperationFailed(1, OperationFailure.LookupFailed(LookupFailure.Ambiguous("Greeter/hi", null, listOf(SymbolCandidate("hi", b), SymbolCandidate("hi", path))))),
+            result,
+        )
+        assertEquals(emptyList(), files.written)
+        intelligence.assertOneSessionClosedEverything()
+    }
+
+    @Test
+    fun `an Operation without a file whose Symbol is in a file an earlier one edited resolves against that file's current text`() = runTest {
+        val files = FakeFileStore(root, mapOf(path to source))
+        val intelligence = batchIntelligence(index = listOf(SymbolLocation("greet", SymbolKind.FUNCTION, root.resolve(path), greet.range, "Greeter")))
+
+        val result = edit(intelligence, files)(
+            listOf(
+                Replace(path, "Greeter/other", "fun other(): Int = 1"),
+                Replace(null, "Greeter/greet", "fun greet(): String =\n    \"hello\""),
+            ),
+        )
+
+        assertIs<EditResult.Written>(result)
+        assertEquals(hello, files.content(path))
+        intelligence.assertOneSessionClosedEverything()
+    }
+
+    @Test
+    fun `an Operation without a file whose Symbol an earlier one renamed away on disk and made in another file needs that file`() = runTest {
+        val b = "src/B.kt"
+        val files = FakeFileStore(root, mapOf(path to source, b to renamed))
+        val intelligence = batchIntelligence(index = listOf(hiAt(b)))
+
+        val result = edit(intelligence, files)(
+            listOf(
+                Replace(b, "Greeter/hi", "/** Says hi. */\nfun greet(): String = \"hi\""),
+                Replace(path, "Greeter/greet", "fun hi(): Int = 1"),
+                Replace(null, "Greeter/hi", "fun hi(): Int = 2"),
+            ),
+        )
+
+        assertEquals(EditResult.OperationFailed(2, OperationFailure.NeedsFile("Greeter/hi", listOf(SymbolCandidate("hi", path)))), result)
+        assertEquals(emptyList(), files.written)
+        intelligence.assertOneSessionClosedEverything()
+    }
+
+    @Test
+    fun `an Operation without a file ambiguous on disk also lists the Symbol an earlier one made`() = runTest {
+        val b = "src/B.kt"
+        val c = "src/C.kt"
+        val files = FakeFileStore(root, mapOf(path to source, b to renamed, c to renamed))
+        val intelligence = batchIntelligence(index = listOf(hiAt(b), hiAt(c)))
+
+        val result = edit(intelligence, files)(
+            listOf(Replace(path, "Greeter/greet", "fun hi(): Int = 1"), Replace(null, "Greeter/hi", "fun hi(): Int = 2")),
+        )
+
+        assertEquals(
+            EditResult.OperationFailed(
+                1,
+                OperationFailure.LookupFailed(
+                    LookupFailure.Ambiguous("Greeter/hi", null, listOf(SymbolCandidate("hi", b), SymbolCandidate("hi", c), SymbolCandidate("hi", path))),
+                ),
+            ),
+            result,
+        )
+        assertEquals(emptyList(), files.written)
+        intelligence.assertOneSessionClosedEverything()
+    }
+
     @Test
     fun `a Write-back that fails part-way reports what was written, and still closes every document`() = runTest {
         val other = "src/B.kt"
