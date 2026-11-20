@@ -316,6 +316,7 @@ internal class KronstadtTools(
     private suspend fun edit(args: JsonObject): CallToolResult {
         val operations = args["operations"] as? JsonArray ?: return error("Missing required argument: operations (an array)")
         if (operations.isEmpty()) return error("kt_edit needs at least one Operation. Nothing written.")
+        // Each Operation with its type as the agent named it, for the messages of its failures.
         val parsed = operations.mapIndexed { index, element ->
             val operation = element as? JsonObject ?: return error("Operation $index must be an object. Nothing written.")
             val type = operation.string("type") ?: return error("Operation $index: missing 'type'. Nothing written.")
@@ -329,7 +330,7 @@ internal class KronstadtTools(
                 is JsonArray -> raw.map { element -> (element as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return notStrings }
                 else -> return notStrings
             }
-            when (type) {
+            type to when (type) {
                 "replace" -> Replace(file, symbol ?: return missing("'symbol'"), code ?: return missing("'code'"), imports)
                 "insert_before" -> InsertBefore(file, symbol ?: return missing("'symbol'"), code ?: return missing("'code'"), imports)
                 "insert_after" -> InsertAfter(file, symbol ?: return missing("'symbol'"), code ?: return missing("'code'"), imports)
@@ -349,7 +350,7 @@ internal class KronstadtTools(
                 )
             }
         }
-        return when (val result = edit(parsed)) {
+        return when (val result = edit(parsed.map { it.second })) {
             is EditResult.Written -> text(result.files.joinToString("\n") { written(it) })
             is EditResult.Rejected -> error(
                 buildString {
@@ -367,10 +368,8 @@ internal class KronstadtTools(
             )
             EditResult.ValidationTimedOut -> error("validation timed out; nothing written")
             is EditResult.NotReady -> notReady(result.readiness)
-            is EditResult.OperationFailed -> {
-                val type = (operations[result.index] as JsonObject).string("type")
-                error("Operation ${result.index}: ${failure(result.failure, type)} Nothing written.")
-            }
+            is EditResult.OperationFailed ->
+                error("Operation ${result.index}: ${failure(result.failure, parsed[result.index].first)} Nothing written.")
         }
     }
 
@@ -470,7 +469,7 @@ internal class KronstadtTools(
     }
 
     /** Why an Operation of [type], as the agent named it, can't be applied. */
-    private fun failure(failure: OperationFailure, type: String?): String = when (failure) {
+    private fun failure(failure: OperationFailure, type: String): String = when (failure) {
         is OperationFailure.LookupFailed -> sentence(describe(failure.failure, "kt_edit"))
         is OperationFailure.RemovedEarlier ->
             "'${failure.symbol}' in ${failure.file} was removed or renamed by an earlier Operation of this Edit; target " +
