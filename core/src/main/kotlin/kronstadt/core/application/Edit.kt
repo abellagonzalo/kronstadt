@@ -121,6 +121,14 @@ public class Edit(
                 ImportDirective.parse(raw).getOrElse { return EditResult.OperationFailed(index, OperationFailure.InvalidImport(raw)) }
             }
         }
+        operations.forEachIndexed { index, operation ->
+            val inserted = when (operation) {
+                is InsertBefore -> operation.code
+                is InsertAfter -> operation.code
+                else -> return@forEachIndexed
+            }
+            if (inserted.isBlank()) return EditResult.OperationFailed(index, OperationFailure.BlankCode)
+        }
         return writeLock.withLock {
             val readiness = intelligence.awaitReady(readinessTimeout)
             if (readiness is Readiness.NotReady) return@withLock EditResult.NotReady(readiness)
@@ -412,4 +420,7 @@ public sealed interface OperationFailure {
 
     /** [import] isn't one import directive: a dotted name, optionally ending in `.*` or `as Alias`. */
     public data class InvalidImport(val import: String) : OperationFailure
+
+    /** An `insert_before` or `insert_after` whose code has no non-blank line, so it would insert nothing. */
+    public data object BlankCode : OperationFailure
 }
