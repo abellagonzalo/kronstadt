@@ -141,4 +141,47 @@ class EditInTest {
         )
         assertEquals(source, files.content(path))
     }
+
+    @Test
+    fun `edit_in whose text starts inside a line's indentation rejects the Edit, naming the line`() = runTest {
+        // greet()'s body is indented 4 spaces; this 'old' starts after 2 of them.
+        val (result, files) = run(emptyMap(), EditIn(path, "greet", old = "  val n = 1\n", new = "  val m = 1\n  val n = m\n"))
+
+        assertEquals(EditResult.OperationFailed(0, OperationFailure.StartsInIndentation("greet", path, 6)), result)
+        assertEquals(source, files.content(path))
+    }
+
+    @Test
+    fun `edit_in on a whole file whose text starts inside a line's indentation rejects the Edit too`() = runTest {
+        val (result, files) = run(emptyMap(), EditIn(path, null, old = "  return n\n}\n\nfun other", new = "  return 2\n}\n\nfun other"))
+
+        assertEquals(EditResult.OperationFailed(0, OperationFailure.StartsInIndentation(null, path, 7)), result)
+        assertEquals(source, files.content(path))
+    }
+
+    @Test
+    fun `edit_in whose text starts at the beginning of an indented line splices it as written`() = runTest {
+        val expected = source.replaceFirst("    val n = 1\n", "    val m = 1\n    val n = m\n")
+        val texts = mapOf(expected to listOf(function("greet", 4, 8), function("other", 10, 13)))
+
+        val (result, files) = run(texts, EditIn(path, "greet", old = "    val n = 1\n", new = "    val m = 1\n    val n = m\n"))
+
+        assertEquals(expected, files.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 5, 9)), emptyList(), 0, 0))), result)
+    }
+
+    @Test
+    fun `edit_in whose text starts after the indentation or mid-line splices it as written`() = runTest {
+        val expected = source.replaceFirst("    val n = 1\n    return n\n", "    val m = 1\n    return m + 1\n")
+        val texts = mapOf(expected to symbols)
+
+        val (result, files) = run(
+            texts,
+            EditIn(path, "greet", old = "val n = 1\n", new = "val m = 1\n"),
+            EditIn(path, "greet", old = "n\n}", new = "m + 1\n}"),
+        )
+
+        assertEquals(expected, files.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 5, 8)), emptyList(), 0, 0))), result)
+    }
 }

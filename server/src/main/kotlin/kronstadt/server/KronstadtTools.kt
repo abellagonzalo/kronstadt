@@ -199,7 +199,8 @@ internal class KronstadtTools(
                 "('insert_before' goes above its KDoc and annotations). 'delete' removes the whole span and one " +
                 "blank line next to it. Code is re-indented to the target's column, so indentation needn't match. " +
                 "'edit_in' replaces 'old', which must occur exactly once in the Symbol's span (whitespace included, " +
-                "no regex or fuzzy matching), with 'new' as written (only its line breaks become the file's); it " +
+                "no regex or fuzzy matching) and must not start inside a line's indentation, with 'new' as written " +
+                "(only its line breaks become the file's); it " +
                 "changes one line of a large Symbol cheaply. " +
                 "With a file and no symbol, 'edit_in' works on the whole file: the only way to change text outside " +
                 "any Symbol, such as the package line, file annotations or imports. " +
@@ -484,6 +485,9 @@ internal class KronstadtTools(
                     failure.lines.joinToString("\n") { "  L${it.line}: ${it.source}" } + "\n"
             }
         }
+        is OperationFailure.StartsInIndentation ->
+            "'old' starts inside line ${failure.line}'s indentation in " + (failure.symbol?.let { "$it in " } ?: "") + failure.file +
+                "; start it at the beginning of the line or after the indentation."
         is OperationFailure.FileExists ->
             if (failure.inEdit) {
                 "An earlier Operation of this Edit already created or changed ${failure.file}; 'create' makes a file that " +

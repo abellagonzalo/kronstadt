@@ -132,6 +132,21 @@ class KtEditToolTest {
     }
 
     @Test
+    fun `an edit_in whose old starts inside a line's indentation fails, naming the line, and writes nothing`() = runTest {
+        file.writeText("package a\n\nfun greet(): Int {\n    return 1\n}\n")
+
+        val (failed, text) = ktEdit("""{"operations": [{"type": "edit_in", "file": "A.kt", "old": "  return 1", "new": "  return 2"}]}""")
+
+        assertEquals(true, failed)
+        assertEquals(
+            "Operation 0: 'old' starts inside line 4's indentation in A.kt; start it at the beginning of the line or after " +
+                "the indentation. Nothing written.",
+            text,
+        )
+        assertEquals("package a\n\nfun greet(): Int {\n    return 1\n}\n", file.readText())
+    }
+
+    @Test
     fun `a Symbol Path without a file fails, asking for the file, when the index may not list every declaration of its name`() = runTest {
         cutOff += "greet"
         val before = file.readText()
