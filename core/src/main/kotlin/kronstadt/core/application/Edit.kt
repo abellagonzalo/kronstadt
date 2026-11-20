@@ -201,7 +201,7 @@ public class Edit(
      * The file of [parsed], which has none. The project lookup sees only the disk, so its candidates in files this Edit
      * has edited give way to those in their current text ([ShadowWorkspace.findInEdited]). One candidate left is the
      * target if the disk has it too, else it needs its file; several are ambiguous. None leaves the disk lookup's answer:
-     * a Symbol it found in an edited file is then said to be removed earlier.
+     * a Symbol it found in an edited file, or in several that all were, is then said to be removed earlier.
      */
     private suspend fun locate(session: AnalysisSession, shadow: ShadowWorkspace, parsed: ParsedLookup): Located {
         val lookup = resolver.resolve(session, parsed)
@@ -222,7 +222,32 @@ public class Edit(
                 ?: Located.Failed(OperationFailure.NeedsFile(parsed.symbol, candidates))
             lookup is Outcome.Ok -> Located.In(lookup.value.file)
             lookup is Outcome.Failed && lookup.failure is LookupFailure.NotFound -> Located.Failed(OperationFailure.LookupFailed(lookup.failure))
-            else -> Located.Failed(OperationFailure.LookupFailed(LookupFailure.NotFound(parsed.symbol, null, emptyList())))
+            else -> Located.Failed(
+                removedEarlier(shadow, parsed, onDisk)
+                    ?: OperationFailure.LookupFailed(LookupFailure.NotFound(parsed.symbol, null, emptyList())),
+            )
+        }
+    }
+
+    /**
+     * The failure for [parsed] when earlier Operations removed or renamed it in every file of [onDisk], its matches on
+     * disk, each named with close names in its current text: [OperationFailure.RemovedEarlier] if they're all in one file.
+     * Null if there are none, or any is still there or unreadable.
+     */
+    private suspend fun removedEarlier(
+        shadow: ShadowWorkspace,
+        parsed: ParsedLookup,
+        onDisk: List<Pair<SymbolCandidate, Path?>>,
+    ): OperationFailure? {
+        val removals = onDisk.distinctBy { (shown, _) -> shown.file }.map { (shown, file) ->
+            val removed = file?.let { shadow.resolve(it, parsed) } as? ShadowWorkspace.Lookup.RemovedEarlier ?: return null
+            OperationFailure.RemovedEarlierInFiles.Removal(shown.file, removed.suggestions)
+        }
+        val only = removals.singleOrNull()
+        return when {
+            removals.isEmpty() -> null
+            only != null -> OperationFailure.RemovedEarlier(parsed.symbol, only.file, only.suggestions)
+            else -> OperationFailure.RemovedEarlierInFiles(parsed.symbol, removals)
         }
     }
 
@@ -435,6 +460,15 @@ public sealed interface OperationFailure {
      * close names in what the earlier Operations left.
      */
     public data class RemovedEarlier(val symbol: String, val file: String, val suggestions: List<SymbolCandidate>) : OperationFailure
+
+    /**
+     * [symbol], passed without a file, is in two or more files on disk, but earlier Operations of this Edit removed or renamed
+     * it in every one of them; each of [removals] names one such file with close names in what those Operations left.
+     */
+    public data class RemovedEarlierInFiles(val symbol: String, val removals: List<Removal>) : OperationFailure {
+        /** [file] no longer has the Symbol; [suggestions] are close names in its current text. */
+        public data class Removal(val file: String, val suggestions: List<SymbolCandidate>)
+    }
 
     /**
      * [symbol], passed without a file, isn't on disk but is in the text earlier Operations of this Edit left, at

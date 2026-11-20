@@ -65,12 +65,18 @@ class KtEditToolTest {
     /** Diagnostics by exact text; filled by a test before it calls the tool. */
     private val diagnostics = mutableMapOf<String, List<Diagnostic>>()
 
+    /** The Symbols of a file with exactly this text, instead of [symbols]; filled by a test before it calls the tool. */
+    private val symbolsByText = mutableMapOf<String, List<CodeSymbol>>()
+
+    /** What the project index lists; filled by a test before it calls the tool. */
+    private val index = mutableListOf<SymbolLocation>()
+
     private val server = Server(
         Implementation(name = "kronstadt-test", version = "0"),
         ServerOptions(capabilities = ServerCapabilities(tools = ServerCapabilities.Tools(listChanged = false))),
     ).also { server ->
         val files = LocalFileStore(root)
-        val intelligence = EmptyIntelligence(organized, cutOff, symbols, diagnostics)
+        val intelligence = EmptyIntelligence(organized, cutOff, symbols, diagnostics, symbolsByText, index)
         KronstadtTools(
             ReadStructure(files, intelligence),
             FindSymbol(files, intelligence),
@@ -306,11 +312,38 @@ class KtEditToolTest {
         assertEquals(before, file.readText())
         assertEquals(listOf("A.kt"), root.listDirectoryEntries().map { it.name })
     }
+
+    @Test
+    fun `a Symbol Path without a file that earlier Operations renamed away in each of its files fails, naming each with its close names`() = runTest {
+        val source = "package a\n\nfun greet(): Int = 1\n"
+        val greets = "package a\n\nfun greets(): Int = 1\n"
+        val files = listOf("B.kt", "C.kt").map { root.resolve(it).apply { writeText(source) } }
+        val greet = CodeSymbol("greet", SymbolKind.FUNCTION, TextRange(Position(2, 0), Position(2, 20)), TextRange(Position(2, 4), Position(2, 9)), emptyList(), parameterTypes = "", type = "(): Int")
+        symbolsByText[source] = listOf(greet)
+        symbolsByText[greets] = listOf(
+            CodeSymbol("greets", SymbolKind.FUNCTION, TextRange(Position(2, 0), Position(2, 21)), TextRange(Position(2, 4), Position(2, 10)), emptyList(), parameterTypes = "", type = "(): Int"),
+        )
+        index += files.map { SymbolLocation("greet", SymbolKind.FUNCTION, it, greet.range) }
+
+        val (failed, text) = ktEdit(
+            """{"operations": [{"type": "replace", "file": "B.kt", "symbol": "greet", "code": "fun greets(): Int = 1"}, """ +
+                """{"type": "replace", "file": "C.kt", "symbol": "greet", "code": "fun greets(): Int = 1"}, """ +
+                """{"type": "replace", "symbol": "greet", "code": "fun greet(): Int = 2"}]}""",
+        )
+
+        assertEquals(true, failed)
+        assertEquals(
+            "Operation 2: 'greet' was removed or renamed by earlier Operations of this Edit in B.kt and C.kt; target what " +
+                "those Operations left. Close names:\n  greets — B.kt\n  greets — C.kt\n Nothing written.",
+            text,
+        )
+        assertEquals(listOf(source, source), files.map { it.readText() })
+    }
 }
 
 /**
- * Always ready, and knows next to nothing: every file has [symbols], and there are no diagnostics, references or
- * definitions, so every Edit validates.
+ * Always ready, and knows next to nothing: every file has [symbols] unless [symbolsByText] has its exact text, the
+ * project index lists only [index], and there are no diagnostics, references or definitions, so every Edit validates.
  * Organize-imports answers [organized] for the exact text, else nothing. A search for a query in [cutOff] may miss
  * symbols named exactly like it, as when the index stops at its maximum.
  */
@@ -320,9 +353,13 @@ private class EmptyIntelligence(
     private val symbols: List<CodeSymbol>,
     /** Diagnostics by exact text; none for any other. */
     private val diagnostics: Map<String, List<Diagnostic>> = emptyMap(),
+    /** The Symbols of a file with exactly this text, instead of [symbols]. */
+    private val symbolsByText: Map<String, List<CodeSymbol>> = emptyMap(),
+    /** What the project index lists; a search finds those whose name contains its query. */
+    private val index: List<SymbolLocation> = emptyList(),
 ) : CodeIntelligence {
     override suspend fun <T> session(block: suspend (AnalysisSession) -> T): T = block(object : AnalysisSession {
-        override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> = symbols
+        override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> = symbolsByText[document.text] ?: symbols
         override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> = diagnostics[document.text].orEmpty()
         override suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation> = emptyList()
         override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> = emptyList()
@@ -333,6 +370,6 @@ private class EmptyIntelligence(
     })
 
     override suspend fun workspaceSymbols(query: String): SymbolSearch =
-        SymbolSearch(emptyList(), if (query in cutOff) SymbolSearch.Completeness.INCOMPLETE else SymbolSearch.Completeness.COMPLETE)
+        SymbolSearch(index.filter { it.name.contains(query, ignoreCase = true) }, if (query in cutOff) SymbolSearch.Completeness.INCOMPLETE else SymbolSearch.Completeness.COMPLETE)
     override suspend fun awaitReady(timeout: Duration): Readiness = Readiness.Ready
 }
