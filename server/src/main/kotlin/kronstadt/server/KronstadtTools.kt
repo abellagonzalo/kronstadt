@@ -22,6 +22,7 @@ import kronstadt.core.application.Create
 import kronstadt.core.application.Delete
 import kronstadt.core.application.Edit
 import kronstadt.core.application.EditIn
+import kronstadt.core.application.EditInScope
 import kronstadt.core.application.EditResult
 import kronstadt.core.application.EditedFile
 import kronstadt.core.application.FindSymbol
@@ -199,8 +200,8 @@ internal class KronstadtTools(
                 "('insert_before' goes above its KDoc and annotations). 'delete' removes the whole span and one " +
                 "blank line next to it. Code is re-indented to the target's column, so indentation needn't match. " +
                 "'edit_in' replaces 'old', which must occur exactly once in the Symbol's span (whitespace included, " +
-                "no regex or fuzzy matching), with 'new' as written (only its line breaks become the file's); it " +
-                "changes one line of a large Symbol cheaply. " +
+                "no regex or fuzzy matching) and must not start inside a line's indentation, with 'new' as written " +
+                "(only its line breaks become the file's); it changes one line of a large Symbol cheaply. " +
                 "With a file and no symbol, 'edit_in' works on the whole file: the only way to change text outside " +
                 "any Symbol, such as the package line, file annotations or imports. " +
                 "'create' makes a new .kt/.kts file, 'file', with 'code' as its whole text (only its line breaks become " +
@@ -475,15 +476,18 @@ internal class KronstadtTools(
             "'${failure.symbol}' exists only in what earlier Operations of this Edit wrote, and a Symbol Path without a " +
                 "file is looked up on disk; pass its file:\n" + candidates(failure.candidates, withFiles = true) + "\n"
         is OperationFailure.NotExactlyOnce -> {
-            val where = (failure.symbol?.let { "$it in " } ?: "") + failure.file
+            val where = where(failure.scope)
             if (failure.lines.isEmpty()) {
                 "'old' doesn't occur in $where, exactly as written (whitespace included). " +
-                    (if (failure.symbol == null) "Read the file to copy it." else "Use kt_read_symbol to see its source.")
+                    (if (failure.scope.wholeFile) "Read the file to copy it." else "Use kt_read_symbol to see its source.")
             } else {
                 "'old' occurs ${failure.count} times in $where; make it longer so it occurs exactly once:\n" +
                     failure.lines.joinToString("\n") { "  L${it.line}: ${it.source}" } + "\n"
             }
         }
+        is OperationFailure.StartsInIndentation ->
+            "'old' starts inside line ${failure.line}'s indentation in ${where(failure.scope)}; start it at the beginning of " +
+                "the line or after the indentation."
         is OperationFailure.FileExists ->
             if (failure.inEdit) {
                 "An earlier Operation of this Edit already created or changed ${failure.file}; 'create' makes a file that " +
@@ -495,6 +499,9 @@ internal class KronstadtTools(
             "'${failure.import}' is not an import directive; give a dotted name, optionally ending in '.*' or 'as Alias', " +
                 "e.g. 'kotlin.time.Duration'."
     }
+
+    /** An `edit_in`'s [scope] as the agent named it: the Symbol and its file, or just the file. */
+    private fun where(scope: EditInScope) = (scope.symbol?.let { "$it in " } ?: "") + scope.file
 
     private suspend fun readStructure(args: JsonObject): CallToolResult {
         val path = args.string("file") ?: return error("Missing required argument: file")

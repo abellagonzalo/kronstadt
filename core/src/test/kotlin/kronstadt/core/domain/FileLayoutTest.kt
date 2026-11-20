@@ -71,4 +71,11 @@ class FileLayoutTest {
         val expected = "\tfun usage() = print(\n\t\t\"\"\"Usage:  \n  --projects <dir>  \n   \n\t--tab\"\"\" + x,\n\t)"
         assertEquals(expected, layoutOf("class A {\n\tval a = 1\n}").reindent(code, "\t"))
     }
+
+    @Test
+    fun `a column is inside a line's indent after some of its spaces and tabs, not none or all of them`() {
+        assertEquals(listOf(false, true, true, true, false, false), (0..5).map { FileLayout.isInsideIndent("  \t x", it) })
+        assertEquals(true, FileLayout.isInsideIndent("    ", 2))
+        assertEquals(false, FileLayout.isInsideIndent("", 0))
+    }
 }
