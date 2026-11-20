@@ -367,7 +367,10 @@ internal class KronstadtTools(
             )
             EditResult.ValidationTimedOut -> error("validation timed out; nothing written")
             is EditResult.NotReady -> notReady(result.readiness)
-            is EditResult.OperationFailed -> error("Operation ${result.index}: ${failure(result.failure)} Nothing written.")
+            is EditResult.OperationFailed -> {
+                val type = (operations[result.index] as JsonObject).string("type")
+                error("Operation ${result.index}: ${failure(result.failure, type)} Nothing written.")
+            }
         }
     }
 
@@ -466,7 +469,8 @@ internal class KronstadtTools(
         append("      ").append(problem.source).append('\n')
     }
 
-    private fun failure(failure: OperationFailure): String = when (failure) {
+    /** Why an Operation of [type], as the agent named it, can't be applied. */
+    private fun failure(failure: OperationFailure, type: String?): String = when (failure) {
         is OperationFailure.LookupFailed -> sentence(describe(failure.failure, "kt_edit"))
         is OperationFailure.RemovedEarlier ->
             "'${failure.symbol}' in ${failure.file} was removed or renamed by an earlier Operation of this Edit; target " +
@@ -498,7 +502,7 @@ internal class KronstadtTools(
         is OperationFailure.InvalidImport ->
             "'${failure.import}' is not an import directive; give a dotted name, optionally ending in '.*' or 'as Alias', " +
                 "e.g. 'kotlin.time.Duration'."
-        is OperationFailure.EmptyCode -> "'${failure.operation}' needs code with at least one non-blank line."
+        OperationFailure.BlankCode -> "'$type' needs code with at least one non-blank line."
     }
 
     /** An `edit_in`'s [scope] as the agent named it: the Symbol and its file, or just the file. */

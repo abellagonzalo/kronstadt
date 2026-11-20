@@ -111,8 +111,8 @@ class InsertAndDeleteTest {
             val (before, beforeFiles) = run(texts, InsertBefore(path, "Greeter/greet", code))
             val (after, afterFiles) = run(texts, Delete(path, "Greeter/greet"), InsertAfter(path, "Greeter/other", code))
 
-            assertEquals(EditResult.OperationFailed(0, OperationFailure.EmptyCode("insert_before")), before)
-            assertEquals(EditResult.OperationFailed(1, OperationFailure.EmptyCode("insert_after")), after)
+            assertEquals(EditResult.OperationFailed(0, OperationFailure.BlankCode), before)
+            assertEquals(EditResult.OperationFailed(1, OperationFailure.BlankCode), after)
             assertEquals(source, beforeFiles.content(path))
             assertEquals(source, afterFiles.content(path))
         }

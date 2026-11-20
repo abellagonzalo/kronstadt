@@ -170,6 +170,23 @@ class KtEditToolTest {
     }
 
     @Test
+    fun `an insert whose code has no non-blank line fails, naming its Operation's type, writing nothing`() = runTest {
+        val before = file.readText()
+
+        val (failedBefore, beforeText) = ktEdit("""{"operations": [{"type": "insert_before", "file": "A.kt", "symbol": "greet", "code": ""}]}""")
+        val (failedAfter, afterText) = ktEdit(
+            """{"operations": [{"type": "edit_in", "file": "A.kt", "old": "= 1", "new": "= 2"}, """ +
+                """{"type": "insert_after", "file": "A.kt", "symbol": "greet", "code": " \n\t\n"}]}""",
+        )
+
+        assertEquals(true, failedBefore)
+        assertEquals("Operation 0: 'insert_before' needs code with at least one non-blank line. Nothing written.", beforeText)
+        assertEquals(true, failedAfter)
+        assertEquals("Operation 1: 'insert_after' needs code with at least one non-blank line. Nothing written.", afterText)
+        assertEquals(before, file.readText())
+    }
+
+    @Test
     fun `a Symbol Path without a file fails, asking for the file, when the index may not list every declaration of its name`() = runTest {
         cutOff += "greet"
         val before = file.readText()

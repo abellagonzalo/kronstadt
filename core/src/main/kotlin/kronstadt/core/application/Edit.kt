@@ -122,12 +122,12 @@ public class Edit(
             }
         }
         operations.forEachIndexed { index, operation ->
-            val (name, code) = when (operation) {
-                is InsertBefore -> "insert_before" to operation.code
-                is InsertAfter -> "insert_after" to operation.code
+            val inserted = when (operation) {
+                is InsertBefore -> operation.code
+                is InsertAfter -> operation.code
                 else -> return@forEachIndexed
             }
-            if (code.isBlank()) return EditResult.OperationFailed(index, OperationFailure.EmptyCode(name))
+            if (inserted.isBlank()) return EditResult.OperationFailed(index, OperationFailure.BlankCode)
         }
         return writeLock.withLock {
             val readiness = intelligence.awaitReady(readinessTimeout)
@@ -421,6 +421,6 @@ public sealed interface OperationFailure {
     /** [import] isn't one import directive: a dotted name, optionally ending in `.*` or `as Alias`. */
     public data class InvalidImport(val import: String) : OperationFailure
 
-    /** An [operation] (`insert_before` or `insert_after`) whose code has no non-blank line, so it would insert nothing. */
-    public data class EmptyCode(val operation: String) : OperationFailure
+    /** An `insert_before` or `insert_after` whose code has no non-blank line, so it would insert nothing. */
+    public data object BlankCode : OperationFailure
 }
