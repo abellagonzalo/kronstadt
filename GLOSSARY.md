@@ -17,7 +17,7 @@ The parameter types of a function or constructor, e.g. `(String, Int)`, written 
 _Avoid_: parameter list, type, overload key
 
 **Symbol Span**:
-The full source text of a Symbol, as whole lines: its KDoc or the comments directly above it, its annotations, modifiers and declaration, and any comment at the end of its last line. It is what an agent reads and what replace and delete act on.
+The full source text of a Symbol, as whole lines: its KDoc or the comments directly above it, its annotations, modifiers and declaration, a list separator (`,`) right after it, and any comment at the end of its last line. It is what an agent reads and what replace and delete act on.
 _Avoid_: range, body, extent
 
 **Usage**:

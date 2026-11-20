@@ -38,6 +38,7 @@ import kronstadt.core.domain.Rename
 import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SymbolKind
+import kronstadt.core.domain.SymbolSpan
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.TextEdit
 import kronstadt.core.domain.TextRange
@@ -180,6 +181,22 @@ class KotlinLspContractTest {
         assertEquals("/** Entry KDoc. */\n    RED(\"f00\"),", document.slice(symbols.find("Color", "RED").range))
         assertEquals("BLUE(\"00f\");", document.slice(symbols.find("Color", "BLUE").range))
         assertEquals("},", document.slice(symbols.find("Color", "GREEN").range).lines().last().trim())
+    }
+
+    @Test
+    @Order(7)
+    fun `a constructor property's range stops before its trailing comma, and its Symbol Span takes the comma in`() {
+        val (document, symbols) = spans()
+        val length = symbols.find("Crate", "length")
+        val depth = symbols.find("Crate", "depth")
+        assertEquals("val length: Int", document.slice(length.range))
+        assertEquals("/** Front to back. */\n    val depth: Int", document.slice(depth.range))
+        // #68: the `,` (and an end-of-line comment after it) no longer make the last line a shared one.
+        assertEquals("    val length: Int,", assertIs<SymbolSpan.Computation.Computed>(SymbolSpan.of(document, length)).span.text)
+        assertEquals(
+            "    /** Front to back. */\n    val depth: Int, // deep",
+            assertIs<SymbolSpan.Computation.Computed>(SymbolSpan.of(document, depth)).span.text,
+        )
     }
 
     @Test

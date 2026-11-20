@@ -2,7 +2,8 @@ package kronstadt.core.domain
 
 /**
  * A Symbol's full source as whole lines (ADR 0004): its KDoc or comments above, annotations, modifiers, the
- * declaration and a comment at the end of its last line. [firstLine] and [lastLine] are zero-based and inclusive.
+ * declaration, a list separator (`,`) right after it and a comment at the end of its last line. [firstLine] and
+ * [lastLine] are zero-based and inclusive.
  */
 public data class SymbolSpan(val firstLine: Int, val lastLine: Int, val text: String) {
     public sealed interface Computation {
@@ -28,7 +29,8 @@ public data class SymbolSpan(val firstLine: Int, val lastLine: Int, val text: St
 
         /**
          * Trusts the language server's `range` as the span, with guards: the name must be where `selectionRange`
-         * says, and only whitespace (or an end-of-line comment) may share the first and last lines.
+         * says, and only whitespace (or an end-of-line comment) may share the first and last lines. The last line may
+         * also hold a list separator (`,`) right after the range, before any such comment.
          */
         public fun of(document: TextDocument, symbol: CodeSymbol): Computation {
             if (!nameMatches(document, symbol)) return Computation.OutOfSync
@@ -41,7 +43,9 @@ public data class SymbolSpan(val firstLine: Int, val lastLine: Int, val text: St
             val before = document.slice(TextRange(Position(firstLine, 0), range.start))
             if (before.isNotBlank()) return Computation.SharedLine(firstLine)
             if (lastLine == range.end.line) {
+                // A lone `,` right after a declaration can only be a list separator (#68): it belongs to the span.
                 val after = document.slice(TextRange(range.end, Position(lastLine, Int.MAX_VALUE))).trim()
+                    .removePrefix(",").trimStart()
                 if (after.isNotEmpty() && !isComment(after)) return Computation.SharedLine(lastLine)
             }
             return Computation.Computed(SymbolSpan(firstLine, lastLine, document.lines(firstLine, lastLine)))

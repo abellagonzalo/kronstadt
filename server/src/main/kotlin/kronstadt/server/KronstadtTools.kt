@@ -103,9 +103,10 @@ internal class KronstadtTools(
         server.addTool(
             name = "kt_read_symbol",
             description = "Returns one Kotlin declaration's exact source: its KDoc or comments above, annotations, " +
-                "modifiers, the declaration with its body and nested members, and an end-of-line comment, as whole " +
-                "lines. A header line gives the canonical Symbol Path, file and line span; the source follows " +
-                "without line numbers, so it can be copied verbatim. Use this instead of reading a whole file.",
+                "modifiers, the declaration with its body and nested members, a trailing list comma and an " +
+                "end-of-line comment, as whole lines. A header line gives the canonical Symbol Path, file and line " +
+                "span; the source follows without line numbers, so it can be copied verbatim. Use this instead of " +
+                "reading a whole file.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
                     stringProperty(
@@ -191,8 +192,9 @@ internal class KronstadtTools(
             name = "kt_edit",
             description = "Changes Kotlin code by Symbol, validated against the compiler before anything is written. " +
                 "A 'replace' Operation swaps a Symbol's whole span (exactly what kt_read_symbol returns: KDoc or " +
-                "comments above, annotations, modifiers, declaration, end-of-line comment) for your code; omitted " +
-                "KDoc or annotations are deleted. The code may rename the declaration or hold several. " +
+                "comments above, annotations, modifiers, declaration, trailing list comma, end-of-line comment) for " +
+                "your code, so a constructor property's new code carries its comma; omitted KDoc or annotations are " +
+                "deleted. The code may rename the declaration or hold several. " +
                 "'insert_before' and 'insert_after' add your code as a sibling of the Symbol, one blank line from it " +
                 "('insert_before' goes above its KDoc and annotations). 'delete' removes the whole span and one " +
                 "blank line next to it. Code is re-indented to the target's column, so indentation needn't match. " +

@@ -158,6 +158,36 @@ class ReadSymbolTest {
         assertIs<LookupFailure.SharedLine>(read("src/A.kt", "Box").lookupFailure())
     }
 
+    // A multi-line, trailing-comma constructor: kotlin-lsp's range for each property ends before its `,`.
+    private val trailingCommas = """
+        |class Box(
+        |    val width: Int,
+        |    val height: Int, // tall
+        |)
+        |""".trimMargin()
+    private val commaWidth = symbol("width", SymbolKind.VARIABLE, range(1, 4, 1, 18), 1, 8, type = ": Int")
+    private val commaHeight = symbol("height", SymbolKind.VARIABLE, range(2, 4, 2, 19), 2, 8, type = ": Int")
+    private val commaBox = symbol("Box", SymbolKind.CLASS, range(0, 0, 3, 1), 0, 6, children = listOf(commaWidth, commaHeight))
+
+    @Test
+    fun `a trailing comma after the Symbol belongs to its span, with or without an end-of-line comment`() = runTest {
+        val read = readSymbol(trailingCommas, commaBox)
+        assertEquals("// width in src/A.kt, L2-2\n    val width: Int,", assertIs<ReadSymbolResult.Found>(read("src/A.kt", "width")).text)
+        assertEquals("// height in src/A.kt, L3-3\n    val height: Int, // tall", assertIs<ReadSymbolResult.Found>(read("src/A.kt", "height")).text)
+    }
+
+    @Test
+    fun `a comma followed by more code, or a trailing semicolon, still counts as sharing the line`() = runTest {
+        val source = "class Box(\n    val a: Int, val b: Int,\n)\nval c = 1;\n"
+        val a = symbol("a", SymbolKind.PROPERTY, range(1, 4, 1, 14), 1, 8)
+        val b = symbol("b", SymbolKind.PROPERTY, range(1, 16, 1, 26), 1, 20)
+        val box = symbol("Box", SymbolKind.CLASS, range(0, 0, 2, 1), 0, 6, children = listOf(a, b))
+        val c = symbol("c", SymbolKind.PROPERTY, range(3, 0, 3, 9), 3, 4)
+        val read = readSymbol(source, box, c)
+        assertEquals(2, assertIs<LookupFailure.SharedLine>(read("src/A.kt", "a").lookupFailure()).line)
+        assertEquals(4, assertIs<LookupFailure.SharedLine>(read("src/A.kt", "c").lookupFailure()).line)
+    }
+
     @Test
     fun `code between two block comments after the Symbol still counts as sharing its line`() = runTest {
         val source = "fun a() = 1 /* x */ ; val b = 2 /* y */\n"
@@ -382,8 +412,8 @@ class ReadSymbolTest {
         // The primary constructor starts on the class's line, so it can be named but not read on its own.
         assertIs<LookupFailure.SharedLine>(readForm("Box/constructor(Int, Int)").lookupFailure())
         assertEquals(listOf("constructor(Int, Int)", "Box/constructor(Int)", "Tint/constructor"), assertIs<LookupFailure.Ambiguous>(readForm("constructor").lookupFailure()).candidates.map { it.path })
-        // Resolved as a property; its range stops before the comma, so the span guard refuses to read it alone.
-        assertEquals(ReadSymbolResult.LookupFailed(LookupFailure.SharedLine("width", "src/A.kt", 2)), readForm("Box/width"))
+        // Resolved as a property; its range stops before the comma, which its span takes in (#68).
+        assertEquals("// width in src/A.kt, L2-2", headerOf("Box/width"))
         assertIs<LookupFailure.NotFound>(readForm("Box/height").lookupFailure())
         assertIs<LookupFailure.NotFound>(readForm("Box/Box").lookupFailure())
     }

@@ -87,6 +87,57 @@ class EditTest {
         assertEquals(EditedFile(path, listOf(EditedSymbol("greet", 4, 5)), emptyList(), 0, 0), written)
     }
 
+    // A multi-line, trailing-comma constructor: kotlin-lsp's range for each val parameter ends before its `,` (#68).
+    private val box = """
+        |package a
+        |
+        |class Box(
+        |    val width: Int,
+        |    val height: Int, // tall
+        |    val depth: Int,
+        |)
+        |""".trimMargin()
+    private val wideBox = box.replace("val width: Int,", "val width: Long,")
+    private val flatBox = wideBox.replace("    val height: Int, // tall\n", "")
+    private fun boxParameter(name: String, line: Int, type: String) =
+        symbol(name, SymbolKind.VARIABLE, range(line, 4, line, 4 + "val $name: $type".length), line, 8, type = ": $type")
+    private fun boxClass(lastLine: Int, vararg parameters: CodeSymbol) =
+        symbol("Box", SymbolKind.CLASS, range(2, 0, lastLine, 1), 2, 6, children = parameters.toList())
+
+    @Test
+    fun `in a trailing-comma constructor, a val parameter is replaced with its comma and deleted with it`() = runTest {
+        val files = FakeFileStore(root, mapOf(path to box))
+        val intelligence = FakeCodeIntelligence(
+            symbolsByText = mapOf(
+                box to listOf(boxClass(6, boxParameter("width", 3, "Int"), boxParameter("height", 4, "Int"), boxParameter("depth", 5, "Int"))),
+                wideBox to listOf(boxClass(6, boxParameter("width", 3, "Long"), boxParameter("height", 4, "Int"), boxParameter("depth", 5, "Int"))),
+                flatBox to listOf(boxClass(5, boxParameter("width", 3, "Long"), boxParameter("depth", 4, "Int"))),
+            ),
+        )
+
+        val result = edit(intelligence, files)(listOf(Replace(path, "Box/width", "val width: Long,"), Delete(path, "Box/height")))
+
+        assertIs<EditResult.Written>(result)
+        assertEquals("package a\n\nclass Box(\n    val width: Long,\n    val depth: Int,\n)\n", files.content(path))
+    }
+
+    @Test
+    fun `in a trailing-comma constructor, edit_in on a val parameter matches text that takes in its comma`() = runTest {
+        val tallBox = box.replace("val height: Int, // tall", "val height: Long, // tall")
+        val files = FakeFileStore(root, mapOf(path to box))
+        val intelligence = FakeCodeIntelligence(
+            symbolsByText = mapOf(
+                box to listOf(boxClass(6, boxParameter("width", 3, "Int"), boxParameter("height", 4, "Int"), boxParameter("depth", 5, "Int"))),
+                tallBox to listOf(boxClass(6, boxParameter("width", 3, "Int"), boxParameter("height", 4, "Long"), boxParameter("depth", 5, "Int"))),
+            ),
+        )
+
+        val result = edit(intelligence, files)(EditIn(path, "Box/height", old = "Int, // tall", new = "Long, // tall"))
+
+        assertIs<EditResult.Written>(result)
+        assertEquals(tallBox, files.content(path))
+    }
+
     @Test
     fun `a replace that introduces an error is rejected with where it is and what it says, and nothing is written`() = runTest {
         val files = FakeFileStore(root, mapOf(path to source))

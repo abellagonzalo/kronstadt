@@ -2,6 +2,7 @@ package kronstadt.core.domain
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 
 class StructureRendererTest {
     private fun range(startLine: Int, startChar: Int, endLine: Int, endChar: Int) =
@@ -96,6 +97,26 @@ class StructureRendererTest {
               constructor()  // L2-2
               val String.first  : Char  // L4-4
               fun String.shout  (): String  // L5-5
+        """.trimIndent()
+        assertEquals(expected, StructureRenderer.render("Box.kt", doc, listOf(box), xml = false))
+    }
+
+    @Test
+    fun `a val parameter of a trailing-comma constructor lists its Symbol Span's lines, KDoc to comma`() {
+        val doc = TextDocument("class Box(\n    /** Across. */\n    val width: Int,\n    val height: Int, // tall\n)\n")
+        val width = symbol("width", SymbolKind.PROPERTY, range(1, 4, 2, 18), 2, 8, type = ": Int")
+        val height = symbol("height", SymbolKind.PROPERTY, range(3, 4, 3, 19), 3, 8, type = ": Int")
+        val box = symbol("Box", SymbolKind.CLASS, range(0, 0, 4, 1), 0, 6, children = listOf(width, height))
+
+        // The lines come from a whole-line span that takes in the comma, not from the fallback to the declaration's.
+        assertEquals(
+            listOf("    /** Across. */\n    val width: Int,", "    val height: Int, // tall"),
+            listOf(width, height).map { assertIs<SymbolSpan.Computation.Computed>(SymbolSpan.of(doc, it)).span.text },
+        )
+        val expected = """
+            class Box  // L1-5
+              val width  : Int  // L2-3
+              val height  : Int  // L4-4
         """.trimIndent()
         assertEquals(expected, StructureRenderer.render("Box.kt", doc, listOf(box), xml = false))
     }

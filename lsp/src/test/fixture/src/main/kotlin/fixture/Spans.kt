@@ -92,3 +92,10 @@ fun <T> List<T>.second(): T = this[1]
 
 val String.firstChar: Char
     get() = this[0]
+
+/** A multi-line primary constructor whose property parameters carry trailing commas. */
+class Crate(
+    val length: Int,
+    /** Front to back. */
+    val depth: Int, // deep
+)
