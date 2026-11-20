@@ -104,6 +104,21 @@ class InsertAndDeleteTest {
     }
 
     @Test
+    fun `insert_before and insert_after with no non-blank line of code fail with the Operation's index, writing nothing`() = runTest {
+        val texts = mapOf(source to listOf(greeter(2, 7, greet, other)))
+
+        for (code in listOf("", "\n", "  \n\t\n")) {
+            val (before, beforeFiles) = run(texts, InsertBefore(path, "Greeter/greet", code))
+            val (after, afterFiles) = run(texts, Delete(path, "Greeter/greet"), InsertAfter(path, "Greeter/other", code))
+
+            assertEquals(EditResult.OperationFailed(0, OperationFailure.EmptyCode("insert_before")), before)
+            assertEquals(EditResult.OperationFailed(1, OperationFailure.EmptyCode("insert_after")), after)
+            assertEquals(source, beforeFiles.content(path))
+            assertEquals(source, afterFiles.content(path))
+        }
+    }
+
+    @Test
     fun `delete removes the whole span and the blank line below it, or above it when there is none below`() = runTest {
         val withoutGreet = """
             |package a

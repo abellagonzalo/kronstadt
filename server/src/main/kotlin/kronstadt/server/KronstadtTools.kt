@@ -498,6 +498,7 @@ internal class KronstadtTools(
         is OperationFailure.InvalidImport ->
             "'${failure.import}' is not an import directive; give a dotted name, optionally ending in '.*' or 'as Alias', " +
                 "e.g. 'kotlin.time.Duration'."
+        is OperationFailure.EmptyCode -> "'${failure.operation}' needs code with at least one non-blank line."
     }
 
     /** An `edit_in`'s [scope] as the agent named it: the Symbol and its file, or just the file. */
