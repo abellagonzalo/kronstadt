@@ -96,6 +96,33 @@ class EditInTest {
     }
 
     @Test
+    fun `edit_in on a whole file that changes lines inside a Symbol lists that Symbol, as one on the Symbol would`() = runTest {
+        val expected = source.replaceFirst("    val n = 1\n", "    val n = 2\n")
+        val texts = mapOf(expected to symbols)
+
+        val (result, files) = run(texts, EditIn(path, null, old = "greet(): Int {\n    val n = 1", new = "greet(): Int {\n    val n = 2"))
+
+        assertEquals(expected, files.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 5, 8)), emptyList(), 0, 0))), result)
+    }
+
+    @Test
+    fun `edit_in on a whole file that changes lines inside a member lists the member, not its class`() = runTest {
+        val file = "package a\n\nclass Box {\n    fun width(): Int {\n        return 1\n    }\n}\n"
+        val expected = file.replace("return 1", "return 2")
+        val width = CodeSymbol("width", SymbolKind.FUNCTION, range(3, 4, 5, 5), range(3, 8, 3, 13), parameterTypes = "", type = "(): Int")
+        val box = listOf(CodeSymbol("Box", SymbolKind.CLASS, range(2, 0, 6, 1), range(2, 6, 2, 9), listOf(width)))
+        val files = FakeFileStore(root, mapOf(path to file))
+        val intelligence = FakeCodeIntelligence(documentSymbols = box)
+
+        val result = Edit(files, intelligence)(listOf(EditIn(path, null, old = "return 1", new = "return 2")))
+
+        intelligence.assertOneSessionClosedEverything()
+        assertEquals(expected, files.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("width", 4, 6)), emptyList(), 0, 0))), result)
+    }
+
+    @Test
     fun `edit_in whose text isn't in the Symbol's span rejects the Edit, even if it is elsewhere in the file`() = runTest {
         val (result, files) = run(
             emptyMap(),
@@ -308,6 +335,7 @@ class EditInTest {
         )
 
         assertEquals(expected, files.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0))), result)
+        // The first text spans greet() and other(), so it lists neither; the second is inside other() alone.
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("other", 10, 13)), emptyList(), 0, 0))), result)
     }
 }

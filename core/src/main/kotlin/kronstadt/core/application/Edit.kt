@@ -302,12 +302,19 @@ public class Edit(
         return Applied.Done(file)
     }
 
-    /** An [EditIn] on a whole file: its span is the whole text, and only the lines the occurrence is on change. */
+    /**
+     * An [EditIn] on a whole file: its span is the whole text. The lines replaced are the innermost Symbol Span holding
+     * the occurrence's, as an [EditIn] on that Symbol would replace (#62), or only the occurrence's outside any Symbol.
+     */
     private suspend fun applyToFile(shadow: ShadowWorkspace, operation: EditIn): Applied {
         val path = checkNotNull(operation.file) { "an edit_in without a symbol has a file" }
         val file = classify(shadow, path).getOrElse { return Applied.Failed(OperationFailure.LookupFailed(it)) }
-        val document = shadow.current(file) ?: return Applied.Failed(OperationFailure.LookupFailed(LookupFailure.FileNotFound(path)))
-        return applySplice(shadow, file, Splice.inFile(document, operation), operation, EditInScope(null, files.display(file)))
+        val analysed = shadow.analysed(file) ?: return Applied.Failed(OperationFailure.LookupFailed(LookupFailure.FileNotFound(path)))
+        val document = analysed.document
+        val splice = Splice.inFile(document, operation) { occurrence ->
+            analysed.tree.innermostSpanHolding(document, occurrence)?.let { it.firstLine..it.lastLine } ?: occurrence
+        }
+        return applySplice(shadow, file, splice, operation, EditInScope(null, files.display(file)))
     }
 
     /** Makes [splice]'s change to [file], or fails [operation], whose `old` was looked for in [scope]. */
@@ -361,9 +368,9 @@ public class Edit(
             /** In a Symbol Span, [span] (0-based lines): the whole span is replaced, so it is what Validation and the result see as edited. */
             fun inSpan(document: TextDocument, span: IntRange, operation: EditIn): Splice = of(document, span, operation) { span }
 
-            /** In a whole file, which belongs to no Symbol: only the lines the occurrence is on are replaced. */
-            fun inFile(document: TextDocument, operation: EditIn): Splice =
-                of(document, 0 until document.lineCount, operation) { it }
+            /** In a whole file: the [replaced] lines, given the occurrence's, are replaced, so they are what Validation and the result see as edited. */
+            fun inFile(document: TextDocument, operation: EditIn, replaced: (IntRange) -> IntRange): Splice =
+                of(document, 0 until document.lineCount, operation, replaced)
 
             /** Replaces the one occurrence of the Operation's `old` within [scope] lines of [document], in the [replaced] lines (given the occurrence's). */
             private fun of(document: TextDocument, scope: IntRange, operation: EditIn, replaced: (IntRange) -> IntRange): Splice {
