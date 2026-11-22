@@ -2,7 +2,11 @@
 
 package kronstadt.lsp
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kronstadt.core.application.Delete
@@ -54,6 +58,7 @@ import org.junit.jupiter.api.TestInstance
 import org.junit.jupiter.api.TestMethodOrder
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.Collections
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.copyToRecursively
 import kotlin.io.path.deleteRecursively
@@ -66,6 +71,7 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Seam 2: pins the kotlin-lsp facts that the fakes and the adapter assume, against the fixture Gradle project in
@@ -81,6 +87,10 @@ class KotlinLspContractTest {
     private lateinit var indexDir: Path
     private lateinit var lsp: LspCodeIntelligence
 
+    /** Every readiness signal from just after `initialize` on, to pin the order kotlin-lsp sends them in. */
+    private val signals = Collections.synchronizedList(mutableListOf<ReadinessSignal>())
+    private val recorder = CoroutineScope(Dispatchers.Default)
+
     @BeforeAll
     fun start() {
         val fixture = Path.of(requireNotNull(System.getProperty("kronstadt.fixture")) { "run via ./gradlew :lsp:contractTest" })
@@ -90,10 +100,12 @@ class KotlinLspContractTest {
         // A missing directory, as for a new worktree: kotlin-lsp creates it.
         indexDir = Files.createTempDirectory("kronstadt-index").toRealPath().resolve("kotlin-server")
         lsp = runBlocking { LspCodeIntelligence.start(command, project, indexDir) }
+        recorder.launch { lsp.readinessSignals.collect { signals += it } }
     }
 
     @AfterAll
     fun stop() {
+        recorder.cancel()
         if (::lsp.isInitialized) lsp.close()
         if (::project.isInitialized) project.deleteRecursively()
         if (::indexDir.isInitialized) indexDir.parent.deleteRecursively()
@@ -134,8 +146,25 @@ class KotlinLspContractTest {
 
     @Test
     @Order(4)
-    fun `stays ready while idle`() = runBlocking {
-        assertEquals(Readiness.Ready, lsp.awaitReady(Duration.ZERO))
+    fun `begins another Indexing run a few ms after the import FINISHED, a gap the settle period covers`() {
+        val seen = signals.toList()
+        val texts = seen.map { it.text }
+        val finished = texts.indexOf("import FINISHED")
+        assertTrue(finished >= 0, "signals: $texts")
+        val next = seen.drop(finished + 1).firstOrNull()
+        assertEquals("begin Indexing", next?.text, "signals: $texts")
+        val gap = next!!.at - seen[finished].at
+        assertTrue(gap < ReadinessTracker.SETTLE, "gap $gap; signals: $texts")
+    }
+
+    /**
+     * Ready again within a few seconds, not at once (#71): now and then kotlin-lsp runs one more short Indexing ~1.1 s
+     * after the last one ended, so just after the settle period, and an instant check can land inside it.
+     */
+    @Test
+    @Order(4)
+    fun `stays ready while idle, give or take a short Indexing run`() = runBlocking {
+        assertEquals(Readiness.Ready, lsp.awaitReady(5.seconds))
     }
 
     @Test
