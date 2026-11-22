@@ -129,6 +129,23 @@ class IndexDirectoriesTest {
         assertTrue(young.exists())
     }
 
+    @Test
+    fun `deleting a dir's temporary siblings deletes its hidden leftovers and nothing else`() {
+        val directories = IndexDirectories(cache)
+        val dir = directories.forWorktree(tmp.resolve("feature").createDirectories()).also(::fillWithIndexFiles)
+        val clone = directories.temporarySibling(dir).also(::fillWithIndexFiles)
+        val untimed = dir.resolveSibling(".kotlin-server-0b9e").createDirectories()
+        val unrelated = dir.resolveSibling(".other-0b9e").createDirectories()
+
+        directories.deleteTemporarySiblings(dir)
+
+        assertFalse(clone.exists(), "a temporary clone is still there")
+        assertFalse(untimed.exists(), "a leftover without a time in its name is still there")
+        assertTrue(dir.resolve("db/000001.sst").exists(), "the dir itself was touched")
+        assertTrue(unrelated.exists(), "an unrelated sibling was deleted")
+        assertTrue(dir.resolveSibling(IndexDirectories.WORKTREE_FILE).exists(), "the worktree record was deleted")
+    }
+
     private fun fillWithIndexFiles(index: Path) {
         index.resolve("db").createDirectories().resolve("000001.sst").writeText("rocks")
     }
