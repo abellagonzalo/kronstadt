@@ -144,6 +144,14 @@ class KtEditToolTest {
     }
 
     @Test
+    fun `the kt_edit description tells how to write a test before the code it calls`() {
+        val description = checkNotNull(checkNotNull(server.tools["kt_edit"]).tool.description)
+
+        assertTrue("TODO()" in description, description)
+        assertTrue("same batch" in description, description)
+    }
+
+    @Test
     fun `the result lists the imports the Edit made unused, which it removed`() = runTest {
         val source = "package a\n\nimport b.Bravo\nimport c.Charlie\nimport d.Delta\n\nfun greet(): Int = Bravo.one + Charlie.two + Delta.three\n"
         val edited = "package a\n\nimport b.Bravo\nimport c.Charlie\nimport d.Delta\n\nfun greet(): Int = 1 + Delta.three\n"
