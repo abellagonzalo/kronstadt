@@ -30,6 +30,17 @@ public class SymbolTree(roots: List<CodeSymbol>) {
         roots.sortedBy { it.range.start }.forEach { visit(it, emptyList()) }
     }
 
+    /**
+     * The Symbol Span of the innermost addressable Symbol whose span holds every one of [lines] (0-based) of [document],
+     * the text this tree describes; null if none does. Symbols without a Symbol Span (they share a line with other code)
+     * are skipped, as an Operation can't target them.
+     */
+    public fun innermostSpanHolding(document: TextDocument, lines: IntRange): SymbolSpan? = nodes
+        .mapNotNull { node -> (SymbolSpan.of(document, node.symbol) as? SymbolSpan.Computation.Computed)?.let { node to it.span } }
+        .filter { (_, span) -> span.firstLine <= lines.first && lines.last <= span.lastLine }
+        .maxByOrNull { (node, _) -> node.ancestors.size }
+        ?.second
+
     public fun resolve(path: SymbolPath): Resolution {
         val matches = matching(path)
         return when (matches.size) {
