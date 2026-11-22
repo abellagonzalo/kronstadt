@@ -138,7 +138,7 @@ public class IndexSeeds(
     }
 
     private fun cloneInto(slot: Path, dir: Path): Seeding {
-        deleteTemporarySiblings(dir)
+        directories.deleteTemporarySiblings(dir)
         val temp = directories.temporarySibling(dir)
         return try {
             copyOnWrite.clone(slot, temp)
@@ -175,14 +175,6 @@ public class IndexSeeds(
             } catch (e: IOException) {
                 System.err.println("kronstadt: could not retire the previous Index Seed $previousSeed: ${e.message}")
             }
-        }
-
-        /** Deletes clones a killed instance left next to [dir]; only this worktree's own instance writes there. */
-        private fun deleteTemporarySiblings(dir: Path) {
-            val prefix = ".${dir.fileName}-"
-            Files.list(dir.parent).use { entries ->
-                entries.filter { it.fileName.toString().startsWith(prefix) }.toList()
-            }.forEach(::deleteQuietly)
         }
 
         private fun deleteQuietly(dir: Path) {

@@ -81,7 +81,23 @@ public class IndexDirectories(
     internal fun retiredSibling(dir: Path): Path = timedSibling(dir, "$RETIRED-")
 
     private fun timedSibling(dir: Path, kind: String): Path =
-        dir.resolveSibling(".${dir.fileName}-$kind${clock().toEpochMilli()}-${UUID.randomUUID()}")
+        dir.resolveSibling("$LEFTOVER_PREFIX$kind${clock().toEpochMilli()}-${UUID.randomUUID()}")
+
+    /**
+     * Deletes the temporary clones a killed instance left next to [dir], a worktree's index directory: every sibling
+     * named like a leftover. Only that worktree's own instance writes there. Logs a leftover it cannot delete; throws
+     * only if [dir]'s parent cannot be listed.
+     */
+    internal fun deleteTemporarySiblings(dir: Path) {
+        for (leftover in leftoversNextTo(dir)) {
+            try {
+                // Deletes symbolic links, never follows them.
+                leftover.deleteRecursively()
+            } catch (e: IOException) {
+                System.err.println("kronstadt: could not delete $leftover: ${e.message}")
+            }
+        }
+    }
 
     /** Creates [owner]'s directory under [parent], records [owner] in it, and returns where its index goes. */
     private fun recordOwner(parent: Path, recordFile: String, owner: Path): Path {
@@ -118,9 +134,7 @@ public class IndexDirectories(
         val now = clock()
         for (slot in slots) {
             val leftovers = try {
-                Files.list(slot).use { entries ->
-                    entries.filter { it.fileName.toString().startsWith(".$LSP_INDEX_DIR-") }.toList()
-                }
+                leftoversNextTo(slot.resolve(LSP_INDEX_DIR))
             } catch (_: IOException) {
                 continue // Pruned meanwhile by another instance, or unreadable.
             }
@@ -152,13 +166,22 @@ public class IndexDirectories(
         public const val LOCK_FILE: String = "lock"
         private const val LSP_INDEX_DIR = "kotlin-server"
 
+        /** How a [temporarySibling] or [retiredSibling] of an index directory starts. */
+        private const val LEFTOVER_PREFIX = ".$LSP_INDEX_DIR-"
+
         private const val RETIRED = "retired"
 
         /** How old a temporary clone or retired seed must be before no refresh or clone can still be using it. */
         internal val LEFTOVER_AGE: Duration = 10.minutes
 
         /** A [temporarySibling] or [retiredSibling] name: the epoch millis it was made at, in group 1. */
-        private val TIMED_LEFTOVER = Regex("""^\.$LSP_INDEX_DIR-(?:$RETIRED-)?(\d{13,})-""")
+        private val TIMED_LEFTOVER = Regex("""^${Regex.escape(LEFTOVER_PREFIX)}(?:$RETIRED-)?(\d{13,})-""")
+
+        /** The temporary clones and retired seeds next to [dir]: its hidden siblings named with [LEFTOVER_PREFIX]. */
+        private fun leftoversNextTo(dir: Path): List<Path> =
+            Files.list(dir.parent).use { entries ->
+                entries.filter { it.fileName.toString().startsWith(LEFTOVER_PREFIX) }.toList()
+            }
 
         /**
          * When [leftover] was made: the time in its name, or else, for one named before names had a time, when it was
