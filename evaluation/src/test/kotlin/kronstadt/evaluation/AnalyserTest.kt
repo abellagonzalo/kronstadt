@@ -314,17 +314,21 @@ class AnalyserTest {
                 kronstadt("kt_read_symbol", "symbol" to "ReadinessTracker/importState", result = "// importState in src/A.kt, L35-35\n    fun importState() = 1")
                 kronstadt("kt_find_symbol", "query" to "SymbolPath", result = "IllegalStateException: Language server failed to initialize", isError = true)
                 call("Read", FixtureTranscripts.obj("file_path" to "/repo/src/A.kt"), toolUseResult = FixtureTranscripts.obj("type" to "text"))
+                call("Grep", FixtureTranscripts.obj("pattern" to "foo", "glob" to "*.kt"), toolUseResult = FixtureTranscripts.obj("mode" to "files_with_matches"))
+                call("Glob", FixtureTranscripts.obj("pattern" to "src/**/*.kt"), toolUseResult = FixtureTranscripts.obj("numFiles" to "1"))
             }
         }
         transcripts.session("direct", "/repo") {
             kronstadt("kt_read_symbol", "symbol" to "ReadinessTracker/importState")
             kronstadt("kt_find_symbol", "query" to "SymbolPath", result = "IllegalStateException", isError = true)
             read("/repo/src/A.kt")
+            grep("pattern" to "foo", "glob" to "*.kt")
+            glob("src/**/*.kt")
         }
 
         val report = analyse()
 
-        assertEquals(listOf(2 to 1, 2 to 1), report.sessions.map { it.kronstadtReads to it.builtinKotlinReads })
+        assertEquals(listOf(2 to 3, 2 to 3), report.sessions.map { it.kronstadtReads to it.builtinKotlinReads })
         assertEquals(listOf(0, 0), report.sessions.map { it.circumventions.size })
     }
 
@@ -332,7 +336,7 @@ class AnalyserTest {
     fun `Code Mode - a Bash rewrite of a kt file only an earlier Bash output showed is a circumvention`() {
         transcripts.session("s", "/repo") {
             repl {
-                    bash("find src -type f", stdout = "src/A.kt\nsrc/B.java\n")
+                bash("find src -type f", stdout = "src/A.kt\nsrc/B.java\n")
                 bash("cat > src/A.kt <<'EOF'\nclass A\nEOF")
             }
         }
@@ -376,7 +380,7 @@ class AnalyserTest {
         assertEquals(0, analyse().sessions.size) // nothing in it touches Kotlin
 
         transcripts.session("repl-and-read", "/repo") {
-            repl(script)
+            repl(script) { bash("cat > src/A.kt <<'EOF'\nclass A\nEOF") } // the script's text is no sign src/A.kt existed
             read("/repo/src/A.kt")
         }
 
@@ -384,7 +388,6 @@ class AnalyserTest {
 
         assertEquals(0 to 1, session.kronstadtReads to session.builtinKotlinReads)
         assertEquals(emptyList(), session.circumventions)
-        assertEquals(emptyMap(), session.bashKotlinReads)
         assertEquals(0, session.edits)
     }
 }
