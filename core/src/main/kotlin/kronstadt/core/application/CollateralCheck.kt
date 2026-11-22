@@ -3,7 +3,6 @@ package kronstadt.core.application
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 import kronstadt.core.domain.CodeSymbol
-import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SymbolTree
 import kronstadt.core.domain.TextDocument
@@ -22,6 +21,10 @@ internal data class ChangedFile(val file: Path, val base: TextDocument, val curr
  * such a Symbol before the Edit, other than the changed ones, get their diagnostics pulled while every changed file is at
  * its base text and again once every one is at its current text, and the errors the Edit added are reported, as
  * Validation finds them. The check has its own [timeout], and neither running out of it nor failing fails the Edit.
+ *
+ * A header is what the language server shows of a Symbol: its kind, receiver, parameters and type. Changes it doesn't
+ * show go unseen: visibility, supertypes, an overload that makes calls ambiguous, and a new subtype of a sealed type
+ * that leaves a `when` over it non-exhaustive (no Symbol of the sealed type's file changed its header).
  */
 internal class CollateralCheck(
     private val files: FileStore,
@@ -30,20 +33,17 @@ internal class CollateralCheck(
     private val tree: suspend (Path, TextDocument) -> SymbolTree,
     private val timeout: Duration,
 ) {
-    /**
-     * The Collateral Errors of the Edit that made [changed]. [inBase] rewrites a base diagnostic's message as it would
-     * read after the Edit, as for Validation.
-     */
-    suspend fun run(changed: List<ChangedFile>, inBase: (String) -> String = { it }): CollateralErrors =
+    /** The Collateral Errors of the Edit that made [changed]. */
+    suspend fun run(changed: List<ChangedFile>): CollateralErrors =
         try {
-            withTimeoutOrNull(timeout) { check(changed, inBase) } ?: CollateralErrors(unfinished = CollateralErrors.Unfinished.TimedOut)
+            withTimeoutOrNull(timeout) { check(changed) } ?: CollateralErrors(unfinished = CollateralErrors.Unfinished.TimedOut)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             CollateralErrors(unfinished = CollateralErrors.Unfinished.Failed(e.message ?: e.toString()))
         }
 
-    private suspend fun check(changed: List<ChangedFile>, inBase: (String) -> String): CollateralErrors {
+    private suspend fun check(changed: List<ChangedFile>): CollateralErrors {
         val headersChanged = changed.filterNot { it.created }.flatMap { file ->
             headersChanged(tree(file.file, file.base), tree(file.file, file.current)).map { file to it }
         }
@@ -55,14 +55,13 @@ internal class CollateralCheck(
             .flatMap { (file, node) -> session.references(file.file, file.base, node.symbol.selectionRange.start) }
             .map { it.file }
             .distinct()
-            .filter { it !in changedFiles && AnalysedFile.isKotlin(it) }
-        val checked = using.take(CollateralErrors.MAX_FILES).mapNotNull { file -> files.read(file)?.let { file to it } }
-        val before = checked.map { (file, document) ->
-            relevant(file, session.diagnostics(file, document)).map { it.copy(message = inBase(it.message)) }
-        }
+            .filter { it !in changedFiles && AnalysedFile.isKotlin(it) && files.resolve(it.toString()) == it }
+            .mapNotNull { file -> files.read(file)?.let { file to it } }
+        val checked = using.take(CollateralErrors.MAX_FILES)
+        val before = checked.map { (file, document) -> Validation.withoutSpurious(file, session.diagnostics(file, document)) }
         // Analysing every current text is what changes every changed file to it.
         changed.forEach { session.documentSymbols(it.file, it.current) }
-        val after = checked.map { (file, document) -> relevant(file, session.diagnostics(file, document)) }
+        val after = checked.map { (file, document) -> Validation.withoutSpurious(file, session.diagnostics(file, document)) }
         val errors = checked.indices.flatMap { i ->
             val (file, document) = checked[i]
             val introduced = Validation.introduced(before[i], after[i], Severity.ERROR, editedLines = emptyList())
@@ -73,11 +72,9 @@ internal class CollateralCheck(
         return CollateralErrors(
             errors = errors.take(CollateralErrors.MAX_LISTED),
             moreErrors = maxOf(errors.size - CollateralErrors.MAX_LISTED, 0),
-            filesUnchecked = using.size - minOf(using.size, CollateralErrors.MAX_FILES),
+            filesUnchecked = using.size - checked.size,
         )
     }
-
-    private fun relevant(file: Path, diagnostics: List<Diagnostic>) = diagnostics.filterNot { Validation.isSpurious(file, it) }
 
     private companion object {
         /**

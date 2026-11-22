@@ -169,14 +169,14 @@ class KtEditToolTest {
 
     @Test
     fun `a written Edit that broke a caller in another file lists it under Collateral Errors`() = runBlocking {
-    // Real time: the check's timeout must not race the caller's read from disk on a virtual clock.
+        // Real time: the check's timeout must not race the caller's read from disk on a virtual clock.
         val caller = root.resolve("B.kt").apply { writeText("package b\n\nimport a.greet\n\nfun use(): Int = greet() + 1\n") }
         val changed = "package a\n\nfun greet(): String = \"1\"\n"
         fun greet(type: String) = CodeSymbol("greet", SymbolKind.FUNCTION, TextRange(Position(2, 0), Position(2, 20)), TextRange(Position(2, 4), Position(2, 9)), parameterTypes = "", type = type)
         symbols += greet("(): Int")
-symbolsByText[caller.readText()] = listOf(
-    CodeSymbol("use", SymbolKind.FUNCTION, TextRange(Position(4, 0), Position(4, 28)), TextRange(Position(4, 4), Position(4, 7)), parameterTypes = "", type = "(): Int"),
-)
+        symbolsByText[caller.readText()] = listOf(
+            CodeSymbol("use", SymbolKind.FUNCTION, TextRange(Position(4, 0), Position(4, 28)), TextRange(Position(4, 4), Position(4, 7)), parameterTypes = "", type = "(): Int"),
+        )
         symbolsByText[changed] = listOf(greet("(): String"))
         references["A.kt"] = listOf(SourceLocation(caller, TextRange(Position(4, 17), Position(4, 22))))
         val mismatch = Diagnostic(TextRange(Position(4, 17), Position(4, 28)), Severity.ERROR, "Return type mismatch.", "RETURN_TYPE_MISMATCH")

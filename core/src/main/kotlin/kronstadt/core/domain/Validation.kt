@@ -21,6 +21,9 @@ public object Validation {
         return sourceSet == "test" || sourceSet.endsWith("Test")
     }
 
+    /** [diagnostics] of [file] without the spurious ones (see [isSpurious]): those Validation compares. */
+    public fun withoutSpurious(file: Path, diagnostics: List<Diagnostic>): List<Diagnostic> = diagnostics.filterNot { isSpurious(file, it) }
+
     /**
      * The [severity] diagnostics in [after] that weren't in [before]. Positions shift when code changes, so they are
      * compared by (code, message) only: a key is new as many times as its count rose. Which of a key's diagnostics

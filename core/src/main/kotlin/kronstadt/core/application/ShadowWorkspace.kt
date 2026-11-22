@@ -93,13 +93,10 @@ internal class ShadowWorkspace(
     private suspend fun tree(file: Path, document: TextDocument): SymbolTree =
         trees[file to document.text] ?: SymbolTree(session.documentSymbols(file, document)).also { trees[file to document.text] = it }
 
-    /**
-     * The Edit's Collateral Errors, once Validation passed and before Write-back (see [CollateralCheck]), within
-     * [timeout]. [inBase] rewrites a base diagnostic's message as it would read after the Edit, as for [validate].
-     */
-    suspend fun collateralErrors(timeout: Duration, inBase: (String) -> String = { it }): CollateralErrors {
+    /** The Edit's Collateral Errors, once Validation passed and before Write-back (see [CollateralCheck]), within [timeout]. */
+    suspend fun collateralErrors(timeout: Duration): CollateralErrors {
         val changed = touched.filterValues { it.isEdited }.map { (file, it) -> ChangedFile(file, it.base, it.current, it.isCreated) }
-        return CollateralCheck(files, session, ::tree, timeout).run(changed, inBase)
+        return CollateralCheck(files, session, ::tree, timeout).run(changed)
     }
 
     sealed interface Lookup {
@@ -235,11 +232,11 @@ internal class ShadowWorkspace(
                 // A created file is pulled at its empty base too, so other files' base diagnostics don't see its
                 // declarations; it had no errors before the Edit.
                 val diagnostics = session.diagnostics(file, it.base)
-                if (it.isCreated) emptyList() else relevant(file, diagnostics).map { d -> d.copy(message = inBase(d.message)) }
+                if (it.isCreated) emptyList() else Validation.withoutSpurious(file, diagnostics).map { d -> d.copy(message = inBase(d.message)) }
             }
             // Analysing every current text first is what changes every file to it.
             val trees = edited.map { (file, it) -> SymbolTree(session.documentSymbols(file, it.current)).also { tree -> this@ShadowWorkspace.trees[file to it.current.text] = tree } }
-            val after = edited.map { (file, it) -> relevant(file, session.diagnostics(file, it.current)) }
+            val after = edited.map { (file, it) -> Validation.withoutSpurious(file, session.diagnostics(file, it.current)) }
             Triple(before, trees, after)
         } ?: return Validated.TimedOut
         val (before, trees, after) = pulled
@@ -248,8 +245,6 @@ internal class ShadowWorkspace(
         if (newErrors.isNotEmpty()) return Validated.Rejected(newErrors)
         return Validated.Passed(checked.map { it.report() })
     }
-
-    private fun relevant(file: Path, diagnostics: List<Diagnostic>) = diagnostics.filterNot { Validation.isSpurious(file, it) }
 
     /** One edited file during Validation, with its current [tree] and diagnostics [before] and [after] the Edit. */
     private inner class Checked(
