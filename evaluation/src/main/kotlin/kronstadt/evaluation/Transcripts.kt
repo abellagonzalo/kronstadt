@@ -65,7 +65,7 @@ internal object Transcripts {
             for (block in record.contentBlocks().filter { it.str("type") == "tool_result" }) {
                 val id = block.str("tool_use_id") ?: continue
                 val isError = (block["is_error"] as? JsonPrimitive)?.contentOrNull == "true"
-                results[id] = text(block["content"]) to isError
+                results[id] = text(block["content"]).ifEmpty { text(record["toolUseResult"]) } to isError
             }
         }
         val calls = records.filter { it.str("type") == "assistant" }.flatMap { record ->
@@ -98,10 +98,14 @@ internal object Transcripts {
     private fun JsonObject.contentBlocks(): List<JsonObject> =
         ((this["message"] as? JsonObject)?.get("content") as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
 
-    /** A tool result is either a string or an array of content blocks; keep the text. */
+    /**
+     * A result's text: a string or an array of content blocks. A record's `toolUseResult` stands in for an empty one, as in
+     * calls a Code Mode `REPL` script makes: a string for MCP tools, an object with `stdout` and `stderr` for `Bash`.
+     */
     private fun text(content: Any?): String = when (content) {
         is JsonPrimitive -> content.contentOrNull.orEmpty()
         is JsonArray -> content.mapNotNull { (it as? JsonObject)?.str("text") }.joinToString("\n")
+        is JsonObject -> listOfNotNull(content.str("stdout"), content.str("stderr")).filter { it.isNotEmpty() }.joinToString("\n")
         else -> ""
     }
 

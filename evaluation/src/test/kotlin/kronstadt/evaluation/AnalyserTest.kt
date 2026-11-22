@@ -306,6 +306,87 @@ class AnalyserTest {
         assertEquals(5, report.total.builtinKotlinReads)
         assertEquals(0.5, report.total.readShare)
     }
+
+    @Test
+    fun `Code Mode - calls a REPL script makes count as if the agent had made them`() {
+        transcripts.session("code-mode", "/repo") {
+            repl {
+                kronstadt("kt_read_symbol", "symbol" to "ReadinessTracker/importState", result = "// importState in src/A.kt, L35-35\n    fun importState() = 1")
+                kronstadt("kt_find_symbol", "query" to "SymbolPath", result = "IllegalStateException: Language server failed to initialize", isError = true)
+                call("Read", FixtureTranscripts.obj("file_path" to "/repo/src/A.kt"), toolUseResult = FixtureTranscripts.obj("type" to "text"))
+            }
+        }
+        transcripts.session("direct", "/repo") {
+            kronstadt("kt_read_symbol", "symbol" to "ReadinessTracker/importState")
+            kronstadt("kt_find_symbol", "query" to "SymbolPath", result = "IllegalStateException", isError = true)
+            read("/repo/src/A.kt")
+        }
+
+        val report = analyse()
+
+        assertEquals(listOf(2 to 1, 2 to 1), report.sessions.map { it.kronstadtReads to it.builtinKotlinReads })
+        assertEquals(listOf(0, 0), report.sessions.map { it.circumventions.size })
+    }
+
+    @Test
+    fun `Code Mode - a Bash rewrite of a kt file only an earlier Bash output showed is a circumvention`() {
+        transcripts.session("s", "/repo") {
+            repl {
+                    bash("find src -type f", stdout = "src/A.kt\nsrc/B.java\n")
+                bash("cat > src/A.kt <<'EOF'\nclass A\nEOF")
+            }
+        }
+
+        val circumventions = analyse().sessions.single().circumventions
+
+        assertEquals(listOf("/repo/src/A.kt" to "cat > src/A.kt <<'EOF'"), circumventions.map { it.file.toString() to it.how })
+    }
+
+    @Test
+    fun `a result's content wins over its record's toolUseResult, which stands in only for empty content`() {
+        transcripts.session("s", "/repo") {
+            call("Bash", FixtureTranscripts.obj("command" to "ls"), "from content", toolUseResult = FixtureTranscripts.obj("stdout" to "from stdout", "stderr" to ""))
+            repl {
+                bash("ls", stdout = "out\n", stderr = "warning\n")
+                bash("true")
+                kronstadt("kt_read_symbol", "symbol" to "A", result = "class A")
+                kronstadt("kt_read_symbol", "symbol" to "B", result = "No symbol 'B'", isError = true)
+            }
+        }
+
+        val calls = Transcripts.load(transcripts.projects).single().calls
+
+        assertEquals(
+            listOf(
+                Triple("Bash", "from content", false),
+                Triple("REPL", "(dispatched #1)", false),
+                Triple("Bash", "out\n\nwarning\n", false),
+                Triple("Bash", "", false),
+                Triple("mcp__kronstadt__kt_read_symbol", "class A", false),
+                Triple("mcp__kronstadt__kt_read_symbol", "No symbol 'B'", true),
+            ),
+            calls.map { Triple(it.name, it.result, it.isError) },
+        )
+    }
+
+    @Test
+    fun `Code Mode - the REPL host call is neither Kronstadt use, nor a workaround, nor a Kotlin read`() {
+        val script = "await \$`sed -i '' s/a/b/ src/A.kt`; await mcp__kronstadt__kt_read_symbol({symbol: 'A', file: 'src/A.kt'})"
+        transcripts.session("only-repl", "/repo") { repl(script) }
+        assertEquals(0, analyse().sessions.size) // nothing in it touches Kotlin
+
+        transcripts.session("repl-and-read", "/repo") {
+            repl(script)
+            read("/repo/src/A.kt")
+        }
+
+        val session = analyse().sessions.single()
+
+        assertEquals(0 to 1, session.kronstadtReads to session.builtinKotlinReads)
+        assertEquals(emptyList(), session.circumventions)
+        assertEquals(emptyMap(), session.bashKotlinReads)
+        assertEquals(0, session.edits)
+    }
 }
 
 /** Compile outcomes by (repo, commit); anything not set up compiles. */
