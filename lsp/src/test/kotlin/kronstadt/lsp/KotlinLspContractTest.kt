@@ -87,9 +87,12 @@ class KotlinLspContractTest {
     private lateinit var indexDir: Path
     private lateinit var lsp: LspCodeIntelligence
 
-    /** Every readiness signal from just after `initialize` on, to pin the order kotlin-lsp sends them in. */
+    /**
+     * Readiness signals from just after [start] subscribes, to pin the order kotlin-lsp sends them in. It may miss the
+     * first ones; `import FINISHED` comes seconds later.
+     */
     private val signals = Collections.synchronizedList(mutableListOf<ReadinessSignal>())
-    private val recorder = CoroutineScope(Dispatchers.Default)
+    private val recording = CoroutineScope(Dispatchers.Default)
 
     @BeforeAll
     fun start() {
@@ -100,12 +103,12 @@ class KotlinLspContractTest {
         // A missing directory, as for a new worktree: kotlin-lsp creates it.
         indexDir = Files.createTempDirectory("kronstadt-index").toRealPath().resolve("kotlin-server")
         lsp = runBlocking { LspCodeIntelligence.start(command, project, indexDir) }
-        recorder.launch { lsp.readinessSignals.collect { signals += it } }
+        recording.launch { lsp.readinessSignals.collect { signals += it } }
     }
 
     @AfterAll
     fun stop() {
-        recorder.cancel()
+        recording.cancel()
         if (::lsp.isInitialized) lsp.close()
         if (::project.isInitialized) project.deleteRecursively()
         if (::indexDir.isInitialized) indexDir.parent.deleteRecursively()
@@ -158,8 +161,10 @@ class KotlinLspContractTest {
     }
 
     /**
-     * Ready again within a few seconds, not at once (#71): now and then kotlin-lsp runs one more short Indexing ~1.1 s
-     * after the last one ended, so just after the settle period, and an instant check can land inside it.
+     * Ready again within a few seconds, not at once (#71). Now and then (2 of ~25 runs on 271.2085.0) kotlin-lsp runs one
+     * more short Indexing ~1.1 s after the last one ended, so just after the settle period and later than the run the
+     * test above pins, and an instant check can land inside it. Idle for 30 s after it, with `workspace/symbol` queries,
+     * kotlin-lsp began no other run.
      */
     @Test
     @Order(4)
