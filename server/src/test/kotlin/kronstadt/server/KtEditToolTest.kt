@@ -145,10 +145,11 @@ class KtEditToolTest {
 
     @Test
     fun `the kt_edit description tells how to write a test before the code it calls`() {
-        val description = checkNotNull(checkNotNull(server.tools["kt_edit"]).tool.description)
+        val tool = checkNotNull(server.tools["kt_edit"]).tool
+        val description = checkNotNull(tool.description)
 
         assertTrue("TODO()" in description, description)
-        assertTrue("same batch" in description, description)
+        assertTrue("same Edit as the test" in description, description)
     }
 
     @Test

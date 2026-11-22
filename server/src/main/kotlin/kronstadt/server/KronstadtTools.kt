@@ -226,13 +226,14 @@ internal class KronstadtTools(
                 "result; imports that were already unused are never touched. " +
                 "Files are written only if the Edit adds no compiler errors to them; otherwise nothing is written and " +
                 "the new errors are listed. " +
-                "To write a test before the code it calls, put the test and a stub of each missing declaration " +
-                "(body TODO()) in the same batch: it compiles, and the test fails when run. " +
                 "An Edit is an ordered batch of Operations, possibly across files: each resolves against the code the " +
                 "earlier ones left (so you can rename a Symbol, then target its new name), the batch is validated once " +
                 "after the last, and either every file is written or none is (a write failing part-way is reported). " +
                 "Intermediate states may not compile. A Symbol Path without a file is looked up on disk, so to " +
                 "target a Symbol an earlier Operation added, renamed or created a file for, pass its file. The result lists each written file. " +
+                "To write a test before the code it calls, put a stub of each missing declaration (a function " +
+                "with body TODO(), an empty class) in the same Edit as the test: the Edit passes Validation and the " +
+                "test fails when run. " +
                 "A rejected Edit gets an id and is kept until the next kt_edit or kt_rename_symbol call: to fix it, " +
                 "call kt_edit with 'amend' set to that id and only the fixing Operations (e.g. an 'edit_in' on the " +
                 "whole file adding a missing import). They are appended after its Operations, each resolving against " +
