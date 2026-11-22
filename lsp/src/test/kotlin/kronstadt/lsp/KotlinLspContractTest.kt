@@ -502,7 +502,8 @@ class KotlinLspContractTest {
         assertEquals(before, Files.readString(project.resolve(path)))
     }
 
-    // #72: a file's diagnostics depend on the other files' text, so every baseline must be pulled before any file changes.
+    // A file's diagnostics depend on the other files' text, so Validation pulls every file's diagnostics before the Edit
+    // while all files are still at their text before it (#72).
     @Test
     @Order(16)
     fun `kt_edit rejects a broken call to a signature another file of the same Edit changed, writing neither file`() = runBlocking<Unit> {
@@ -511,7 +512,8 @@ class KotlinLspContractTest {
         val shapesBefore = Files.readString(project.resolve(shapes))
         val definitionsBefore = Files.readString(project.resolve(definitions))
         // The edited call has the same error the unedited area(1.0, 2.0) would have against the new signature: pulled after
-        // Shapes.kt changed, Definitions.kt's baseline would already hold it, and the error would pass for one it had before.
+        // Shapes.kt changed, Definitions.kt's diagnostics before the Edit would already hold it, and the error would pass
+        // for one the file had before.
         val uses = $$"""
             |fun uses(radius: Int): String {
             |    val documented = Documented()
@@ -520,6 +522,7 @@ class KotlinLspContractTest {
             |    return "$radius ${documented.blocky()} ${"hi".shout()} $words ${file.name} ${"7".toInt()} ${area(3.0, 4.0)}"
             |}
         """.trimMargin()
+        val call = uses.lines().single { "area(3.0, 4.0)" in it }.trim()
 
         val result = Edit(files, lsp)(
             listOf(
@@ -529,7 +532,7 @@ class KotlinLspContractTest {
         )
 
         assertEquals(
-            listOf(Problem(definitions, "uses", 11, "No value passed for parameter 'depth'.", uses.lines()[4].trim())),
+            listOf(Problem(definitions, "uses", 11, "No value passed for parameter 'depth'.", call)),
             assertIs<EditResult.Rejected>(result, "$result").newErrors,
         )
         assertEquals(shapesBefore, Files.readString(project.resolve(shapes)))
