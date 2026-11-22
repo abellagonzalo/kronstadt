@@ -502,8 +502,45 @@ class KotlinLspContractTest {
         assertEquals(before, Files.readString(project.resolve(path)))
     }
 
+    // A file's diagnostics depend on the other files' text, so Validation pulls every file's diagnostics before the Edit
+    // while all files are still at their text before it (#72).
     @Test
     @Order(16)
+    fun `kt_edit rejects a broken call to a signature another file of the same Edit changed, writing neither file`() = runBlocking<Unit> {
+        val shapes = "src/main/kotlin/fixture/Shapes.kt"
+        val definitions = "src/main/kotlin/fixture/Definitions.kt"
+        val shapesBefore = Files.readString(project.resolve(shapes))
+        val definitionsBefore = Files.readString(project.resolve(definitions))
+        // The edited call has the same error the unedited area(1.0, 2.0) would have against the new signature: pulled after
+        // Shapes.kt changed, Definitions.kt's diagnostics before the Edit would already hold it, and the error would pass
+        // for one the file had before.
+        val uses = $$"""
+            |fun uses(radius: Int): String {
+            |    val documented = Documented()
+            |    val words = listOf("a", "b")
+            |    val file = File("x")
+            |    return "$radius ${documented.blocky()} ${"hi".shout()} $words ${file.name} ${"7".toInt()} ${area(3.0, 4.0)}"
+            |}
+        """.trimMargin()
+        val call = uses.lines().single { "area(3.0, 4.0)" in it }.trim()
+
+        val result = Edit(files, lsp)(
+            listOf(
+                Replace(shapes, "/area", "fun area(width: Double, height: Double, depth: Double): Area = width * height * depth"),
+                Replace(definitions, "Definitions/uses", uses),
+            ),
+        )
+
+        assertEquals(
+            listOf(Problem(definitions, "uses", 11, "No value passed for parameter 'depth'.", call)),
+            assertIs<EditResult.Rejected>(result, "$result").newErrors,
+        )
+        assertEquals(shapesBefore, Files.readString(project.resolve(shapes)))
+        assertEquals(definitionsBefore, Files.readString(project.resolve(definitions)))
+    }
+
+    @Test
+    @Order(17)
     fun `kt_edit writes a valid replace back, and kt_find_symbol sees it right away`() = runBlocking<Unit> {
         val path = "src/main/kotlin/fixture/alpha/Shape.kt"
 
@@ -523,7 +560,7 @@ class KotlinLspContractTest {
     // kt_find_usages: textDocument/references without the declaration, attributed through each file's own tree.
 
     @Test
-    @Order(17)
+    @Order(18)
     fun `kt_find_usages lists Usages by containing Symbol, main before test, imports only counted`() = runBlocking<Unit> {
         val find = FindUsages(files, lsp)
         suspend fun usages(path: String) = assertIs<FindUsagesResult.Found>(find(path), path).text
@@ -575,7 +612,7 @@ class KotlinLspContractTest {
     // kt_get_definition: textDocument/definition, on fixture/Definitions.kt.
 
     @Test
-    @Order(18)
+    @Order(19)
     fun `kt_get_definition shows project, local, sources-jar and JDK targets`() = runBlocking<Unit> {
         val get = GetDefinition(files, lsp)
         val definitions = "src/main/kotlin/fixture/Definitions.kt"
@@ -637,7 +674,7 @@ class KotlinLspContractTest {
     }
 
     @Test
-    @Order(19)
+    @Order(20)
     fun `an unresolved reference has no definition, but a diagnostic on its name`() = runBlocking<Unit> {
         val file = project.resolve("src/main/kotlin/fixture/Definitions.kt")
         val broken = TextDocument(Files.readString(file).replace("area(1.0, 2.0)", "nope(1.0, 2.0)"))
@@ -652,7 +689,7 @@ class KotlinLspContractTest {
     // kt_edit imports: an Operation's imports reach Validation with its code.
 
     @Test
-    @Order(20)
+    @Order(21)
     fun `kt_edit adds the imports an Operation lists, so code that needs them validates in the same Edit`() = runBlocking<Unit> {
         val path = "src/main/kotlin/fixture/alpha/Shape.kt"
         val before = Files.readString(project.resolve(path))
@@ -676,7 +713,7 @@ class KotlinLspContractTest {
     // kt_edit import removal (ADR 0004): organize-imports is kotlin-lsp's only unused-import signal.
 
     @Test
-    @Order(21)
+    @Order(22)
     fun `organize-imports drops the unused imports of exactly the text sent, sorting the rest its own way`() = runBlocking<Unit> {
         val file = project.resolve("src/main/kotlin/fixture/alpha/Shape.kt")
         val disk = Files.readString(file)
@@ -698,7 +735,7 @@ class KotlinLspContractTest {
     }
 
     @Test
-    @Order(22)
+    @Order(23)
     fun `kt_edit removes the imports a delete made unused, and the file still validates`() = runBlocking<Unit> {
         val path = "src/main/kotlin/fixture/alpha/Shape.kt"
 
@@ -712,7 +749,7 @@ class KotlinLspContractTest {
     // kt_rename_symbol: the shape of kotlin-lsp's rename answer, and the use case end to end.
 
     @Test
-    @Order(23)
+    @Order(24)
     fun `rename edits files never opened, and a class named like its file also renames the file, last`() = runBlocking {
         val shape = project.resolve("src/main/kotlin/fixture/beta/Shape.kt")
         val check = project.resolve("src/test/kotlin/fixture/ShapesCheck.kt")
@@ -743,7 +780,7 @@ class KotlinLspContractTest {
     }
 
     @Test
-    @Order(24)
+    @Order(25)
     fun `prepare-rename refuses a keyword, and rename refuses a library declaration prepare-rename let through`() = runBlocking {
         val file = project.resolve("src/main/kotlin/fixture/Shapes.kt")
         val document = TextDocument(Files.readString(file))
@@ -758,7 +795,7 @@ class KotlinLspContractTest {
     }
 
     @Test
-    @Order(25)
+    @Order(26)
     fun `kt_rename_symbol renames across main and test sources, and moves a class's file`() = runBlocking<Unit> {
         val shapes = "src/main/kotlin/fixture/Shapes.kt"
         val check = "src/test/kotlin/fixture/ShapesCheck.kt"
@@ -808,7 +845,7 @@ class KotlinLspContractTest {
         "fun failure(): IOException? = null\n"
 
     @Test
-    @Order(26)
+    @Order(27)
     fun `organize-imports answers a star import once 5 names of a package are used, whether the others are used or not`() = runBlocking<Unit> {
         val file = project.resolve(streamsPath)
         val header = "package fixture.gamma\n\n" +
@@ -839,7 +876,7 @@ class KotlinLspContractTest {
     }
 
     @Test
-    @Order(27)
+    @Order(28)
     fun `kt_edit removes an import it made unused under a star import, keeps the used, the already unused and the listed ones`() = runBlocking<Unit> {
         val file = project.resolve(streamsPath)
         Files.createDirectories(file.parent)
@@ -873,7 +910,7 @@ class KotlinLspContractTest {
     /** Two Usages of `signature`, an import of `Sym` the rename doesn't change, and the already unused `java.io.File`. */
 private val symCheckPath = "src/test/kotlin/fixture/SymCheck.kt"
     @Test
-    @Order(28)
+    @Order(29)
     fun `kt_rename_symbol counts renamed names, not kotlin-lsp's edits, and keeps an import that was already unused`() = runBlocking<Unit> {
         val symFile = project.resolve(symPath)
         val symCheckFile = project.resolve(symCheckPath)
@@ -915,7 +952,7 @@ private val symCheckPath = "src/test/kotlin/fixture/SymCheck.kt"
     // #56: kotlin-lsp analyses other files against a written document Kronstadt keeps open, not against disk.
 
     @Test
-    @Order(29)
+    @Order(30)
     fun `an outside change to a file kt_edit wrote reaches other files' diagnostics at the next session`() = runBlocking<Unit> {
         val answerPath = "src/main/kotlin/fixture/delta/Answer.kt"
         val answerFile = project.resolve(answerPath)
