@@ -39,6 +39,7 @@ internal class FixtureTranscripts(val projects: Path = Files.createTempDirectory
         val subagents = mutableListOf<Thread>()
         private var seconds = java.time.Instant.parse(start).epochSecond
         private var counter = 0
+        private var dispatched = 0
 
         init {
             lines += record("user", cwd) { put("message", buildJsonObject { put("role", "user"); put("content", "do the work") }) }
@@ -53,6 +54,7 @@ internal class FixtureTranscripts(val projects: Path = Files.createTempDirectory
             writeType: String? = null,
             mcpShaped: Boolean = name.startsWith("mcp__"),
             cwd: String = this.cwd,
+            toolUseResult: JsonElement? = writeType?.let { buildJsonObject { put("type", it) } },
         ) {
             val id = "toolu_${agentId ?: "main"}_${counter++}"
             lines += record("assistant", cwd) {
@@ -95,7 +97,7 @@ internal class FixtureTranscripts(val projects: Path = Files.createTempDirectory
                         )
                     },
                 )
-                if (writeType != null) put("toolUseResult", buildJsonObject { put("type", writeType) })
+                if (toolUseResult != null) put("toolUseResult", toolUseResult)
             }
         }
 
@@ -125,6 +127,59 @@ internal class FixtureTranscripts(val projects: Path = Files.createTempDirectory
                 result,
                 isError,
             )
+
+        /**
+         * A Code Mode `REPL` call as Claude Code 2.1.327 records it: the host call, whose input is the script and whose result
+         * is `(dispatched #N)`, then each call the script made ([block]) as its own virtual records.
+         */
+        fun repl(code: String = "await \$`ls`", block: Repl.() -> Unit = {}) {
+            val n = ++dispatched
+            call("REPL", obj("code" to code), "(dispatched #$n)", mcpShaped = false, toolUseResult = buildJsonObject {
+                put("code", code); put("result", "(dispatched #$n)"); put("stdout", ""); put("stderr", ""); put("evalId", n); put("asyncDispatched", true)
+            })
+            Repl().block()
+        }
+
+        /**
+         * The calls a `REPL` script makes. Each is an `assistant` record with `isVirtual: true`, `model: "<synthetic>"` and a
+         * `tool_use` id `repl_<uuid>`, then a virtual `user` record whose `tool_result` content is `""` on success, the text
+         * being in the record's `toolUseResult` (an object with `stdout` for `Bash`, a string for MCP tools); on failure the
+         * content holds the error and there is no `toolUseResult`.
+         */
+        inner class Repl {
+            fun call(name: String, input: JsonObject, content: String = "", isError: Boolean = false, toolUseResult: JsonElement? = null) {
+                val id = "repl_${java.util.UUID.randomUUID()}"
+                lines += record("assistant", cwd) {
+                    put("isVirtual", true)
+                    put("message", buildJsonObject {
+                        put("role", "assistant"); put("model", "<synthetic>")
+                        put("content", buildJsonArray { add(buildJsonObject { put("type", "tool_use"); put("id", id); put("name", name); put("input", input) }) })
+                    })
+                }
+                lines += record("user", cwd) {
+                    put("isVirtual", true)
+                    put("message", buildJsonObject {
+                        put("role", "user")
+                        put("content", buildJsonArray {
+                            add(buildJsonObject { put("type", "tool_result"); put("tool_use_id", id); put("content", content); put("is_error", isError) })
+                        })
+                    })
+                    if (toolUseResult != null) put("toolUseResult", toolUseResult)
+                }
+            }
+
+            fun bash(command: String, stdout: String = "", stderr: String = "") = call(
+                "Bash",
+                obj("command" to command),
+                toolUseResult = buildJsonObject {
+                    put("stdout", stdout); put("stderr", stderr); put("interrupted", false); put("isImage", false); put("noOutputExpected", false)
+                },
+            )
+
+            fun kronstadt(tool: String, vararg args: Pair<String, String>, result: String = "ok", isError: Boolean = false) =
+                if (isError) call("mcp__kronstadt__$tool", obj(*args), content = result, isError = true)
+                else call("mcp__kronstadt__$tool", obj(*args), toolUseResult = JsonPrimitive(result))
+        }
 
         fun subagent(agentId: String, block: Thread.() -> Unit) {
             subagents += Thread(sessionId, cwd, java.time.Instant.ofEpochSecond(seconds).toString(), agentId).apply(block)

@@ -14,7 +14,8 @@ internal data class Circumvention(val file: Path, val how: String, val call: Too
  * `>`/`>>` redirection, `tee`, `cp`/`mv` onto one) and `Write` recreating a `.kt` file the agent deleted.
  *
  * Whether a file existed is judged from the session itself: in-place editors need an existing file; any other write
- * counts only if the path was mentioned by an earlier call or result, so a heredoc creating a new file does not.
+ * counts only if the path was mentioned by an earlier call or result, so a heredoc creating a new file does not. A Code
+ * Mode `REPL` call's script is not such a mention: the calls it makes are recorded as calls of their own.
  */
 internal object Circumventions {
     fun find(session: Session): List<Circumvention> {
@@ -38,7 +39,7 @@ internal object Circumventions {
                     if (inProject(file) && deleted.remove(file)) found.add(Circumvention(file, "Write after rm", call))
                 }
             }
-            (strings(call.input) + call.result.orEmpty()).flatMap(Kotlin::ktPaths).forEach { seen.add(call.cwd.resolve(it).normalize()) }
+            (strings(call.input).takeUnless { call.name == "REPL" }.orEmpty() + call.result.orEmpty()).flatMap(Kotlin::ktPaths).forEach { seen.add(call.cwd.resolve(it).normalize()) }
         }
         return found
     }
