@@ -84,7 +84,20 @@ internal class ShadowWorkspace(
     }
 
     private suspend fun analyse(file: Path, document: TextDocument) =
-        AnalysedFile(file, document, SymbolTree(session.documentSymbols(file, document)))
+        AnalysedFile(file, document, SymbolTree(session.documentSymbols(file, document)).also { trees[file to document.text] = it })
+
+    /** Each Symbol tree analysed so far, by file and exact text: a file's Symbols depend on its text alone. */
+    private val trees = mutableMapOf<Pair<Path, String>, SymbolTree>()
+
+    /** [file]'s Symbol tree with [document] as its text, analysed unless it was before. */
+    private suspend fun tree(file: Path, document: TextDocument): SymbolTree =
+        trees[file to document.text] ?: SymbolTree(session.documentSymbols(file, document)).also { trees[file to document.text] = it }
+
+    /** The Edit's Collateral Errors, once Validation passed and before Write-back (see [CollateralCheck]), within [timeout]. */
+    suspend fun collateralErrors(timeout: Duration): CollateralErrors {
+        val changed = touched.filterValues { it.isEdited }.map { (file, it) -> ChangedFile(file, it.base, it.current, it.isCreated) }
+        return CollateralCheck(files, session, ::tree, timeout).run(changed)
+    }
 
     sealed interface Lookup {
         /** The Symbol at [canonical] and its [span] in [document], the file's current text. */
@@ -219,11 +232,11 @@ internal class ShadowWorkspace(
                 // A created file is pulled at its empty base too, so other files' base diagnostics don't see its
                 // declarations; it had no errors before the Edit.
                 val diagnostics = session.diagnostics(file, it.base)
-                if (it.isCreated) emptyList() else relevant(file, diagnostics).map { d -> d.copy(message = inBase(d.message)) }
+                if (it.isCreated) emptyList() else Validation.withoutSpurious(file, diagnostics).map { d -> d.copy(message = inBase(d.message)) }
             }
             // Analysing every current text first is what changes every file to it.
-            val trees = edited.map { (file, it) -> SymbolTree(session.documentSymbols(file, it.current)) }
-            val after = edited.map { (file, it) -> relevant(file, session.diagnostics(file, it.current)) }
+            val trees = edited.map { (file, it) -> SymbolTree(session.documentSymbols(file, it.current)).also { tree -> this@ShadowWorkspace.trees[file to it.current.text] = tree } }
+            val after = edited.map { (file, it) -> Validation.withoutSpurious(file, session.diagnostics(file, it.current)) }
             Triple(before, trees, after)
         } ?: return Validated.TimedOut
         val (before, trees, after) = pulled
@@ -232,8 +245,6 @@ internal class ShadowWorkspace(
         if (newErrors.isNotEmpty()) return Validated.Rejected(newErrors)
         return Validated.Passed(checked.map { it.report() })
     }
-
-    private fun relevant(file: Path, diagnostics: List<Diagnostic>) = diagnostics.filterNot { Validation.isSpurious(file, it) }
 
     /** One edited file during Validation, with its current [tree] and diagnostics [before] and [after] the Edit. */
     private inner class Checked(
@@ -268,17 +279,7 @@ internal class ShadowWorkspace(
         }
 
         /** [diagnostic], attributed to the innermost Symbol whose range holds it. */
-        fun problem(diagnostic: Diagnostic): Problem {
-            val start = diagnostic.range.start
-            val enclosing = tree.nodes.filter { start in it.symbol.range }.maxByOrNull { it.ancestors.size }
-            return Problem(
-                file = files.display(file),
-                symbol = enclosing?.let { tree.canonicalPath(it).toString() },
-                line = start.line + 1,
-                message = diagnostic.message,
-                source = document.line(start.line).trim(),
-            )
-        }
+        fun problem(diagnostic: Diagnostic): Problem = problem(files.display(file), tree, document, diagnostic)
     }
 
     sealed interface WriteBack {
@@ -351,4 +352,17 @@ internal class ShadowWorkspace(
         const val CHANGED_ON_DISK = "changed on disk since read"
         const val TARGET_EXISTS = "its new path already exists"
     }
+}
+
+/** [diagnostic] in [document], the text of the file shown as [file] whose [tree] it is, attributed to the innermost Symbol whose range holds it. */
+internal fun problem(file: String, tree: SymbolTree, document: TextDocument, diagnostic: Diagnostic): Problem {
+    val start = diagnostic.range.start
+    val enclosing = tree.nodes.filter { start in it.symbol.range }.maxByOrNull { it.ancestors.size }
+    return Problem(
+        file = file,
+        symbol = enclosing?.let { tree.canonicalPath(it).toString() },
+        line = start.line + 1,
+        message = diagnostic.message,
+        source = document.line(start.line).trim(),
+    )
 }

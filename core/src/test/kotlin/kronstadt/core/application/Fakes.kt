@@ -137,8 +137,19 @@ class FakeCodeIntelligence(
     private val renameRefusals: Map<Pair<Path, Position>, String> = emptyMap(),
     private val organizedByText: Map<String, String> = emptyMap(),
     private val searchCap: Int? = null,
+    /**
+     * Diagnostics for a file's exact text given the text of every open document, ahead of [diagnosticsByText]: what
+     * a file's diagnostics depend on beyond its own text. Null leaves it to [diagnosticsByText].
+     */
+    private val diagnosticsInContext: (file: Path, text: String, open: Map<Path, String>) -> List<Diagnostic>? = { _, _, _ -> null },
 ) : CodeIntelligence {
     val analysed = mutableListOf<Pair<Path, TextDocument>>()
+
+    /** Every file whose diagnostics were pulled, in order. */
+    val diagnosed = mutableListOf<Path>()
+
+    /** Every file a references request was made in, in order. */
+    val referenced = mutableListOf<Path>()
     val searched = mutableListOf<String>()
 
     /** What the language server was told, in order: `open <file> v1`, `change <file> v2`, `save <file>`, `close <file>`. */
@@ -223,14 +234,17 @@ class FakeCodeIntelligence(
 
         override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> {
             sync(file, document)
+            diagnosed.add(file)
             beforeDiagnostics()
             delay(diagnosticsDelay)
             check(document.text !in failingDiagnostics) { "diagnostics failed" }
-            return diagnosticsByText[document.text].orEmpty()
+            return diagnosticsInContext(file, document.text, open.mapValues { it.value.text })
+                ?: diagnosticsByText[document.text].orEmpty()
         }
 
         override suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation> {
             sync(file, document)
+            referenced.add(file)
             return references[file to position].orEmpty()
         }
 

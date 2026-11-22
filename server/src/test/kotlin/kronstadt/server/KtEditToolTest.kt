@@ -8,6 +8,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequestParams
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
 import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -71,12 +72,18 @@ class KtEditToolTest {
     /** What the project index lists; filled by a test before it calls the tool. */
     private val index = mutableListOf<SymbolLocation>()
 
+    /** References to the Symbols of a file, by file name; filled by a test before it calls the tool. */
+    private val references = mutableMapOf<String, List<SourceLocation>>()
+
+    /** Diagnostics of a file given every analysed file's text, by file name; set by a test before it calls the tool. */
+    private var inContext: (String, Map<String, String>) -> List<Diagnostic>? = { _, _ -> null }
+
     private val server = Server(
         Implementation(name = "kronstadt-test", version = "0"),
         ServerOptions(capabilities = ServerCapabilities(tools = ServerCapabilities.Tools(listChanged = false))),
     ).also { server ->
         val files = LocalFileStore(root)
-        val intelligence = EmptyIntelligence(organized, cutOff, symbols, diagnostics, symbolsByText, index)
+        val intelligence = EmptyIntelligence(organized, cutOff, symbols, diagnostics, symbolsByText, index, references) { file, open -> inContext(file, open) }
         KronstadtTools(
             ReadStructure(files, intelligence),
             FindSymbol(files, intelligence),
@@ -150,6 +157,44 @@ class KtEditToolTest {
 
         assertTrue("TODO()" in description, description)
         assertTrue("same Edit as the test" in description, description)
+    }
+
+    @Test
+    fun `the kt_edit description says Collateral Errors are reported and never block`() {
+        val description = checkNotNull(checkNotNull(server.tools["kt_edit"]).tool.description)
+
+        assertTrue("Collateral Errors" in description, description)
+        assertTrue("never block" in description, description)
+    }
+
+    @Test
+    fun `a written Edit that broke a caller in another file lists it under Collateral Errors`() = runBlocking {
+        // Real time: the check's timeout must not race the caller's read from disk on a virtual clock.
+        val caller = root.resolve("B.kt").apply { writeText("package b\n\nimport a.greet\n\nfun use(): Int = greet() + 1\n") }
+        val changed = "package a\n\nfun greet(): String = \"1\"\n"
+        fun greet(type: String) = CodeSymbol("greet", SymbolKind.FUNCTION, TextRange(Position(2, 0), Position(2, 20)), TextRange(Position(2, 4), Position(2, 9)), parameterTypes = "", type = type)
+        symbols += greet("(): Int")
+        symbolsByText[caller.readText()] = listOf(
+            CodeSymbol("use", SymbolKind.FUNCTION, TextRange(Position(4, 0), Position(4, 28)), TextRange(Position(4, 4), Position(4, 7)), parameterTypes = "", type = "(): Int"),
+        )
+        symbolsByText[changed] = listOf(greet("(): String"))
+        references["A.kt"] = listOf(SourceLocation(caller, TextRange(Position(4, 17), Position(4, 22))))
+        val mismatch = Diagnostic(TextRange(Position(4, 17), Position(4, 28)), Severity.ERROR, "Return type mismatch.", "RETURN_TYPE_MISMATCH")
+        inContext = { file, open -> if (file == "B.kt" && open["A.kt"] == changed) listOf(mismatch) else null }
+
+        val (failed, text) = ktEdit("""{"operations": [{"type": "replace", "file": "A.kt", "symbol": "greet", "code": "fun greet(): String = \"1\""}]}""")
+
+        assertEquals(false, failed, text)
+        assertEquals(
+            "Edited A.kt\n" +
+                "  greet  // L3-3\n" +
+                "Collateral Errors: 1 new error in files this Edit didn't change, which Validation doesn't check. " +
+                "Nothing was blocked: the Edit is written; fix them with another Edit.\n" +
+                "  B.kt:L5 in use: Return type mismatch.\n" +
+                "      fun use(): Int = greet() + 1",
+            text,
+        )
+        assertEquals(changed, file.readText())
     }
 
     @Test
@@ -366,11 +411,29 @@ private class EmptyIntelligence(
     private val symbolsByText: Map<String, List<CodeSymbol>> = emptyMap(),
     /** What the project index lists; a search finds those whose name contains its query. */
     private val index: List<SymbolLocation> = emptyList(),
+    /** The references to any Symbol declared in a file, by file name; none for any other. */
+    private val references: Map<String, List<SourceLocation>> = emptyMap(),
+    /** Diagnostics of a file given every analysed file's text by file name, ahead of [diagnostics]; null leaves it to those. */
+    private val inContext: (file: String, open: Map<String, String>) -> List<Diagnostic>? = { _, _ -> null },
 ) : CodeIntelligence {
     override suspend fun <T> session(block: suspend (AnalysisSession) -> T): T = block(object : AnalysisSession {
-        override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> = symbolsByText[document.text] ?: symbols
-        override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> = diagnostics[document.text].orEmpty()
-        override suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation> = emptyList()
+        /** The text each file was last analysed with, by file name. */
+        private val open = mutableMapOf<String, String>()
+
+        override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> {
+            open[file.name] = document.text
+            return symbolsByText[document.text] ?: symbols
+        }
+
+        override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> {
+            open[file.name] = document.text
+            return inContext(file.name, open) ?: diagnostics[document.text].orEmpty()
+        }
+
+        override suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation> {
+            open[file.name] = document.text
+            return references[file.name].orEmpty()
+        }
         override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> = emptyList()
         override suspend fun prepareRename(file: Path, document: TextDocument, position: Position) = RenamePreparation.Refused("unsupported")
         override suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String) = Rename.Refused("unsupported")
