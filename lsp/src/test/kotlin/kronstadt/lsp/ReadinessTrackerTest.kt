@@ -90,6 +90,24 @@ class ReadinessTrackerTest {
     }
 
     @Test
+    fun `is not ready when a progress begins just after the import finished, until it ends and settles`() = runTest {
+        // kotlin-lsp on first startup (#71): Importing and Indexing end, FINISHED, and the next Indexing begins ~2 ms later.
+        val tracker = tracker()
+        tracker.progressBegin("t1", "Importing")
+        tracker.progressEnd("t1")
+        tracker.importState("FINISHED")
+        launch {
+            delay(ReadinessTracker.SETTLE / 10)
+            tracker.progressBegin("t2", "Indexing")
+            delay(1.seconds)
+            tracker.progressEnd("t2")
+        }
+        val start = testTimeSource.markNow()
+        assertEquals(Readiness.Ready, tracker.awaitReady(90.seconds))
+        assertEquals(ReadinessTracker.SETTLE / 10 + 1.seconds + ReadinessTracker.SETTLE, start.elapsedNow())
+    }
+
+    @Test
     fun `is ready once the settle period after the last progress has passed`() = runTest {
         val tracker = tracker()
         tracker.importState("FINISHED")
