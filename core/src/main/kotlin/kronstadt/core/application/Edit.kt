@@ -101,6 +101,8 @@ public class Edit(
     /** One budget for all of Validation's diagnostics: before and after the Edit, across every touched file. */
     private val validationTimeout: Duration = Validation.DEFAULT_TIMEOUT,
     private val writeLock: WriteLock = WriteLock(),
+    /** The budget for looking for Collateral Errors once Validation passed; running out of it never fails the Edit. */
+    private val collateralTimeout: Duration = validationTimeout,
 ) {
     private val resolver = SymbolResolver(files, intelligence)
 
@@ -172,13 +174,16 @@ public class Edit(
             val removed = shadow.removeImportsMadeUnused(session, validationTimeout) { file, suspects -> suspects - listed[file].orEmpty() }
                 .mapKeys { files.display(it.key) }
             when (val validated = shadow.validate()) {
-                is ShadowWorkspace.Validated.Passed -> when (val writeBack = shadow.writeBack()) {
-                    ShadowWorkspace.WriteBack.Written ->
-                        EditResult.Written(validated.files.map { it.copy(importsRemoved = removed[it.file].orEmpty()) })
-                    is ShadowWorkspace.WriteBack.ChangedOnDisk -> EditResult.ChangedOnDisk(writeBack.file)
-                    is ShadowWorkspace.WriteBack.TargetExists -> error("an Edit moves no file, yet Write-back found ${writeBack.file} moved")
-                    is ShadowWorkspace.WriteBack.Partial ->
-                        EditResult.PartiallyWritten(writeBack.written, writeBack.failed, writeBack.reason)
+                is ShadowWorkspace.Validated.Passed -> {
+                    val collateral = shadow.collateralErrors(collateralTimeout)
+                    when (val writeBack = shadow.writeBack()) {
+                        ShadowWorkspace.WriteBack.Written ->
+                            EditResult.Written(validated.files.map { it.copy(importsRemoved = removed[it.file].orEmpty()) }, collateral)
+                        is ShadowWorkspace.WriteBack.ChangedOnDisk -> EditResult.ChangedOnDisk(writeBack.file)
+                        is ShadowWorkspace.WriteBack.TargetExists -> error("an Edit moves no file, yet Write-back found ${writeBack.file} moved")
+                        is ShadowWorkspace.WriteBack.Partial ->
+                            EditResult.PartiallyWritten(writeBack.written, writeBack.failed, writeBack.reason)
+                    }
                 }
                 is ShadowWorkspace.Validated.Rejected -> EditResult.Rejected(validated.newErrors, writeLock.keep(combined, read))
                 ShadowWorkspace.Validated.TimedOut -> EditResult.ValidationTimedOut
@@ -417,8 +422,42 @@ public data class EditedFile(
 /** A diagnostic as the agent sees it: where it is ([line] is 1-based), what it says and the offending source line. */
 public data class Problem(val file: String, val symbol: String?, val line: Int, val message: String, val source: String)
 
+/**
+ * The Collateral Errors a written Edit introduced: compiler errors in files it didn't touch, which Validation never
+ * checks and which never block the Edit. They are looked for only when the Edit changed the header of a Symbol that
+ * existed before it (removed or renamed it, or changed its kind, parameters or return type), in the files that used
+ * such a Symbol before the Edit, at most [MAX_FILES] of them.
+ */
+public data class CollateralErrors(
+    /** At most [MAX_LISTED] of them, by file and line. */
+    val errors: List<Problem> = emptyList(),
+    /** Collateral Errors beyond those listed in [errors]. */
+    val moreErrors: Int = 0,
+    /** Files with Usages of a changed Symbol beyond the [MAX_FILES] checked, which weren't checked. */
+    val filesUnchecked: Int = 0,
+    /** Why the check didn't finish, so other files may have errors it didn't find; null if it finished. */
+    val unfinished: Unfinished? = null,
+) {
+    public sealed interface Unfinished {
+        /** The check ran out of its time budget. */
+        public data object TimedOut : Unfinished
+
+        /** The check failed with [reason]. */
+        public data class Failed(val reason: String) : Unfinished
+    }
+
+    public companion object {
+        /** The most files with Usages the check looks at. */
+        public const val MAX_FILES: Int = 20
+
+        /** The most Collateral Errors a result lists. */
+        public const val MAX_LISTED: Int = 10
+    }
+}
+
 public sealed interface EditResult {
-    public data class Written(val files: List<EditedFile>) : EditResult
+    /** The Edit was written to [files]; [collateral] are the errors it introduced in files it didn't touch. */
+    public data class Written(val files: List<EditedFile>, val collateral: CollateralErrors = CollateralErrors()) : EditResult
 
     /**
      * Validation found [newErrors] the Edit introduced; nothing was written. The Edit is kept as the Rejected Edit [id]

@@ -18,6 +18,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+import kronstadt.core.application.CollateralErrors
 import kronstadt.core.application.Create
 import kronstadt.core.application.Delete
 import kronstadt.core.application.Edit
@@ -226,6 +227,10 @@ internal class KronstadtTools(
                 "result; imports that were already unused are never touched. " +
                 "Files are written only if the Edit adds no compiler errors to them; otherwise nothing is written and " +
                 "the new errors are listed. " +
+                "If the Edit changed the header of an existing Symbol (removed or renamed it, or changed its kind, " +
+                "parameters or return type), the other files that used it are checked too, and the errors the Edit " +
+                "introduced there are listed as Collateral Errors. Collateral Errors never block the Edit: it is written, " +
+                "so fix them with another Edit. " +
                 "An Edit is an ordered batch of Operations, possibly across files: each resolves against the code the " +
                 "earlier ones left (so you can rename a Symbol, then target its new name), the batch is validated once " +
                 "after the last, and either every file is written or none is (a write failing part-way is reported). " +
@@ -381,7 +386,9 @@ internal class KronstadtTools(
                 ?: return error("'amend' must be the id of a rejected Edit, e.g. \"e1\". Nothing written.")
         }
         return when (val result = edit(parsed.map { it.second }, amend)) {
-            is EditResult.Written -> text(result.files.joinToString("\n") { written(it) })
+            is EditResult.Written -> text(
+                (result.files.map { written(it) } + collateral(result.collateral)).filter { it.isNotEmpty() }.joinToString("\n"),
+            )
             is EditResult.Rejected -> error(
                 buildString {
                     val count = result.newErrors.size
@@ -494,6 +501,33 @@ internal class KronstadtTools(
         }
         if (file.preexistingErrors > 0) {
             append("${file.preexistingErrors} error${if (file.preexistingErrors == 1) " was" else "s were"} already in the file.\n")
+        }
+    }.trimEnd()
+
+    /**
+     * The Collateral Errors a written Edit introduced in files it didn't change, the files left unchecked and whether the
+     * check finished; empty if there is nothing to say. A failed check is logged too.
+     */
+    private fun collateral(collateral: CollateralErrors) = buildString {
+        if (collateral.errors.isNotEmpty()) {
+            val count = collateral.errors.size + collateral.moreErrors
+            append("Collateral Errors: $count new error${if (count == 1) "" else "s"} in files this Edit didn't change, ")
+            append("which Validation doesn't check. Nothing was blocked: the Edit is written; fix them with another Edit.\n")
+            collateral.errors.forEach { append(problem(it, withFile = true)) }
+            if (collateral.moreErrors > 0) append("  (${collateral.moreErrors} more)\n")
+        }
+        if (collateral.filesUnchecked > 0) {
+            val files = if (collateral.filesUnchecked == 1) "1 more file" else "${collateral.filesUnchecked} more files"
+            append("$files using the Symbols whose header changed weren't checked for Collateral Errors.\n")
+        }
+        when (val unfinished = collateral.unfinished) {
+            null -> Unit
+            CollateralErrors.Unfinished.TimedOut ->
+                append("The check of other files for Collateral Errors didn't finish in time; they may have some. The Edit is written.\n")
+            is CollateralErrors.Unfinished.Failed -> {
+                System.err.println("kronstadt: the check for Collateral Errors failed: ${unfinished.reason}")
+                append("The check of other files for Collateral Errors failed (${unfinished.reason}); they may have some. The Edit is written.\n")
+            }
         }
     }.trimEnd()
 
