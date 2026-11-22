@@ -370,6 +370,9 @@ class RenameSymbolTest {
         val result = RenameSymbol(files, intelligence)("Greeter", "Host", file = classPath)
 
         val renamed = assertIs<RenameResult.Renamed>(result, "$result")
-        assertEquals(1, renamed.files.single { it.file == mainPath }.preexistingErrors)
+        assertEquals(
+            listOf(Problem(mainPath, null, 7, "Unresolved reference 'x' on receiver of type 'Host'.", "Host().greet()")),
+            renamed.files.single { it.file == mainPath }.preexistingErrors,
+        )
     }
 }

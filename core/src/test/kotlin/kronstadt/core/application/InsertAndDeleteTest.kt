@@ -75,7 +75,7 @@ class InsertAndDeleteTest {
         val (result, files) = run(texts, InsertAfter(path, "Greeter/other", "fun added(): Int = 2\n"))
 
         assertEquals(expected, files.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("added", 9, 9)), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("added", 9, 9)), emptyList(), 0, emptyList(), 0))), result)
     }
 
     @Test
@@ -100,7 +100,7 @@ class InsertAndDeleteTest {
         val (result, files) = run(texts, InsertBefore(path, "Greeter/greet", "\n  fun added(): Int = 2\n\n"))
 
         assertEquals(expected, files.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("added", 4, 4)), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("added", 4, 4)), emptyList(), 0, emptyList(), 0))), result)
     }
 
     @Test
@@ -146,7 +146,7 @@ class InsertAndDeleteTest {
 
         assertEquals(withoutGreet, greetFiles.content(path))
         assertEquals(withoutOther, otherFiles.content(path))
-        val nothingLeft = EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0)))
+        val nothingLeft = EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0)))
         assertEquals(nothingLeft, greetResult)
         assertEquals(nothingLeft, otherResult)
     }
@@ -164,7 +164,7 @@ class InsertAndDeleteTest {
         val (result, files) = run(texts, InsertAfter(path, "Inner/one", "    fun two(): Int {\n        return 2\n    }"))
 
         assertEquals(expected, files.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("two", 7, 9)), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("two", 7, 9)), emptyList(), 0, emptyList(), 0))), result)
     }
 
     @Test
@@ -206,6 +206,6 @@ class InsertAndDeleteTest {
         )
 
         assertEquals(expected, files.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("added", 4, 4)), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("added", 4, 4)), emptyList(), 0, emptyList(), 0))), result)
     }
 }

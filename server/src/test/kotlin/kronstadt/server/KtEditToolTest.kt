@@ -212,6 +212,34 @@ class KtEditToolTest {
     }
 
     @Test
+    fun `the result lists the errors already in the file up to the cap, counts the rest, and says they may be false`() = runTest {
+        val source = "package a\n\nfun greet(): Int = 1\n\nfun broken(): Int = x\n"
+        val edited = source.replace("= 1", "= 2")
+        fun function(name: String, line: Int, length: Int) =
+            CodeSymbol(name, SymbolKind.FUNCTION, TextRange(Position(line, 0), Position(line, length)), TextRange(Position(line, 4), Position(line, 4 + name.length)), parameterTypes = "", type = "(): Int")
+        symbolsByText[source] = listOf(function("greet", 2, 20), function("broken", 4, 21))
+        symbolsByText[edited] = symbolsByText.getValue(source)
+        val errors = (1..7).map { Diagnostic(TextRange(Position(4, 20), Position(4, 21)), Severity.ERROR, "Error $it", "ERR") }
+        diagnostics[source] = errors
+        diagnostics[edited] = errors
+        file.writeText(source)
+
+        val (failed, text) = ktEdit("""{"operations": [{"type": "edit_in", "file": "A.kt", "old": "= 1", "new": "= 2"}]}""")
+
+        assertEquals(false, failed, text)
+        assertEquals(
+            "Edited A.kt\n" +
+                "  greet  // L3-3\n" +
+                "Errors already in the file:\n" +
+                (1..5).joinToString("") { "  L5 in broken: Error $it\n      fun broken(): Int = x\n" } +
+                "  (2 more)\n" +
+                "They may be false: kotlin-lsp can lag behind edits made outside Kronstadt. Check with the compiler or tests before acting on them.",
+            text,
+        )
+        assertEquals(edited, file.readText())
+    }
+
+    @Test
     fun `imports that aren't an array of import directives reject the call, writing nothing`() = runTest {
         val before = file.readText()
 

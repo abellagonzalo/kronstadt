@@ -411,8 +411,10 @@ public data class EditedFile(
     val newWarnings: List<Problem>,
     /** New warnings beyond those listed in [newWarnings]. */
     val moreWarnings: Int,
-    /** Errors the file had before the Edit, which never block it. */
-    val preexistingErrors: Int,
+    /** Errors the file had before the Edit, which never block it, as many as new warnings are listed. */
+    val preexistingErrors: List<Problem>,
+    /** Errors the file had before the Edit beyond those listed in [preexistingErrors]. */
+    val morePreexistingErrors: Int,
     /** Imports the Edit made unused, which it removed (ADR 0004), e.g. `a.b.C`. */
     val importsRemoved: List<String> = emptyList(),
     /** Whether the Edit created the file (see [Create]). */

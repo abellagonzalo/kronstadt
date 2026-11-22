@@ -92,7 +92,7 @@ class ExplicitApiContractTest {
 
         val written = assertIs<EditResult.Written>(result, "$result").files.single()
         assertEquals(listOf(EditedSymbol("answerIsStillRight", 6, 6)), written.symbols)
-        assertEquals(0, written.preexistingErrors)
+        assertEquals(emptyList(), written.preexistingErrors)
     }
 
     @Test

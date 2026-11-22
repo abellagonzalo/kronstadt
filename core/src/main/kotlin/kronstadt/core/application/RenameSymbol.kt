@@ -112,7 +112,7 @@ public class RenameSymbol(
                             val report = validated.files.single { it.file == files.display(file) }
                             RenamedFile(
                                 files.display(file), counted.usages, counted.imports,
-                                report.newWarnings, report.moreWarnings, report.preexistingErrors,
+                                report.newWarnings, report.moreWarnings, report.preexistingErrors, report.morePreexistingErrors,
                             )
                         }
                     RenameResult.Renamed(
@@ -195,7 +195,8 @@ public data class RenamedFile(
     val imports: Int = 0,
     val newWarnings: List<Problem> = emptyList(),
     val moreWarnings: Int = 0,
-    val preexistingErrors: Int = 0,
+    val preexistingErrors: List<Problem> = emptyList(),
+    val morePreexistingErrors: Int = 0,
 )
 
 /** The file [from] was renamed to [to], both as shown to the agent. */

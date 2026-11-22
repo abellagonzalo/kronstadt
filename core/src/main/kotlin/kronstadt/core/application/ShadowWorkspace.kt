@@ -265,6 +265,7 @@ internal class ShadowWorkspace(
             }
             val topMost = resulting.filter { node -> resulting.none { it.symbol in node.ancestors } }
             val newWarnings = Validation.introduced(before, after, Severity.WARNING, touched.edited)
+            val preexistingErrors = Validation.preexisting(before, after, Severity.ERROR, touched.edited)
             return EditedFile(
                 file = files.display(file),
                 symbols = topMost.map { node ->
@@ -273,7 +274,8 @@ internal class ShadowWorkspace(
                 },
                 newWarnings = newWarnings.take(MAX_WARNINGS).map(::problem),
                 moreWarnings = maxOf(newWarnings.size - MAX_WARNINGS, 0),
-                preexistingErrors = after.count { it.severity == Severity.ERROR } - newErrors.size,
+                preexistingErrors = preexistingErrors.take(MAX_WARNINGS).map(::problem),
+                morePreexistingErrors = maxOf(preexistingErrors.size - MAX_WARNINGS, 0),
                 created = touched.isCreated,
             )
         }

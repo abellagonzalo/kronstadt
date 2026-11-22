@@ -37,6 +37,15 @@ public object Validation {
         }.sortedBy { it.range.start }
     }
 
+    /**
+     * The [severity] diagnostics in [after] that [introduced] doesn't count as new, by line: those that were already
+     * there. Together with [introduced] they are all of [after]'s [severity] diagnostics, each in exactly one of them.
+     */
+    public fun preexisting(before: List<Diagnostic>, after: List<Diagnostic>, severity: Severity, editedLines: List<IntRange>): List<Diagnostic> {
+        val new = introduced(before, after, severity, editedLines)
+        return after.filter { diagnostic -> diagnostic.severity == severity && new.none { it === diagnostic } }.sortedBy { it.range.start }
+    }
+
     private fun key(diagnostic: Diagnostic) = diagnostic.code to diagnostic.message
 
     private val EXPLICIT_API_CODES = setOf("NO_EXPLICIT_VISIBILITY_IN_API_MODE", "NO_EXPLICIT_RETURN_TYPE_IN_API_MODE")
