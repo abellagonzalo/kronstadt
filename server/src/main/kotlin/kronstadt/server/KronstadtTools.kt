@@ -475,9 +475,7 @@ internal class KronstadtTools(
                 file.newWarnings.forEach { append("  ").append(problem(it, withFile = false)) }
                 if (file.moreWarnings > 0) append("    (${file.moreWarnings} more)\n")
             }
-            if (file.preexistingErrors > 0) {
-                append("    ${file.preexistingErrors} error${if (file.preexistingErrors == 1) " was" else "s were"} already in the file.\n")
-            }
+            append(preexistingErrors(file.preexistingErrors, file.morePreexistingErrors, indent = "  "))
         }
         result.fileRenamed?.let { append("File renamed: ").append(it.from).append(" -> ").append(it.to).append('\n') }
         if (result.importsRemoved.isNotEmpty()) {
@@ -499,10 +497,21 @@ internal class KronstadtTools(
             file.newWarnings.forEach { append(problem(it, withFile = false)) }
             if (file.moreWarnings > 0) append("  (${file.moreWarnings} more)\n")
         }
-        if (file.preexistingErrors > 0) {
-            append("${file.preexistingErrors} error${if (file.preexistingErrors == 1) " was" else "s were"} already in the file.\n")
-        }
+        append(preexistingErrors(file.preexistingErrors, file.morePreexistingErrors, indent = ""))
     }.trimEnd()
+
+    /**
+     * The [errors] a file already had, as listed (beyond them, [more] are only counted), each line after [indent], then a
+     * hint that they may be false; empty if there are none.
+     */
+    private fun preexistingErrors(errors: List<Problem>, more: Int, indent: String) = buildString {
+        if (errors.isEmpty()) return@buildString
+        append(indent).append("Errors already in the file:\n")
+        errors.forEach { append(indent).append(problem(it, withFile = false)) }
+        if (more > 0) append(indent).append("  ($more more)\n")
+        append(indent).append("They may be false: kotlin-lsp can lag behind edits made outside Kronstadt. ")
+        append("Check with the compiler or tests before acting on them.\n")
+    }
 
     /**
      * The Collateral Errors a written Edit introduced in files it didn't change, the files left unchecked and whether the

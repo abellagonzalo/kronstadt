@@ -63,7 +63,7 @@ class EditImportsTest {
         )
 
         assertEquals(expected, files.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("later", 7, 7)), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("later", 7, 7)), emptyList(), 0, emptyList(), 0))), result)
     }
 
     @Test
@@ -79,7 +79,7 @@ class EditImportsTest {
         )
 
         assertEquals(expected, files.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 5, 5)), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 5, 5)), emptyList(), 0, emptyList(), 0))), result)
     }
 
     @Test
@@ -102,7 +102,7 @@ class EditImportsTest {
 
         assertEquals(expected, files.content(path))
         assertEquals(
-            EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 8, 8), EditedSymbol("later", 10, 10)), emptyList(), 0, 0))),
+            EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 8, 8), EditedSymbol("later", 10, 10)), emptyList(), 0, emptyList(), 0))),
             result,
         )
     }
@@ -134,7 +134,7 @@ class EditImportsTest {
         val (result, files) = run(source, texts, Delete(path, "make"), organizedByText = organized)
 
         assertEquals(expected, files.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0, importsRemoved = listOf("b.Bravo")))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0, importsRemoved = listOf("b.Bravo")))), result)
     }
 
     @Test
@@ -169,8 +169,8 @@ class EditImportsTest {
         assertEquals(
             EditResult.Written(
                 listOf(
-                    EditedFile(path, emptyList(), emptyList(), 0, 0, importsRemoved = listOf("b.B")),
-                    EditedFile(other, listOf(EditedSymbol("make", 7, 7)), emptyList(), 0, 0),
+                    EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0, importsRemoved = listOf("b.B")),
+                    EditedFile(other, listOf(EditedSymbol("make", 7, 7)), emptyList(), 0, emptyList(), 0),
                 ),
             ),
             result,
@@ -193,7 +193,7 @@ class EditImportsTest {
 
         val (result, files) = run(source, texts, Replace(path, "greet", "fun greet() = D"), organizedByText = organized)
 
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 6, 6)), emptyList(), 0, 0, importsRemoved = listOf("b.B")))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 6, 6)), emptyList(), 0, emptyList(), 0, importsRemoved = listOf("b.B")))), result)
         assertEquals(expected, files.content(path))
     }
 
@@ -205,7 +205,7 @@ class EditImportsTest {
 
         val (result, files) = run(source, texts, Delete(path, "make"))
 
-        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0))), result)
         assertEquals(expected, files.content(path))
     }
 
@@ -242,7 +242,7 @@ class EditImportsTest {
             starSource, starTexts, Delete(path, "make"), organizedByText = starOrganized, diagnosticsByText = starDiagnostics,
         )
 
-        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0, importsRemoved = listOf("c.C2")))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0, importsRemoved = listOf("c.C2")))), result)
         assertEquals(starExpected, files.content(path))
     }
 
@@ -254,7 +254,7 @@ class EditImportsTest {
 
         val (result, files) = run(source, texts, Delete(path, "make"), organizedByText = organized, diagnosticsByText = starDiagnostics)
 
-        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0))), result)
         assertEquals(starAfterDelete, files.content(path))
     }
 
@@ -268,7 +268,7 @@ class EditImportsTest {
             diagnosticsByText = starDiagnostics,
         )
 
-        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0))), result)
         assertEquals(starAfterDelete, files.content(path))
     }
 
@@ -283,7 +283,7 @@ class EditImportsTest {
             failingDiagnostics = setOf("package a\n\nfun greet() = C1\n"),
         )
 
-        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0))), result)
         assertEquals(starAfterDelete, files.content(path))
     }
 }

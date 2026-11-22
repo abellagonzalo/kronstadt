@@ -800,13 +800,21 @@ class KotlinLspContractTest {
         val shapes = "src/main/kotlin/fixture/Shapes.kt"
         val check = "src/test/kotlin/fixture/ShapesCheck.kt"
 
+        // The fixture's test source has two errors of its own: beta's Shape takes a Double and has no 'sides'.
+        fun checkErrors(shape: String) = listOf(
+            Problem(check, "checkShapes", 7, "Argument type mismatch: actual type is 'Int', but 'Double' was expected.", "val triangle = $shape(3)"),
+            Problem(
+                check, "checkShapes", 8, "Unresolved reference 'sides' on receiver of type '$shape'.",
+                "return Calculator(\"c\").parseText(\"2\") == 2 && triangle.sides == 3 && Operation.PLUS.apply(1, 2) == 3",
+            ),
+        )
+
         val parse = RenameSymbol(files, lsp)("Calculator/parse(String)", "parseText")
 
         assertEquals(
             RenameResult.Renamed(
                 "parseText",
-                // The fixture's test source has two errors of its own: beta's Shape has no 'sides'.
-                listOf(RenamedFile(shapes, usages = 0), RenamedFile(check, usages = 1, preexistingErrors = 2)),
+                listOf(RenamedFile(shapes, usages = 0), RenamedFile(check, usages = 1, preexistingErrors = checkErrors("Shape"))),
             ),
             parse,
         )
@@ -821,7 +829,7 @@ class KotlinLspContractTest {
                 "Polygon",
                 listOf(
                     RenamedFile("src/main/kotlin/fixture/beta/Shape.kt", usages = 0),
-                    RenamedFile(check, usages = 1, imports = 1, preexistingErrors = 2),
+                    RenamedFile(check, usages = 1, imports = 1, preexistingErrors = checkErrors("Polygon")),
                 ),
                 fileRenamed = FileRenamed("src/main/kotlin/fixture/beta/Shape.kt", moved),
             ),

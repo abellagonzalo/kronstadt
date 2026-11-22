@@ -84,7 +84,7 @@ class EditTest {
 
         assertEquals(hello, files.content(path))
         val written = assertIs<EditResult.Written>(result).files.single()
-        assertEquals(EditedFile(path, listOf(EditedSymbol("greet", 4, 5)), emptyList(), 0, 0), written)
+        assertEquals(EditedFile(path, listOf(EditedSymbol("greet", 4, 5)), emptyList(), 0, emptyList(), 0), written)
     }
 
     // A multi-line, trailing-comma constructor: kotlin-lsp's range for each val parameter ends before its `,` (#68).
@@ -171,7 +171,20 @@ class EditTest {
 
         val written = assertIs<EditResult.Written>(result).files.single()
         assertEquals(listOf(Problem(path, "greet", 5, "Redundant string", "\"hello\"")), written.newWarnings)
-        assertEquals(1, written.preexistingErrors)
+        assertEquals(listOf(Problem(path, "other", 7, unresolved, "fun other(): Int = 1")), written.preexistingErrors)
+        assertEquals(0, written.morePreexistingErrors)
+    }
+
+    @Test
+    fun `errors already there are listed by line up to the cap, and the rest only counted`() = runTest {
+        val many = (1..7).map { error(6, 8 + it, "Error $it") }
+        val intelligence = intelligence(diagnosticsByText = mapOf(source to many, hello to many.reversed()))
+
+        val result = edit(intelligence)(Replace(path, "Greeter/greet", "fun greet(): String =\n    \"hello\""))
+
+        val written = assertIs<EditResult.Written>(result).files.single()
+        assertEquals((1..5).map { Problem(path, "other", 7, "Error $it", "fun other(): Int = 1") }, written.preexistingErrors)
+        assertEquals(2, written.morePreexistingErrors)
     }
 
     @Test
@@ -205,7 +218,7 @@ class EditTest {
             )
 
             assertEquals(hello, files.content(testPath), testPath)
-            assertEquals(0, assertIs<EditResult.Written>(result, testPath).files.single().preexistingErrors, testPath)
+            assertEquals(emptyList(), assertIs<EditResult.Written>(result, testPath).files.single().preexistingErrors, testPath)
         }
     }
 
@@ -449,8 +462,8 @@ class EditTest {
         assertEquals(
             EditResult.Written(
                 listOf(
-                    EditedFile(path, listOf(EditedSymbol("hi", 4, 4)), emptyList(), 0, 0),
-                    EditedFile(other, listOf(EditedSymbol("greet", 4, 5)), emptyList(), 0, 0),
+                    EditedFile(path, listOf(EditedSymbol("hi", 4, 4)), emptyList(), 0, emptyList(), 0),
+                    EditedFile(other, listOf(EditedSymbol("greet", 4, 5)), emptyList(), 0, emptyList(), 0),
                 ),
             ),
             result,
@@ -711,7 +724,7 @@ class EditTest {
             listOf(Create(created, hello1.replace("\n", "\r\n")), Replace(created, "Hello/hi", "fun hi(): Int = 2")),
         )
 
-        assertEquals(EditResult.Written(listOf(EditedFile(created, listOf(EditedSymbol("Hello", 3, 5)), emptyList(), 0, 0, created = true))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(created, listOf(EditedSymbol("Hello", 3, 5)), emptyList(), 0, emptyList(), 0, created = true))), result)
         assertEquals(listOf(created to hello2), files.written)
         intelligence.assertOneSessionClosedEverything()
     }

@@ -63,7 +63,7 @@ class EditInTest {
         val (result, files) = run(texts, EditIn(path, "greet", old = "val n = 1", new = "val n =\n  2"))
 
         assertEquals(expected, files.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 5, 9)), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 5, 9)), emptyList(), 0, emptyList(), 0))), result)
     }
 
     @Test
@@ -92,7 +92,7 @@ class EditInTest {
 
         assertEquals(expected, files.content(path))
         // No Symbol was edited, so none is listed.
-        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0))), result)
     }
 
     @Test
@@ -103,7 +103,7 @@ class EditInTest {
         val (result, files) = run(texts, EditIn(path, null, old = "greet(): Int {\n    val n = 1", new = "greet(): Int {\n    val n = 2"))
 
         assertEquals(expected, files.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 5, 8)), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 5, 8)), emptyList(), 0, emptyList(), 0))), result)
     }
 
     @Test
@@ -119,7 +119,7 @@ class EditInTest {
 
         intelligence.assertOneSessionClosedEverything()
         assertEquals(expected, files.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("width", 4, 6)), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("width", 4, 6)), emptyList(), 0, emptyList(), 0))), result)
     }
 
     @Test
@@ -203,7 +203,7 @@ class EditInTest {
         val (result, files) = runCrlf(crlf, texts, EditIn(path, "greet", old = "val n = 1\n    return n", new = "val n = 2\n    return n + 1"))
 
         assertEquals(expected, files.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 3, 6)), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 3, 6)), emptyList(), 0, emptyList(), 0))), result)
     }
 
     @Test
@@ -214,7 +214,7 @@ class EditInTest {
         val (result, files) = run(texts, EditIn(path, "greet", old = "val n = 1\r\n    return n", new = "return 1"))
 
         assertEquals(expected, files.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 5, 7)), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 5, 7)), emptyList(), 0, emptyList(), 0))), result)
     }
 
     @Test
@@ -234,7 +234,7 @@ class EditInTest {
         val (result, files) = runCrlf(file, texts, EditIn(path, null, old = "one\n// two", new = "one and two"))
 
         assertEquals(expected, files.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0))), result)
     }
 
     @Test
@@ -301,7 +301,7 @@ class EditInTest {
         val (result, files) = run(texts, EditIn(path, "greet", old = "    val n = 1\n", new = "    val m = 1\n    val n = m\n"))
 
         assertEquals(expected, files.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 5, 9)), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 5, 9)), emptyList(), 0, emptyList(), 0))), result)
     }
 
     @Test
@@ -316,7 +316,7 @@ class EditInTest {
         )
 
         assertEquals(expected, files.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 5, 8)), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 5, 8)), emptyList(), 0, emptyList(), 0))), result)
     }
 
     @Test
@@ -336,6 +336,6 @@ class EditInTest {
 
         assertEquals(expected, files.content(path))
         // The first text spans greet() and other(), so it lists neither; the second is inside other() alone.
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("other", 10, 13)), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("other", 10, 13)), emptyList(), 0, emptyList(), 0))), result)
     }
 }
