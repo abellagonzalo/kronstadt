@@ -8,7 +8,6 @@ import kronstadt.core.domain.TextRange
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
 
 /** `insert_before`, `insert_after` and `delete` Operations of an Edit. */
 class InsertAndDeleteTest {
@@ -213,36 +212,36 @@ class InsertAndDeleteTest {
     @Test
     fun `insert_before goes above annotations under KDoc, and delete removes them with the declaration`() = runTest {
         val annotated = """
-        |package a
-        |
-        |class Greeter {
-        |    /** Says hi. */
-        |    @Deprecated("Use other")
-        |    fun greet(): Int = 1
-        |
-        |    fun other(): Int = 1
-        |}
-        |""".trimMargin()
+            |package a
+            |
+            |class Greeter {
+            |    /** Says hi. */
+            |    @Deprecated("Use other")
+            |    fun greet(): Int = 1
+            |
+            |    fun other(): Int = 1
+            |}
+            |""".trimMargin()
         val inserted = """
-        |package a
-        |
-        |class Greeter {
-        |    fun added(): Int = 2
-        |
-        |    /** Says hi. */
-        |    @Deprecated("Use other")
-        |    fun greet(): Int = 1
-        |
-        |    fun other(): Int = 1
-        |}
-        |""".trimMargin()
+            |package a
+            |
+            |class Greeter {
+            |    fun added(): Int = 2
+            |
+            |    /** Says hi. */
+            |    @Deprecated("Use other")
+            |    fun greet(): Int = 1
+            |
+            |    fun other(): Int = 1
+            |}
+            |""".trimMargin()
         val deleted = """
-        |package a
-        |
-        |class Greeter {
-        |    fun other(): Int = 1
-        |}
-        |""".trimMargin()
+            |package a
+            |
+            |class Greeter {
+            |    fun other(): Int = 1
+            |}
+            |""".trimMargin()
         val texts = mapOf(
             annotated to listOf(greeter(2, 8, function("greet", 5, 4, extraLinesAbove = 2), function("other", 7, 4))),
             inserted to listOf(greeter(2, 10, function("added", 3, 4, n = 2), function("greet", 7, 4, extraLinesAbove = 2), function("other", 9, 4))),
@@ -276,8 +275,8 @@ class InsertAndDeleteTest {
 
         val (beforeFirst, beforeFirstFiles) = run(texts, InsertBefore(path, "one", "fun zero(): Int = 0"))
         val (afterLast, afterLastFiles) = run(texts, InsertAfter(path, "two", "fun three(): Int = 3"))
-        val (_, deleteFirstFiles) = run(texts, Delete(path, "one"))
-        val (_, deleteLastFiles) = run(texts, Delete(path, "two"))
+        val (deleteFirst, deleteFirstFiles) = run(texts, Delete(path, "one"))
+        val (deleteLast, deleteLastFiles) = run(texts, Delete(path, "two"))
 
         assertEquals(zeroAdded, beforeFirstFiles.content(path))
         assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("zero", 3, 3)), emptyList(), 0, 0))), beforeFirst)
@@ -285,43 +284,47 @@ class InsertAndDeleteTest {
         assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("three", 7, 7)), emptyList(), 0, 0))), afterLast)
         assertEquals(withoutOne, deleteFirstFiles.content(path))
         assertEquals(withoutTwo, deleteLastFiles.content(path))
+        val nothingLeft = EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0)))
+        assertEquals(nothingLeft, deleteFirst)
+        assertEquals(nothingLeft, deleteLast)
     }
 
     @Test
     fun `in a CRLF file inserted lines end with CRLF and delete leaves no stray CR`() = runTest {
         fun crlf(text: String) = text.replace("\n", "\r\n")
         val withAddedAfter = """
-        |package a
-        |
-        |class Greeter {
-        |    /** Says hi. */
-        |    fun greet(): Int = 1
-        |
-        |    fun other(): Int = 1
-        |
-        |    fun added(): Int {
-        |        return 2
-        |    }
-        |}
-        |""".trimMargin()
+            |package a
+            |
+            |class Greeter {
+            |    /** Says hi. */
+            |    fun greet(): Int = 1
+            |
+            |    fun other(): Int = 1
+            |
+            |    fun added(): Int {
+            |        return 2
+            |    }
+            |}
+            |""".trimMargin()
         val withAddedBefore = """
-        |package a
-        |
-        |class Greeter {
-        |    fun added(): Int = 2
-        |
-        |    /** Says hi. */
-        |    fun greet(): Int = 1
-        |
-        |    fun other(): Int = 1
-        |}
-        |""".trimMargin()
+            |package a
+            |
+            |class Greeter {
+            |    fun added(): Int = 2
+            |
+            |    /** Says hi. */
+            |    fun greet(): Int = 1
+            |
+            |    fun other(): Int = 1
+            |}
+            |""".trimMargin()
         val withoutGreet = "package a\n\nclass Greeter {\n    fun other(): Int = 1\n}\n"
         val withoutOther = "package a\n\nclass Greeter {\n    /** Says hi. */\n    fun greet(): Int = 1\n}\n"
         val added = CodeSymbol("added", SymbolKind.FUNCTION, range(8, 4, 10, 5), range(8, 8, 8, 13), emptyList(), parameterTypes = "", type = "(): Int")
         val texts = mapOf(
             crlf(source) to listOf(greeter(2, 7, greet, other)),
             crlf(withAddedAfter) to listOf(greeter(2, 11, greet, other, added)),
+            crlf(withAddedBefore) to listOf(greeter(2, 9, function("added", 3, 4, n = 2), function("greet", 6, 4, extraLinesAbove = 1), function("other", 8, 4))),
         )
 
         val (afterResult, afterFiles) = run(texts, InsertAfter(path, "Greeter/other", "fun added(): Int {\n    return 2\n}"))
@@ -332,9 +335,12 @@ class InsertAndDeleteTest {
         assertEquals(crlf(withAddedAfter), afterFiles.content(path))
         assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("added", 9, 11)), emptyList(), 0, 0))), afterResult)
         assertEquals(crlf(withAddedBefore), beforeFiles.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("added", 4, 4)), emptyList(), 0, 0))), beforeResult)
         assertEquals(crlf(withoutGreet), greetFiles.content(path))
         assertEquals(crlf(withoutOther), otherFiles.content(path))
-        listOf(beforeResult, greetResult, otherResult).forEach { assertIs<EditResult.Written>(it) }
+        val nothingLeft = EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0)))
+        assertEquals(nothingLeft, greetResult)
+        assertEquals(nothingLeft, otherResult)
     }
 
     @Test

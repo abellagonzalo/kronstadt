@@ -348,7 +348,7 @@ class KtEditToolTest {
         for (type in listOf("replace", "insert_before", "insert_after")) {
             val (failed, text) = ktEdit("""{"operations": [{"type": "$type", "file": "A.kt", "symbol": "greet"}]}""")
 
-            assertEquals(true, failed)
+            assertEquals(true, failed, type)
             assertEquals("Operation 0: missing 'code', which '$type' needs. Nothing written.", text)
         }
         assertEquals(before, file.readText())
