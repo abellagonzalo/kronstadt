@@ -319,6 +319,42 @@ class KtEditToolTest {
     }
 
     @Test
+    fun `insert_before, insert_after and delete parse into their Operations and are written`() = runTest {
+        val source = file.readText()
+        symbolsByText[source] = listOf(
+            CodeSymbol("greet", SymbolKind.FUNCTION, TextRange(Position(2, 0), Position(2, 20)), TextRange(Position(2, 4), Position(2, 9)), emptyList(), parameterTypes = "", type = "(): Int"),
+        )
+        val cases = listOf(
+            """{"type": "insert_before", "file": "A.kt", "symbol": "greet", "code": "fun zero(): Int = 0"}""" to
+                "package a\n\nfun zero(): Int = 0\n\nfun greet(): Int = 1\n",
+            """{"type": "insert_after", "file": "A.kt", "symbol": "greet", "code": "fun two(): Int = 2"}""" to
+                "package a\n\nfun greet(): Int = 1\n\nfun two(): Int = 2\n",
+            """{"type": "delete", "file": "A.kt", "symbol": "greet"}""" to "package a\n",
+        )
+
+        for ((operation, expected) in cases) {
+            file.writeText(source)
+            val (failed, text) = ktEdit("""{"operations": [$operation]}""")
+
+            assertEquals(false, failed, text)
+            assertEquals(expected, file.readText(), operation)
+        }
+    }
+
+    @Test
+    fun `replace, insert_before and insert_after without code fail, naming the type that needs it, writing nothing`() = runTest {
+        val before = file.readText()
+
+        for (type in listOf("replace", "insert_before", "insert_after")) {
+            val (failed, text) = ktEdit("""{"operations": [{"type": "$type", "file": "A.kt", "symbol": "greet"}]}""")
+
+            assertEquals(true, failed, type)
+            assertEquals("Operation 0: missing 'code', which '$type' needs. Nothing written.", text)
+        }
+        assertEquals(before, file.readText())
+    }
+
+    @Test
     fun `a Symbol Path without a file fails, asking for the file, when the index may not list every declaration of its name`() = runTest {
         cutOff += "greet"
         val before = file.readText()
