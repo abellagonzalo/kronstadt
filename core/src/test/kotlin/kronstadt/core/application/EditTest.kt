@@ -146,7 +146,7 @@ class EditTest {
         val result = edit(intelligence, files)(Replace(path, "Greeter/greet", "fun greet(): String =\n    \"hello\""))
 
         assertEquals(
-            EditResult.Rejected(listOf(Problem(path, "greet", 5, "Type mismatch: inferred type is String", "\"hello\"")), "e1"),
+            EditResult.ValidationFailed(ValidationFailure.Rejected(listOf(Problem(path, "greet", 5, "Type mismatch: inferred type is String", "\"hello\""))), "e1"),
             result,
         )
         assertEquals(source, files.content(path))
@@ -196,7 +196,7 @@ class EditTest {
 
         val result = edit(intelligence)(Replace(path, "Greeter/greet", "fun greet(): String =\n    \"hello\""))
 
-        assertEquals(EditResult.Rejected(listOf(Problem(path, "greet", 5, unresolved, "\"hello\"")), "e1"), result)
+        assertEquals(EditResult.ValidationFailed(ValidationFailure.Rejected(listOf(Problem(path, "greet", 5, unresolved, "\"hello\""))), "e1"), result)
     }
 
     /** What kotlin-lsp reports for a declaration without visibility or return type, as explicit-API mode wants (#48). */
@@ -231,7 +231,7 @@ class EditTest {
                 Replace(mainPath, "Greeter/greet", "fun greet(): String =\n    \"hello\""),
             )
 
-            assertEquals(2, assertIs<EditResult.Rejected>(result, mainPath).newErrors.size, mainPath)
+            assertEquals(2, assertIs<ValidationFailure.Rejected>(assertIs<EditResult.ValidationFailed>(result, mainPath).failure, mainPath).newErrors.size, mainPath)
             assertEquals(source, files.content(mainPath), mainPath)
         }
     }
@@ -279,7 +279,7 @@ class EditTest {
 
         val result = edit(intelligence, files)(Replace(path, "Greeter/greet", "fun greet(): String =\n    \"hello\""))
 
-        assertEquals(EditResult.ChangedOnDisk(path), result)
+        assertEquals(EditResult.WriteBackFailed(WriteBackFailure.ChangedOnDisk(path)), result)
         assertEquals("$source// theirs\n", files.content(path))
         assertEquals(listOf("open A.kt v1", "change A.kt v2", "close A.kt"), intelligence.events)
         intelligence.assertOneSessionClosedEverything()
@@ -295,7 +295,7 @@ class EditTest {
 
         val result = Edit(files, intelligence, validationTimeout = 15.seconds)(Replace(path, "Greeter/greet", "fun greet() = 1"))
 
-        assertEquals(EditResult.ValidationTimedOut, result)
+        assertEquals(EditResult.ValidationFailed(ValidationFailure.TimedOut), result)
         assertEquals(emptyList(), files.written)
         intelligence.assertOneSessionClosedEverything()
     }
@@ -691,7 +691,7 @@ class EditTest {
 
         val result = edit(intelligence, files)(listOf(Replace(path, "Greeter/greet", replace), Replace(other, "Greeter/greet", replace)))
 
-        assertEquals(EditResult.PartiallyWritten(listOf(path), other, "No space left on device"), result)
+        assertEquals(EditResult.WriteBackFailed(WriteBackFailure.PartiallyWritten(listOf(path), other, "No space left on device")), result)
         assertEquals(listOf(path to hello), files.written)
         intelligence.assertOneSessionClosedEverything()
     }
@@ -762,7 +762,7 @@ class EditTest {
             listOf(Create(created, hello1), Replace(path, "Greeter/greet", "fun greet(): String =\n    \"hello\"")),
         )
 
-        assertEquals(EditResult.Rejected(listOf(Problem(created, "hi", 4, "Return type mismatch", "fun hi(): Int = 1")), "e1"), result)
+        assertEquals(EditResult.ValidationFailed(ValidationFailure.Rejected(listOf(Problem(created, "hi", 4, "Return type mismatch", "fun hi(): Int = 1"))), "e1"), result)
         assertEquals(emptyList(), files.written)
         assertEquals(null, files.content(created))
         intelligence.assertOneSessionClosedEverything()
@@ -775,7 +775,7 @@ class EditTest {
 
         val result = edit(intelligence, files)(Create(created, hello1))
 
-        assertIs<EditResult.Rejected>(result, "$result")
+        assertIs<ValidationFailure.Rejected>(assertIs<EditResult.ValidationFailed>(result, "$result").failure)
         assertEquals(emptyList(), files.written)
     }
 
@@ -803,7 +803,7 @@ class EditTest {
             listOf(Replace(path, "Greeter/greet", "fun greet(): String =\n    \"hello\""), Create(created, hello1)),
         )
 
-        assertEquals(EditResult.ChangedOnDisk(created), result)
+        assertEquals(EditResult.WriteBackFailed(WriteBackFailure.ChangedOnDisk(created)), result)
         assertEquals("// theirs\n", files.content(created))
         assertEquals(source, files.content(path))
         assertEquals(emptyList(), files.written)

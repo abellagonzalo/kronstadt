@@ -70,9 +70,44 @@ public class RenameSymbol(
         touchedPaths.firstOrNull { files.resolve(it.toString()) != it }
             ?.let { return RenameResult.CannotRename(canonical, "it would change $it, outside the project") }
         val oldWord = wholeWord(node.symbol.name)
+        val applied = when (val applying = applyChanges(shadow, changes, target, name, oldWord, canonical)) {
+            is Applying.Applied -> applying
+            is Applying.Failed -> return applying.result
+        }
+        val restored = restoreDroppedImports(shadow, applied.before, node.symbol.name, newName)
+        val removed = shadow.removeImportsMadeUnused(session, validationTimeout) { file, suspects -> suspects.intersect(restored[file].orEmpty()) }
+        return when (val validated = shadow.validate { it.replace(oldWord, newName) }) {
+            is ShadowWorkspace.Validated.Passed -> shadow.writeBack()?.let { RenameResult.WriteBackFailed(it) }
+                ?: renamed(shadow, target, node, newName, applied, validated.files, removed)
+            is ShadowWorkspace.Validated.Failed -> RenameResult.ValidationFailed(validated.failure)
+        }
+    }
+
+    /** kotlin-lsp's changes, applied to the Shadow Workspace, or why they can't be. */
+    private sealed interface Applying {
+        /**
+         * Applied: what each changed file was [before] its first edit, the [counts] of each, the declaring file first, and
+         * the file renamed along with the Symbol, if any.
+         */
+        class Applied(val before: Map<Path, TextDocument>, val counts: Map<Path, Counts>, val fileRenamed: FileRenamed?) : Applying
+        class Failed(val result: RenameResult) : Applying
+    }
+
+    /**
+     * Applies [changes] to [shadow] in order, counting each file's Usages of [oldWord] apart from [name], the declaration
+     * in [target]. A moved file stays at its old path in the Shadow Workspace until Write-back, so later edits that name
+     * its new path go to its old one.
+     */
+    private suspend fun applyChanges(
+        shadow: ShadowWorkspace,
+        changes: List<FileChange>,
+        target: Path,
+        name: TextRange,
+        oldWord: Regex,
+        canonical: String,
+    ): Applying {
         val counts = linkedMapOf(target to Counts())
         val before = mutableMapOf<Path, TextDocument>()
-        // A moved file stays at its old path in the Shadow Workspace until Write-back; edits may name either path.
         val movedFrom = mutableMapOf<Path, Path>()
         var fileRenamed: FileRenamed? = null
         for (change in changes) {
@@ -80,55 +115,69 @@ public class RenameSymbol(
                 is FileChange.Edited -> {
                     val file = movedFrom[change.file] ?: change.file
                     val document = shadow.current(file)
-                        ?: return RenameResult.CannotRename(canonical, "it would change ${files.display(file)}, which doesn't exist")
+                        ?: return Applying.Failed(RenameResult.CannotRename(canonical, "it would change ${files.display(file)}, which doesn't exist"))
                     before.putIfAbsent(file, document)
                     shadow.applyEdits(file, change.edits)
                     counts.getOrPut(file) { Counts() }.add(document, change.edits, oldWord, declaration = name.takeIf { file == target })
                 }
                 is FileChange.Moved -> {
-                    if (files.read(change.to) != null) return RenameResult.TargetExists(files.display(change.from), files.display(change.to))
+                    if (files.read(change.to) != null) {
+                        return Applying.Failed(RenameResult.WriteBackFailed(WriteBackFailure.TargetExists(files.display(change.from), files.display(change.to))))
+                    }
                     if (!shadow.move(change.from, change.to)) {
-                        return RenameResult.CannotRename(canonical, "it would rename ${files.display(change.from)}, which doesn't exist")
+                        return Applying.Failed(RenameResult.CannotRename(canonical, "it would rename ${files.display(change.from)}, which doesn't exist"))
                     }
                     movedFrom[change.to] = change.from
                     fileRenamed = FileRenamed(files.display(change.from), files.display(change.to))
                 }
             }
         }
-        // kotlin-lsp's rename also drops imports that were already unused. They go back, and only those the rename made
-        // unused go again, as kt_edit decides it (ADR 0004).
-        val restored = before.mapNotNull { (file, document) ->
-            val current = checkNotNull(shadow.current(file))
-            val dropped = removedImports(document, current, node.symbol.name, newName)
-            current.addingImports(dropped)?.let { shadow.replaceLines(file, it.lines, it.newLines) } ?: return@mapNotNull null
-            file to dropped.toSet()
-        }.toMap()
-        val removed = shadow.removeImportsMadeUnused(session, validationTimeout) { file, suspects -> suspects.intersect(restored[file].orEmpty()) }
-        return when (val validated = shadow.validate { it.replace(oldWord, newName) }) {
-            is ShadowWorkspace.Validated.Passed -> when (val writeBack = shadow.writeBack()) {
-                ShadowWorkspace.WriteBack.Written -> {
-                    val renamedFiles = counts.entries.sortedWith(compareBy({ it.key != target }, { files.display(it.key) }))
-                        .map { (file, counted) ->
-                            val report = validated.files.single { it.file == files.display(file) }
-                            RenamedFile(
-                                files.display(file), counted.usages, counted.imports,
-                                report.newWarnings, report.moreWarnings, report.preexistingErrors, report.morePreexistingErrors,
-                            )
-                        }
-                    RenameResult.Renamed(
-                        newPath(shadow, target, node, newName),
-                        renamedFiles,
-                        fileRenamed,
-                        removed.flatMap { (file, imports) -> imports.map { RemovedImport(files.display(file), it) } },
-                    )
-                }
-                is ShadowWorkspace.WriteBack.ChangedOnDisk -> RenameResult.ChangedOnDisk(writeBack.file)
-                is ShadowWorkspace.WriteBack.TargetExists -> RenameResult.TargetExists(writeBack.file, writeBack.target)
-                is ShadowWorkspace.WriteBack.Partial -> RenameResult.PartiallyWritten(writeBack.written, writeBack.failed, writeBack.reason)
+        return Applying.Applied(before, counts, fileRenamed)
+    }
+
+    /**
+     * kotlin-lsp's rename also drops imports that were already unused. They go back, and only those the rename made unused
+     * go again, as kt_edit decides it (ADR 0004). Returns those put back in each file of [before].
+     */
+    private suspend fun restoreDroppedImports(
+        shadow: ShadowWorkspace,
+        before: Map<Path, TextDocument>,
+        oldName: String,
+        newName: String,
+    ): Map<Path, Set<ImportDirective>> = before.mapNotNull { (file, document) ->
+        val current = checkNotNull(shadow.current(file))
+        val dropped = removedImports(document, current, oldName, newName)
+        current.addingImports(dropped)?.let { shadow.replaceLines(file, it.lines, it.newLines) } ?: return@mapNotNull null
+        file to dropped.toSet()
+    }.toMap()
+
+    /**
+     * The written rename: each changed file's [applied] counts with its [reports] from Validation, the declaring file
+     * first, the imports [removed] from each file, the file renamed and the Symbol's new path.
+     */
+    private suspend fun renamed(
+        shadow: ShadowWorkspace,
+        target: Path,
+        node: SymbolTree.Node,
+        newName: String,
+        applied: Applying.Applied,
+        reports: List<EditedFile>,
+        removed: Map<Path, List<String>>,
+    ): RenameResult.Renamed {
+        val renamedFiles = applied.counts.entries.sortedWith(compareBy({ it.key != target }, { files.display(it.key) }))
+            .map { (file, counted) ->
+                val report = reports.single { it.file == files.display(file) }
+                RenamedFile(
+                    files.display(file), counted.usages, counted.imports,
+                    report.newWarnings, report.moreWarnings, report.preexistingErrors, report.morePreexistingErrors,
+                )
             }
-            is ShadowWorkspace.Validated.Rejected -> RenameResult.Rejected(validated.newErrors)
-            ShadowWorkspace.Validated.TimedOut -> RenameResult.ValidationTimedOut
-        }
+        return RenameResult.Renamed(
+            newPath(shadow, target, node, newName),
+            renamedFiles,
+            applied.fileRenamed,
+            removed.flatMap { (file, imports) -> imports.map { RemovedImport(files.display(file), it) } },
+        )
     }
 
     /** Imports in [before] that [after] lacks, other than those it has with [oldName] renamed to [newName]. */
@@ -205,7 +254,7 @@ public data class FileRenamed(val from: String, val to: String)
 /** An import kotlin-lsp removed from [file] while renaming, e.g. `a.b.C`. */
 public data class RemovedImport(val file: String, val import: String)
 
-/** The outcome of a rename: written, or why nothing was (except [PartiallyWritten]). */
+/** The outcome of a rename: written, or why nothing was (except [WriteBackFailure.PartiallyWritten]). */
 public sealed interface RenameResult {
     /**
      * Written: the declaring file first, then the others; [fileRenamed] if a class named like its file took the file
@@ -228,20 +277,11 @@ public sealed interface RenameResult {
     /** [symbol] (its canonical path) can't be renamed, for [reason]: the code intelligence's, or Kronstadt's own. */
     public data class CannotRename(val symbol: String, val reason: String) : RenameResult
 
-    /** The rename would move [file] onto [target], which exists; nothing was written. */
-    public data class TargetExists(val file: String, val target: String) : RenameResult
+    /** Validation let nothing be written, for [failure]. */
+    public data class ValidationFailed(val failure: ValidationFailure) : RenameResult
 
-    /** Validation found [newErrors] in the changed files; nothing was written. */
-    public data class Rejected(val newErrors: List<Problem>) : RenameResult
-
-    /** [file] changed on disk since it was read; nothing was written. */
-    public data class ChangedOnDisk(val file: String) : RenameResult
-
-    /** [written] are on disk, then writing [failed] failed with [reason]; the rest weren't written (no rollback). */
-    public data class PartiallyWritten(val written: List<String>, val failed: String, val reason: String) : RenameResult
-
-    /** Validation's diagnostics took longer than its timeout; nothing was written. */
-    public data object ValidationTimedOut : RenameResult
+    /** Write-back didn't write every file, for [failure]; a file moved onto one that exists is one. */
+    public data class WriteBackFailed(val failure: WriteBackFailure) : RenameResult
 
     /** The index was still incomplete after waiting; nothing was written. */
     public data class NotReady(val readiness: Readiness.NotReady) : RenameResult

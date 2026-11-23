@@ -145,7 +145,7 @@ class RenameSymbolTest {
 
         val result = RenameSymbol(files, classIntelligence())("Greeter", "Host", file = classPath)
 
-        assertEquals(RenameResult.TargetExists(classPath, "src/a/Host.kt"), result)
+        assertEquals(RenameResult.WriteBackFailed(WriteBackFailure.TargetExists(classPath, "src/a/Host.kt")), result)
         assertEquals(emptyList(), files.written)
         assertEquals(greeting, files.content(classPath))
     }
@@ -284,7 +284,10 @@ class RenameSymbolTest {
 
         val result = RenameSymbol(files, intelligence)("Greeter/greet", "hello", file = greeterPath)
 
-        assertEquals(RenameResult.Rejected(listOf(Problem(mainPath, null, 7, "Overload resolution ambiguity", "Greeter().hello()"))), result)
+        assertEquals(
+            RenameResult.ValidationFailed(ValidationFailure.Rejected(listOf(Problem(mainPath, null, 7, "Overload resolution ambiguity", "Greeter().hello()")))),
+            result,
+        )
         assertEquals(emptyList(), files.written)
         intelligence.assertOneSessionClosedEverything()
     }

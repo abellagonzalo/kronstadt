@@ -111,7 +111,7 @@ public class Edit(
     /**
      * Applies [operations] in order, each resolved against the text the earlier ones left, possibly across several
      * files; validates once after the last and writes every edited file back, or nothing (unless a write fails
-     * part-way, see [EditResult.PartiallyWritten]).
+     * part-way, see [WriteBackFailure.PartiallyWritten]).
      *
      * With [amend], the id of the last Rejected Edit, [operations] are appended to its Operations and the combined Edit is
      * applied, validated and written as one, provided no file it touched changed on disk since it read them. Every call
@@ -120,7 +120,7 @@ public class Edit(
     public suspend operator fun invoke(operations: List<Operation>, amend: String? = null): EditResult = writeLock.withLock { rejected ->
         if (amend == null) return@withLock apply(emptyList(), operations, emptyMap())
         if (rejected == null || rejected.id != amend) return@withLock EditResult.NoRejectedEdit(amend)
-        changedSince(rejected.bases)?.let { return@withLock EditResult.ChangedOnDisk(it) }
+        changedSince(rejected.bases)?.let { return@withLock EditResult.WriteBackFailed(WriteBackFailure.ChangedOnDisk(it)) }
         apply(rejected.operations, operations, rejected.bases)
     }
 
@@ -170,23 +170,19 @@ public class Edit(
             // A file can change on disk between an amend's check and its replay reading it: the Edit is based on the first read.
             val read = shadow.baseHashes()
             bases.entries.firstOrNull { (file, hash) -> file in read && read[file] != hash }
-                ?.let { return@session EditResult.ChangedOnDisk(files.display(it.key)) }
+                ?.let { return@session EditResult.WriteBackFailed(WriteBackFailure.ChangedOnDisk(files.display(it.key))) }
             val removed = shadow.removeImportsMadeUnused(session, validationTimeout) { file, suspects -> suspects - listed[file].orEmpty() }
                 .mapKeys { files.display(it.key) }
             when (val validated = shadow.validate()) {
                 is ShadowWorkspace.Validated.Passed -> {
                     val collateral = shadow.collateralErrors(collateralTimeout)
-                    when (val writeBack = shadow.writeBack()) {
-                        ShadowWorkspace.WriteBack.Written ->
-                            EditResult.Written(validated.files.map { it.copy(importsRemoved = removed[it.file].orEmpty()) }, collateral)
-                        is ShadowWorkspace.WriteBack.ChangedOnDisk -> EditResult.ChangedOnDisk(writeBack.file)
-                        is ShadowWorkspace.WriteBack.TargetExists -> error("an Edit moves no file, yet Write-back found ${writeBack.file} moved")
-                        is ShadowWorkspace.WriteBack.Partial ->
-                            EditResult.PartiallyWritten(writeBack.written, writeBack.failed, writeBack.reason)
-                    }
+                    shadow.writeBack()?.let { EditResult.WriteBackFailed(it) }
+                        ?: EditResult.Written(validated.files.map { it.copy(importsRemoved = removed[it.file].orEmpty()) }, collateral)
                 }
-                is ShadowWorkspace.Validated.Rejected -> EditResult.Rejected(validated.newErrors, writeLock.keep(combined, read))
-                ShadowWorkspace.Validated.TimedOut -> EditResult.ValidationTimedOut
+                is ShadowWorkspace.Validated.Failed -> when (val failure = validated.failure) {
+                    is ValidationFailure.Rejected -> EditResult.ValidationFailed(failure, writeLock.keep(combined, read))
+                    ValidationFailure.TimedOut -> EditResult.ValidationFailed(failure)
+                }
             }
         }
     }
@@ -463,22 +459,13 @@ public sealed interface EditResult {
     public data class Written(val files: List<EditedFile>, val collateral: CollateralErrors = CollateralErrors()) : EditResult
 
     /**
-     * Validation found [newErrors] the Edit introduced; nothing was written. The Edit is kept as the Rejected Edit [id]
-     * until the next write call, so a follow-up can amend it.
+     * Validation let nothing be written, for [failure]. When it [ValidationFailure.Rejected] the Edit, the Edit is kept as
+     * the Rejected Edit [id] until the next write call, so a follow-up can amend it; [id] is null otherwise.
      */
-    public data class Rejected(val newErrors: List<Problem>, val id: String) : EditResult
+    public data class ValidationFailed(val failure: ValidationFailure, val id: String? = null) : EditResult
 
-    /** [file] changed on disk after the Edit read it; nothing was written. */
-    public data class ChangedOnDisk(val file: String) : EditResult
-
-    /**
-     * Write-back failed part-way: [written] are on disk, writing [failed] failed with [reason], and the Edit's other
-     * files weren't written. Nothing is rolled back (ADR 0003, Consequences).
-     */
-    public data class PartiallyWritten(val written: List<String>, val failed: String, val reason: String) : EditResult
-
-    /** Validation didn't finish within its timeout; nothing was written. */
-    public data object ValidationTimedOut : EditResult
+    /** Write-back didn't write every file, for [failure]; a file changed on disk since the Edit read it is one. */
+    public data class WriteBackFailed(val failure: WriteBackFailure) : EditResult
 
     /**
      * The Operation at [index] (0-based) can't be applied; nothing was written. In an amend, [index] counts the amend's

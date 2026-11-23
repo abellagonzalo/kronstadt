@@ -8,6 +8,7 @@ import kotlinx.coroutines.withTimeout
 import kronstadt.core.application.Create
 import kronstadt.core.application.Edit
 import kronstadt.core.application.EditResult
+import kronstadt.core.application.ValidationFailure
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.TextDocument
@@ -147,7 +148,7 @@ class UnsavedFileContractTest {
     fun `kt_edit rejects a created file that doesn't compile, creating no directory`() = runBlocking {
         val result = Edit(LocalFileStore(project), lsp)(Create("src/main/kotlin/fixture/made/Broken.kt", "package fixture.made\n\nval broken: Int = \"x\"\n"))
 
-        val errors = assertIs<EditResult.Rejected>(result, "$result").newErrors
+        val errors = assertIs<ValidationFailure.Rejected>(assertIs<EditResult.ValidationFailed>(result, "$result").failure).newErrors
         assertEquals(listOf(3), errors.map { it.line }, "$errors")
         assertFalse(project.resolve("src/main/kotlin/fixture/made").exists())
     }

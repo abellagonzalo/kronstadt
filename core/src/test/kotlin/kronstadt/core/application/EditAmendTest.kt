@@ -54,7 +54,7 @@ class EditAmendTest {
     fun `a rejected Edit carries an id, and an amend with only the fixing Operation writes the combined Edit`() = runTest {
         val rejected = edit(listOf(useDuration))
 
-        assertEquals(EditResult.Rejected(listOf(problem("greet")), "e1"), rejected)
+        assertEquals(EditResult.ValidationFailed(ValidationFailure.Rejected(listOf(problem("greet"))), "e1"), rejected)
         assertEquals(source, files.content(path))
 
         val result = edit(listOf(importDuration), amend = "e1")
@@ -71,7 +71,7 @@ class EditAmendTest {
 
         val again = edit(listOf(EditIn(path, null, "greet", "hello")), amend = "e1")
 
-        assertEquals(EditResult.Rejected(listOf(problem("hello")), "e2"), again)
+        assertEquals(EditResult.ValidationFailed(ValidationFailure.Rejected(listOf(problem("hello"))), "e2"), again)
         assertEquals(source, files.content(path))
         assertEquals(emptyList(), files.written)
         assertEquals(EditResult.NoRejectedEdit("e1"), edit(listOf(importDuration), amend = "e1"))
@@ -91,7 +91,7 @@ class EditAmendTest {
 
         val result = edit(listOf(importDuration), amend = "e1")
 
-        assertEquals(EditResult.ChangedOnDisk(path), result)
+        assertEquals(EditResult.WriteBackFailed(WriteBackFailure.ChangedOnDisk(path)), result)
         assertEquals("$source// theirs\n", files.content(path))
         assertEquals(emptyList(), files.written)
         assertEquals(EditResult.NoRejectedEdit("e1"), edit(listOf(importDuration), amend = "e1"))
@@ -102,12 +102,12 @@ class EditAmendTest {
         val created = "src/B.kt"
         val code = "package a\n\nfun later() = Duration.ZERO\n"
         val creating = Edit(files, FakeCodeIntelligence(diagnosticsByText = mapOf(code to listOf(unresolved(2)))), writeLock = lock)
-        assertIs<EditResult.Rejected>(creating(listOf(Create(created, code))))
+        assertIs<EditResult.ValidationFailed>(creating(listOf(Create(created, code))))
         files.writeOutside(created, "package a\n")
 
         val result = creating(listOf(EditIn(created, null, "package a\n", "package a\n\nimport kotlin.time.Duration\n")), amend = "e1")
 
-        assertEquals(EditResult.ChangedOnDisk(created), result)
+        assertEquals(EditResult.WriteBackFailed(WriteBackFailure.ChangedOnDisk(created)), result)
         assertEquals("package a\n", files.content(created))
         assertEquals(emptyList(), files.written)
     }
