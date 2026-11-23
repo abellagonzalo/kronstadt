@@ -107,7 +107,7 @@ class ShadowWorkspaceTest {
             replace(a, "four", "fun four(): Int = 44")
             replace(a, "one", "fun one(): Int =\n    1")
 
-            val rejected = assertIs<ShadowWorkspace.Validated.Rejected>(validate())
+            val rejected = assertIs<ValidationFailure.Rejected>(assertIs<ShadowWorkspace.Validated.Failed>(validate()).failure)
             assertEquals(listOf(4, 6), rejected.newErrors.map { it.line })
             assertEquals(listOf("one", "four"), rejected.newErrors.map { it.symbol })
         }
@@ -145,7 +145,7 @@ class ShadowWorkspaceTest {
         shadow(files, intelligence) {
             editBoth()
 
-            val rejected = assertIs<ShadowWorkspace.Validated.Rejected>(validate())
+            val rejected = assertIs<ValidationFailure.Rejected>(assertIs<ShadowWorkspace.Validated.Failed>(validate()).failure)
             assertEquals(listOf(a to 3, b to 3), rejected.newErrors.map { it.file to it.line })
         }
     }
@@ -173,7 +173,7 @@ class ShadowWorkspaceTest {
             editBoth()
             assertIs<ShadowWorkspace.Validated.Passed>(validate())
 
-            assertEquals(ShadowWorkspace.WriteBack.Written, writeBack())
+            assertEquals(null, writeBack())
         }
         assertEquals(listOf(a to aEdited, b to otherEdited), files.written)
         assertEquals(listOf("save A.kt", "save B.kt"), intelligence.events.filter { it.startsWith("save") })
@@ -189,7 +189,7 @@ class ShadowWorkspaceTest {
                 editBoth()
                 files.writeOutside(changed, "// theirs\n")
 
-                assertEquals(ShadowWorkspace.WriteBack.ChangedOnDisk(changed), writeBack(), changed)
+                assertEquals(WriteBackFailure.ChangedOnDisk(changed), writeBack(), changed)
             }
             assertEquals(emptyList(), files.written, changed)
             assertEquals(emptyList(), intelligence.events.filter { it.startsWith("save") }, changed)
@@ -204,7 +204,7 @@ class ShadowWorkspaceTest {
         shadow(files, intelligence) {
             editBoth()
 
-            val partial = assertIs<ShadowWorkspace.WriteBack.Partial>(writeBack())
+            val partial = assertIs<WriteBackFailure.PartiallyWritten>(writeBack())
             assertEquals(listOf(a), partial.written)
             assertEquals(b, partial.failed)
         }

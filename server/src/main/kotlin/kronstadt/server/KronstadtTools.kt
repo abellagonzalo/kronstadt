@@ -389,21 +389,8 @@ internal class KronstadtTools(
             is EditResult.Written -> text(
                 (result.files.map { written(it) } + collateral(result.collateral)).filter { it.isNotEmpty() }.joinToString("\n"),
             )
-            is EditResult.Rejected -> error(
-                buildString {
-                    val count = result.newErrors.size
-                    append("Edit rejected (id: ${result.id}): $count new error${if (count == 1) "" else "s"}; nothing written.\n")
-                    result.newErrors.forEach { append(problem(it, withFile = true)) }
-                    append("Fix with kt_edit amend: \"${result.id}\" and only the fixing Operations, or resend the whole batch.")
-                },
-            )
-            is EditResult.ChangedOnDisk -> error("${result.file} changed on disk since read; re-read and retry")
-            is EditResult.PartiallyWritten -> error(
-                "Write-back failed part-way: writing ${result.failed} failed (${result.reason}). " +
-                    "Already written, not rolled back: ${result.written.joinToString()}. " +
-                    "Nothing else was written; re-read these files before retrying.",
-            )
-            EditResult.ValidationTimedOut -> error("validation timed out; nothing written")
+            is EditResult.ValidationFailed -> error(describe(result.failure, "Edit", result.id))
+            is EditResult.WriteBackFailed -> error(describe(result.failure))
             is EditResult.NotReady -> notReady(result.readiness)
             is EditResult.OperationFailed ->
                 if (result.inRejected) {
@@ -427,25 +414,8 @@ internal class KronstadtTools(
             is RenameResult.LookupFailed -> error("${sentence(describe(result.failure, "kt_rename_symbol"))} Nothing written.")
             is RenameResult.InvalidName -> error("'${result.name}' is not a Kotlin identifier; pass a plain name, or one in backticks. Nothing written.")
             is RenameResult.CannotRename -> error("Cannot rename ${result.symbol}: ${result.reason}. Nothing written.")
-            is RenameResult.TargetExists -> error(
-                "The rename would rename ${result.file} to ${result.target}, which already exists; nothing written. " +
-                    "Pick another name, or move that file first.",
-            )
-            is RenameResult.Rejected -> error(
-                buildString {
-                    val count = result.newErrors.size
-                    append("Rename rejected: $count new error${if (count == 1) "" else "s"}; nothing written.\n")
-                    result.newErrors.forEach { append(problem(it, withFile = true)) }
-                    append("fix what makes the new name clash and retry")
-                },
-            )
-            is RenameResult.ChangedOnDisk -> error("${result.file} changed on disk since read; re-read and retry")
-            is RenameResult.PartiallyWritten -> error(
-                "Write-back failed part-way: writing ${result.failed} failed (${result.reason}). " +
-                    "Already written, not rolled back: ${result.written.joinToString()}. " +
-                    "Nothing else was written; re-read these files before retrying.",
-            )
-            RenameResult.ValidationTimedOut -> error("validation timed out; nothing written")
+            is RenameResult.ValidationFailed -> error(describe(result.failure, "Rename"))
+            is RenameResult.WriteBackFailed -> error(describe(result.failure))
             is RenameResult.NotReady -> notReady(result.readiness)
         }
     }
@@ -539,15 +509,6 @@ internal class KronstadtTools(
             }
         }
     }.trimEnd()
-
-    private fun problem(problem: Problem, withFile: Boolean) = buildString {
-        append("  ")
-        if (withFile) append(problem.file).append(':')
-        append('L').append(problem.line)
-        append(" in ").append(problem.symbol ?: "(file level)")
-        append(": ").append(problem.message).append('\n')
-        append("      ").append(problem.source).append('\n')
-    }
 
     /** Why an Operation of [type], as the agent named it, can't be applied. */
     private fun failure(failure: OperationFailure, type: String): String = when (failure) {

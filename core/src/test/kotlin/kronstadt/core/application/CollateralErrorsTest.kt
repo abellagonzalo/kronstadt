@@ -233,7 +233,7 @@ class CollateralErrorsTest {
 
         val result = Edit(files(), intelligence)(Replace(a, "answer", "fun answer(): String = 1"))
 
-        assertIs<EditResult.Rejected>(result)
+        assertIs<ValidationFailure.Rejected>(assertIs<EditResult.ValidationFailed>(result).failure)
         assertEquals(emptyList(), intelligence.referenced)
     }
 }

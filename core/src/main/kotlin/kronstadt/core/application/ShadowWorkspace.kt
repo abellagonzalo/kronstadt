@@ -213,8 +213,7 @@ internal class ShadowWorkspace(
     sealed interface Validated {
         /** No errors were introduced; what each touched file looks like now, in the order the Edit touched them. */
         data class Passed(val files: List<EditedFile>) : Validated
-        data class Rejected(val newErrors: List<Problem>) : Validated
-        data object TimedOut : Validated
+        data class Failed(val failure: ValidationFailure) : Validated
     }
 
     /**
@@ -238,11 +237,11 @@ internal class ShadowWorkspace(
             val trees = edited.map { (file, it) -> SymbolTree(session.documentSymbols(file, it.current)).also { tree -> this@ShadowWorkspace.trees[file to it.current.text] = tree } }
             val after = edited.map { (file, it) -> Validation.withoutSpurious(file, session.diagnostics(file, it.current)) }
             Triple(before, trees, after)
-        } ?: return Validated.TimedOut
+        } ?: return Validated.Failed(ValidationFailure.TimedOut)
         val (before, trees, after) = pulled
         val checked = edited.mapIndexed { i, (file, touched) -> Checked(file, touched, trees[i], before[i], after[i]) }
         val newErrors = checked.flatMap { file -> file.newErrors.map(file::problem) }
-        if (newErrors.isNotEmpty()) return Validated.Rejected(newErrors)
+        if (newErrors.isNotEmpty()) return Validated.Failed(ValidationFailure.Rejected(newErrors))
         return Validated.Passed(checked.map { it.report() })
     }
 
@@ -284,33 +283,20 @@ internal class ShadowWorkspace(
         fun problem(diagnostic: Diagnostic): Problem = problem(files.display(file), tree, document, diagnostic)
     }
 
-    sealed interface WriteBack {
-        data object Written : WriteBack
-
-        /** [file] changed on disk since it was read; nothing was written. */
-        data class ChangedOnDisk(val file: String) : WriteBack
-
-        /** [file] would be moved onto [target], which exists; nothing was written. */
-        data class TargetExists(val file: String, val target: String) : WriteBack
-
-        /** [written] are on disk, then writing [failed] failed with [reason]; the rest weren't written (no rollback). */
-        data class Partial(val written: List<String>, val failed: String, val reason: String) : WriteBack
-    }
-
     /**
      * Write-back of every edited file, all-or-nothing as far as it can be: every hash, that every created file is still
      * absent, and that no file is moved onto an existing one, is checked before anything is written; then each file is
      * written (a moved one at its new path, its old one deleted; a created one with its missing parent directories),
-     * then the code intelligence is told each file written in place is saved. A write that fails after others succeeded
-     * leaves those on disk (ADR 0003, Consequences); one that fails first throws.
+     * then the code intelligence is told each file written in place is saved. Null once every file is written. A write
+     * that fails after others succeeded leaves those on disk (ADR 0003, Consequences); one that fails first throws.
      */
-    suspend fun writeBack(): WriteBack {
+    suspend fun writeBack(): WriteBackFailure? {
         val edited = touched.filterValues { it.isEdited }
         for ((file, it) in edited) {
             // A created file has no base hash, so this also checks that it is still absent.
-            if (files.readHashed(file)?.hash != it.baseHash) return WriteBack.ChangedOnDisk(files.display(file))
+            if (files.readHashed(file)?.hash != it.baseHash) return WriteBackFailure.ChangedOnDisk(files.display(file))
             val target = it.movedTo ?: continue
-            if (files.read(target) != null) return WriteBack.TargetExists(files.display(file), files.display(target))
+            if (files.read(target) != null) return WriteBackFailure.TargetExists(files.display(file), files.display(target))
         }
         val written = mutableListOf<Path>()
         try {
@@ -325,9 +311,9 @@ internal class ShadowWorkspace(
                     }
                     when (result) {
                         WriteResult.Written -> null
-                        WriteResult.ChangedOnDisk -> if (written.isEmpty()) return WriteBack.ChangedOnDisk(files.display(file)) else CHANGED_ON_DISK
+                        WriteResult.ChangedOnDisk -> if (written.isEmpty()) return WriteBackFailure.ChangedOnDisk(files.display(file)) else CHANGED_ON_DISK
                         WriteResult.TargetExists -> if (written.isEmpty()) {
-                            return WriteBack.TargetExists(files.display(file), files.display(checkNotNull(target)))
+                            return WriteBackFailure.TargetExists(files.display(file), files.display(checkNotNull(target)))
                         } else {
                             TARGET_EXISTS
                         }
@@ -339,10 +325,10 @@ internal class ShadowWorkspace(
                     if (written.isEmpty()) throw e
                     e.message ?: e.toString()
                 }
-                if (reason != null) return WriteBack.Partial(written.map(files::display), files.display(file), reason)
+                if (reason != null) return WriteBackFailure.PartiallyWritten(written.map(files::display), files.display(file), reason)
                 written.add(file)
             }
-            return WriteBack.Written
+            return null
         } finally {
             // A moved file is gone from where the code intelligence has it open; closing it hands it to the file watcher.
             written.filter { touched.getValue(it).movedTo == null }.forEach { session.writtenBack(it, touched.getValue(it).current) }

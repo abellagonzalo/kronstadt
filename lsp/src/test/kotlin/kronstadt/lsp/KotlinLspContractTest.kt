@@ -9,6 +9,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kronstadt.core.application.Create
 import kronstadt.core.application.Delete
 import kronstadt.core.application.Edit
 import kronstadt.core.application.EditResult
@@ -34,6 +35,7 @@ import kronstadt.core.application.RenameSymbol
 import kronstadt.core.application.RenamedFile
 import kronstadt.core.application.Replace
 import kronstadt.core.application.SymbolCandidate
+import kronstadt.core.application.ValidationFailure
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.FileChange
 import kronstadt.core.domain.Position
@@ -531,7 +533,7 @@ class KotlinLspContractTest {
 
         val result = Edit(files, lsp)(Replace(path, "Shape", "class Shape(val sides: Int) {\n    fun name(): Int = \"x\"\n}"))
 
-        val problem = assertIs<EditResult.Rejected>(result, "$result").newErrors.single()
+        val problem = assertIs<ValidationFailure.Rejected>(assertIs<EditResult.ValidationFailed>(result, "$result").failure).newErrors.single()
         assertEquals(Problem(path, "name", 4, problem.message, "fun name(): Int = \"x\""), problem)
         assertEquals(before, Files.readString(project.resolve(path)))
     }
@@ -567,7 +569,7 @@ class KotlinLspContractTest {
 
         assertEquals(
             listOf(Problem(definitions, "uses", 11, "No value passed for parameter 'depth'.", call)),
-            assertIs<EditResult.Rejected>(result, "$result").newErrors,
+            assertIs<ValidationFailure.Rejected>(assertIs<EditResult.ValidationFailed>(result, "$result").failure).newErrors,
         )
         assertEquals(shapesBefore, Files.readString(project.resolve(shapes)))
         assertEquals(definitionsBefore, Files.readString(project.resolve(definitions)))
@@ -730,7 +732,7 @@ class KotlinLspContractTest {
         val code = "fun timeout(): Duration = Duration.ZERO"
 
         val without = Edit(files, lsp)(InsertAfter(path, "Polygon", code))
-        assertIs<EditResult.Rejected>(without, "$without")
+        assertIs<ValidationFailure.Rejected>(assertIs<EditResult.ValidationFailed>(without, "$without").failure)
         assertEquals(before, Files.readString(project.resolve(path)))
 
         val result = Edit(files, lsp)(InsertAfter(path, "Polygon", code, imports = listOf("kotlin.time.Duration")))
@@ -1019,6 +1021,59 @@ private val symCheckPath = "src/test/kotlin/fixture/SymCheck.kt"
         } finally {
             Files.deleteIfExists(answerFile)
             Files.deleteIfExists(useFile)
+        }
+    }
+
+    // #73: kotlin-lsp's rename also removes an import the rename made unused. Renaming a member to the name of an imported
+    // extension it then shadows leaves the extension's import unused.
+
+    @Test
+    @Order(31)
+    fun `kotlin-lsp's rename removes an import it made unused, and kt_rename_symbol counts no Usage for it`() = runBlocking<Unit> {
+        val thingPath = "src/main/kotlin/fixture/epsilon/Thing.kt"
+        val usePath = "src/main/kotlin/fixture/epsilon/use/UseThing.kt"
+        val thing = "package fixture.epsilon\n\nclass Thing {\n    fun info(): String = \"member\"\n}\n"
+        val describe = "package fixture.epsilon.ext\n\nimport fixture.epsilon.Thing\n\nfun Thing.describe(): String = \"extension\"\n"
+        val use = "package fixture.epsilon.use\n\nimport fixture.epsilon.Thing\nimport fixture.epsilon.ext.describe\n\n" +
+            "fun use(thing: Thing): String = thing.info() + thing.describe()\n"
+        try {
+            // Created through kt_edit, so kotlin-lsp knows them right away (#92).
+            val created = Edit(files, lsp)(
+                listOf(Create(thingPath, thing), Create("src/main/kotlin/fixture/epsilon/ext/Describe.kt", describe), Create(usePath, use)),
+            )
+            assertIs<EditResult.Written>(created, "$created")
+            val thingFile = project.resolve(thingPath)
+            val useFile = project.resolve(usePath)
+
+            val answer = lsp.session { session -> session.rename(thingFile, TextDocument(thing), Position(3, 8), "describe") }
+
+            val useEdits = assertIs<Rename.Changes>(answer, "$answer").changes
+                .filterIsInstance<FileChange.Edited>().singleOrNull { it.file == useFile }.let { assertNotNull(it, "$answer") }.edits
+            val importLine = use.lines().indexOf("import fixture.epsilon.ext.describe")
+            val (removingImport, renaming) = useEdits.partition { it.range.start.line <= importLine + 1 }
+            // The import is emptied by an edit within its line, and its blank line goes in an edit across lines: the edit
+            // spanning lines is no renamed Usage. info -> describe comes as minimal diffs within the line of the call.
+            assertEquals(
+                listOf(
+                    TextEdit(TextRange(Position(importLine, 0), Position(importLine, use.lines()[importLine].length)), ""),
+                    TextEdit(TextRange(Position(importLine + 1, 0), Position(importLine + 2, 0)), ""),
+                ),
+                removingImport,
+                "$useEdits",
+            )
+            assertTrue(renaming.isNotEmpty() && renaming.all { it.range.start.line == importLine + 2 && it.range.end.line == importLine + 2 }, "$useEdits")
+
+            val result = RenameSymbol(files, lsp)("Thing/info", "describe", file = thingPath)
+
+            // One Usage, the call; neither the import kotlin-lsp removed nor its blank line counts. Kronstadt puts the import
+            // back and keeps it, though the rename made it unused: organize-imports still sees Thing.kt with info (#138).
+            assertEquals(
+                RenameResult.Renamed("describe", listOf(RenamedFile(thingPath, usages = 0), RenamedFile(usePath, usages = 1))),
+                result,
+            )
+            assertEquals(use.replace("thing.info()", "thing.describe()"), Files.readString(useFile))
+        } finally {
+            project.resolve("src/main/kotlin/fixture/epsilon").deleteRecursively()
         }
     }
 }

@@ -9,6 +9,7 @@ import kronstadt.core.application.Edit
 import kronstadt.core.application.EditResult
 import kronstadt.core.application.EditedSymbol
 import kronstadt.core.application.InsertAfter
+import kronstadt.core.application.ValidationFailure
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.TextDocument
@@ -100,7 +101,7 @@ class ExplicitApiContractTest {
     fun `kt_edit still rejects a main declaration that explicit-API mode refuses`() = runBlocking {
         val result = Edit(files, lsp)(InsertAfter(MAIN_FILE, "answer", "fun question() = 6 * 7"))
 
-        val errors = assertIs<EditResult.Rejected>(result, "$result").newErrors
+        val errors = assertIs<ValidationFailure.Rejected>(assertIs<EditResult.ValidationFailed>(result, "$result").failure).newErrors
         assertEquals(listOf(6, 6), errors.map { it.line }, "$errors")
     }
 
