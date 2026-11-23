@@ -6,6 +6,36 @@ package kronstadt.core.domain
  * [lastLine] are zero-based and inclusive.
  */
 public data class SymbolSpan(val firstLine: Int, val lastLine: Int, val text: String) {
+    /** The span's lines replaced by [newLines], laid out for the file. */
+    public fun replacedBy(newLines: List<String>): LineReplacement = LineReplacement(firstLine..lastLine, newLines)
+
+    /**
+     * [code] added as a sibling above the span, from its first non-empty line, with one blank line between them. [code]'s
+     * last line is non-blank, so the blank line is this one's alone.
+     */
+    public fun siblingBefore(code: List<String>): LineReplacement =
+        LineReplacement(firstLine until firstLine, code.dropWhile { it.isEmpty() } + "")
+
+    /** [code] added as a sibling below the span, from its first non-empty line, with one blank line between them. */
+    public fun siblingAfter(code: List<String>): LineReplacement =
+        LineReplacement(lastLine + 1 until lastLine + 1, listOf("") + code.dropWhile { it.isEmpty() })
+
+    /**
+     * The span removed from [document] with one blank line next to it: the one below if there is one, else the one above.
+     * The empty line after a final newline is no blank line between declarations, so it is never taken.
+     */
+    public fun deletion(document: TextDocument): LineReplacement {
+        val afterSpan = lastLine + 1
+        val blankAfter = afterSpan < document.lineCount - 1 && document.line(afterSpan).isBlank()
+        val blankBefore = firstLine > 0 && document.line(firstLine - 1).isBlank()
+        val lines = when {
+            blankAfter -> firstLine..afterSpan
+            blankBefore -> (firstLine - 1)..lastLine
+            else -> firstLine..lastLine
+        }
+        return LineReplacement(lines, emptyList())
+    }
+
     public sealed interface Computation {
         public data class Computed(val span: SymbolSpan) : Computation
 
@@ -67,3 +97,9 @@ public data class SymbolSpan(val firstLine: Int, val lastLine: Int, val text: St
             (text.startsWith("/*") && text.indexOf("*/", startIndex = 2) == text.length - 2)
     }
 }
+
+/**
+ * Whole [lines] of a [TextDocument] (zero-based, inclusive; empty to insert before `lines.first`) and the [newLines] that
+ * take their place, as [TextDocument.replaceLines] takes them: how an Operation lays out its change around a Symbol Span.
+ */
+public data class LineReplacement(val lines: IntRange, val newLines: List<String>)

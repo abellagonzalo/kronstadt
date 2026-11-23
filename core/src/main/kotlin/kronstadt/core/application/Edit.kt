@@ -214,7 +214,7 @@ public class Edit(
                 else -> return Located.Failed(OperationFailure.LookupFailed(failure))
             }
         }
-        val candidates = onDisk.filterNot { (_, file) -> file != null && shadow.isEdited(file) }.map { it.first } + shadow.findInEdited(parsed)
+        val candidates = onDisk.filterNot { (_, file) -> file != null && shadow.isChanged(file) }.map { it.first } + shadow.findInEdited(parsed)
         val candidate = candidates.singleOrNull()
         return when {
             candidates.size > 1 -> Located.Failed(OperationFailure.LookupFailed(LookupFailure.Ambiguous(parsed.symbol, null, candidates)))
@@ -277,29 +277,17 @@ public class Edit(
         val span = found.span
         val prefix = FileLayout.indentOf(document.line(span.firstLine))
         fun reindented(code: String) = FileLayout.of(document).reindent(code, prefix).lines()
-        // Inserted code starts and ends at its first and last non-blank lines: the one blank line comes from here.
-        fun sibling(code: String) = reindented(code).dropWhile { it.isEmpty() }
-        val first = span.firstLine
-        val afterSpan = span.lastLine + 1
-        when (operation) {
+        val replacement = when (operation) {
             is Create -> error("a create has no Symbol Path")
-            is Replace -> shadow.replaceLines(file, first..span.lastLine, reindented(operation.code))
-            is InsertBefore -> shadow.replaceLines(file, first until first, sibling(operation.code) + "")
-            is InsertAfter -> shadow.replaceLines(file, afterSpan until afterSpan, listOf("") + sibling(operation.code))
-            is EditIn ->
-                return applySplice(shadow, file, Splice.inSpan(document, first..span.lastLine, operation), operation, EditInScope(found.canonical, shown))
-            is Delete -> {
-                // The last line is the empty one after a final newline, not a blank line between declarations.
-                val blankAfter = afterSpan < document.lineCount - 1 && document.line(afterSpan).isBlank()
-                val blankBefore = first > 0 && document.line(first - 1).isBlank()
-                val lines = when {
-                    blankAfter -> first..afterSpan
-                    blankBefore -> (first - 1)..span.lastLine
-                    else -> first..span.lastLine
-                }
-                shadow.replaceLines(file, lines, emptyList())
-            }
+            is Replace -> span.replacedBy(reindented(operation.code))
+            is InsertBefore -> span.siblingBefore(reindented(operation.code))
+            is InsertAfter -> span.siblingAfter(reindented(operation.code))
+            is EditIn -> return applySplice(
+                shadow, file, Splice.inSpan(document, span.firstLine..span.lastLine, operation), operation, EditInScope(found.canonical, shown),
+            )
+            is Delete -> span.deletion(document)
         }
+        shadow.replaceLines(file, replacement.lines, replacement.newLines)
         return Applied.Done(file)
     }
 

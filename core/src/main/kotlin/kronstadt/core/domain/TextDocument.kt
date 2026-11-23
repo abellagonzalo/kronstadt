@@ -4,7 +4,7 @@ package kronstadt.core.domain
  * Immutable document text with LSP position <-> string offset conversion.
  *
  * This is the "boss fight" from the design notes: every symbol-level edit goes through
- * [offsetOf] / [replace], so line-ending handling lives here and nowhere else.
+ * [offsetOf] / [replaceLines], so line-ending handling lives here and nowhere else.
  * Line terminators recognised: `\n`, `\r\n`, and a lone `\r` (as the LSP spec requires).
  */
 public class TextDocument(public val text: String) {
@@ -45,6 +45,7 @@ public class TextDocument(public val text: String) {
 
     public fun slice(range: TextRange): String = text.substring(offsetOf(range.start), offsetOf(range.end))
 
+    /** Replaces [range] with [newText]: the character-level counterpart of [slice]. Operations change whole lines, with [replaceLines]. */
     public fun replace(range: TextRange, newText: String): TextDocument {
         val start = offsetOf(range.start)
         val end = offsetOf(range.end)
