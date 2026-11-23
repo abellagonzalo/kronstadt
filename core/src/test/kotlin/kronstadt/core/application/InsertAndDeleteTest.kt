@@ -252,9 +252,9 @@ class InsertAndDeleteTest {
         val (deleteResult, deleteFiles) = run(texts, Delete(path, "Greeter/greet"))
 
         assertEquals(inserted, insertFiles.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("added", 4, 4)), emptyList(), 0, 0))), insertResult)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("added", 4, 4)), emptyList(), 0, emptyList(), 0))), insertResult)
         assertEquals(deleted, deleteFiles.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0))), deleteResult)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0))), deleteResult)
     }
 
     @Test
@@ -279,12 +279,12 @@ class InsertAndDeleteTest {
         val (deleteLast, deleteLastFiles) = run(texts, Delete(path, "two"))
 
         assertEquals(zeroAdded, beforeFirstFiles.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("zero", 3, 3)), emptyList(), 0, 0))), beforeFirst)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("zero", 3, 3)), emptyList(), 0, emptyList(), 0))), beforeFirst)
         assertEquals(threeAdded, afterLastFiles.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("three", 7, 7)), emptyList(), 0, 0))), afterLast)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("three", 7, 7)), emptyList(), 0, emptyList(), 0))), afterLast)
         assertEquals(withoutOne, deleteFirstFiles.content(path))
         assertEquals(withoutTwo, deleteLastFiles.content(path))
-        val nothingLeft = EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0)))
+        val nothingLeft = EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0)))
         assertEquals(nothingLeft, deleteFirst)
         assertEquals(nothingLeft, deleteLast)
     }
@@ -333,12 +333,12 @@ class InsertAndDeleteTest {
         val (otherResult, otherFiles) = run(texts, Delete(path, "Greeter/other"))
 
         assertEquals(crlf(withAddedAfter), afterFiles.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("added", 9, 11)), emptyList(), 0, 0))), afterResult)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("added", 9, 11)), emptyList(), 0, emptyList(), 0))), afterResult)
         assertEquals(crlf(withAddedBefore), beforeFiles.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("added", 4, 4)), emptyList(), 0, 0))), beforeResult)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("added", 4, 4)), emptyList(), 0, emptyList(), 0))), beforeResult)
         assertEquals(crlf(withoutGreet), greetFiles.content(path))
         assertEquals(crlf(withoutOther), otherFiles.content(path))
-        val nothingLeft = EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0)))
+        val nothingLeft = EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0)))
         assertEquals(nothingLeft, greetResult)
         assertEquals(nothingLeft, otherResult)
     }
@@ -352,6 +352,6 @@ class InsertAndDeleteTest {
         val (result, files) = run(texts, Delete(path, "X/only"))
 
         assertEquals("package a\n\nclass X {\n}\n", files.content(path))
-        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, 0))), result)
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0))), result)
     }
 }
