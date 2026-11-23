@@ -256,14 +256,7 @@ internal class KronstadtTools(
                             putJsonObject("properties") {
                                 putJsonObject("type") {
                                     put("type", "string")
-                                    putJsonArray("enum") {
-                                        add("replace")
-                                        add("insert_before")
-                                        add("insert_after")
-                                        add("delete")
-                                        add("edit_in")
-                                        add("create")
-                                    }
+                                    putJsonArray("enum") { operationTypes.forEach { add(it.name) } }
                                     put("description", "The Operation.")
                                 }
                                 stringProperty(
@@ -347,38 +340,10 @@ internal class KronstadtTools(
         val operations = args["operations"] as? JsonArray ?: return error("Missing required argument: operations (an array)")
         if (operations.isEmpty()) return error("kt_edit needs at least one Operation. Nothing written.")
         // Each Operation with its type as the agent named it, for the messages of its failures.
-        val parsed = operations.mapIndexed { index, element ->
-            val operation = element as? JsonObject ?: return error("Operation $index must be an object. Nothing written.")
-            val type = operation.string("type") ?: return error("Operation $index: missing 'type'. Nothing written.")
-            val symbol = operation.string("symbol")?.takeIf { it.isNotBlank() }
-            val file = operation.string("file")?.takeIf { it.isNotBlank() }
-            fun missing(what: String) = error("Operation $index: missing $what, which '$type' needs. Nothing written.")
-            val code = operation.string("code")
-            val notStrings = error("Operation $index: 'imports' must be an array of strings. Nothing written.")
-            val imports = when (val raw = operation["imports"]) {
-                null, JsonNull -> emptyList()
-                is JsonArray -> raw.map { element -> (element as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return notStrings }
-                else -> return notStrings
-            }
-            type to when (type) {
-                "replace" -> Replace(file, symbol ?: return missing("'symbol'"), code ?: return missing("'code'"), imports)
-                "insert_before" -> InsertBefore(file, symbol ?: return missing("'symbol'"), code ?: return missing("'code'"), imports)
-                "insert_after" -> InsertAfter(file, symbol ?: return missing("'symbol'"), code ?: return missing("'code'"), imports)
-                "delete" -> Delete(file, symbol ?: return missing("'symbol'"), imports)
-                "edit_in" -> {
-                    if (symbol == null && file == null) return missing("a 'symbol', a 'file', or both")
-                    val old = operation.string("old")?.takeIf { it.isNotEmpty() } ?: return missing("a non-empty 'old'")
-                    EditIn(file, symbol, old, operation.string("new") ?: return missing("'new'"), imports)
-                }
-                "create" -> {
-                    if (symbol != null) return error("Operation $index: 'create' takes no 'symbol', only the new 'file' and its 'code'. Nothing written.")
-                    Create(file ?: return missing("'file'"), code ?: return missing("'code'"), imports)
-                }
-                else -> return error(
-                    "Operation $index: unsupported type '$type'; use replace, insert_before, insert_after, delete, edit_in or create, and " +
-                        "kt_rename_symbol for renames, on its own. Nothing written.",
-                )
-            }
+        val parsed = try {
+            operations.mapIndexed(::parseOperation)
+        } catch (refused: Refused) {
+            return error(refused.message)
         }
         val amend = when (val raw = args["amend"]) {
             null, JsonNull -> null
@@ -718,8 +683,6 @@ internal class KronstadtTools(
             put("description", description)
         }
     }
-
-    private fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
 
     private fun JsonObject.boolean(key: String): Boolean? = (this[key] as? JsonPrimitive)?.booleanOrNull
 

@@ -37,13 +37,14 @@ internal class ShadowWorkspace(
 ) : DocumentSource {
     /**
      * A touched file: its [base] as read from disk with the [baseHash] Write-back checks, its [current] text and the line
-     * ranges edited in [current] (a deletion edits the file but leaves no edited lines). A file the Edit creates has an
+     * ranges edited in [current]. [isChanged] says whether the Edit changed the file at all, which [edited] can't: a
+     * deletion or a move changes it but leaves no edited lines. A file the Edit creates has an
      * empty [base] and no [baseHash]: Write-back checks that it is still absent instead.
      */
     private class Touched(val base: TextDocument, val baseHash: ContentHash?) {
         var current: TextDocument = base
         val edited = mutableListOf<IntRange>()
-        var isEdited = false
+        var isChanged = false
 
         /** Where Write-back moves the file to, if it is renamed. */
         var movedTo: Path? = null
@@ -95,7 +96,7 @@ internal class ShadowWorkspace(
 
     /** The Edit's Collateral Errors, once Validation passed and before Write-back (see [CollateralCheck]), within [timeout]. */
     suspend fun collateralErrors(timeout: Duration): CollateralErrors {
-        val changed = touched.filterValues { it.isEdited }.map { (file, it) -> ChangedFile(file, it.base, it.current, it.isCreated) }
+        val changed = touched.filterValues { it.isChanged }.map { (file, it) -> ChangedFile(file, it.base, it.current, it.isCreated) }
         return CollateralCheck(files, session, ::tree, timeout).run(changed)
     }
 
@@ -115,7 +116,7 @@ internal class ShadowWorkspace(
     suspend fun current(file: Path): TextDocument? = touch(file)?.current
 
     /** Each file the Edit changed so far, with its text as read from disk. */
-    fun editedBases(): Map<Path, TextDocument> = touched.filterValues { it.isEdited }.mapValues { it.value.base }
+    fun editedBases(): Map<Path, TextDocument> = touched.filterValues { it.isChanged }.mapValues { it.value.base }
 
     /** The content hash of each file the Edit touched so far, as read from disk; null for one it creates. */
     fun baseHashes(): Map<Path, ContentHash?> = touched.mapValues { it.value.baseHash }
@@ -134,21 +135,21 @@ internal class ShadowWorkspace(
 
     /** Whether [parsed] resolves in [file] as read from disk, which differs from its current text only once edited. */
     private suspend fun inBase(file: Path, parsed: ParsedLookup): Boolean {
-        val target = touched[file]?.takeIf { it.isEdited } ?: return false
+        val target = touched[file]?.takeIf { it.isChanged } ?: return false
         val base = DocumentSource { analyse(file, target.base) }
         val resolution = resolver.resolveIn(base, file, parsed)
         return !(resolution is Outcome.Failed && resolution.failure is LookupFailure.NotFound)
     }
 
     /** Whether an Operation of this Edit has changed [file], so that its current text, not the disk's, is what counts. */
-    fun isEdited(file: Path): Boolean = touched[file]?.isEdited == true
+    fun isChanged(file: Path): Boolean = touched[file]?.isChanged == true
 
     /**
      * Where [parsed] is in the current text of the files this Edit has edited, in its package if it names one: what
      * a project-wide lookup, which sees only the disk, can't find.
      */
     suspend fun findInEdited(parsed: ParsedLookup): List<SymbolCandidate> =
-        touched.filterValues { it.isEdited }.keys.flatMap { file ->
+        touched.filterValues { it.isChanged }.keys.flatMap { file ->
             val current = touched.getValue(file).current
             val packageName = parsed.path.packageName
             if (packageName != null && current.packageName != packageName) return@flatMap emptyList()
@@ -167,7 +168,7 @@ internal class ShadowWorkspace(
     fun replaceLines(file: Path, lines: IntRange, newLines: List<String>) {
         val target = checkNotNull(touched[file]) { "$file was never resolved in this Shadow Workspace" }
         target.current = target.current.replaceLines(lines, newLines, FileLayout.of(target.current).lineSeparator)
-        target.isEdited = true
+        target.isChanged = true
         val written = lines.first until lines.first + newLines.size
         val shift = newLines.size - lines.count()
         var merged = written
@@ -206,7 +207,7 @@ internal class ShadowWorkspace(
     suspend fun move(file: Path, target: Path): Boolean {
         val moved = touch(file) ?: return false
         moved.movedTo = target
-        moved.isEdited = true
+        moved.isChanged = true
         return true
     }
 
@@ -225,7 +226,7 @@ internal class ShadowWorkspace(
      * [Validation.isSpurious]) are left out of both. All diagnostics share one [validationTimeout].
      */
     suspend fun validate(inBase: (String) -> String = { it }): Validated {
-        val edited = touched.filterValues { it.isEdited }.entries.toList()
+        val edited = touched.filterValues { it.isChanged }.entries.toList()
         val pulled = withTimeoutOrNull(validationTimeout) {
             val before = edited.map { (file, it) ->
                 // A created file is pulled at its empty base too, so other files' base diagnostics don't see its
@@ -291,7 +292,7 @@ internal class ShadowWorkspace(
      * that fails after others succeeded leaves those on disk (ADR 0003, Consequences); one that fails first throws.
      */
     suspend fun writeBack(): WriteBackFailure? {
-        val edited = touched.filterValues { it.isEdited }
+        val edited = touched.filterValues { it.isChanged }
         for ((file, it) in edited) {
             // A created file has no base hash, so this also checks that it is still absent.
             if (files.readHashed(file)?.hash != it.baseHash) return WriteBackFailure.ChangedOnDisk(files.display(file))
