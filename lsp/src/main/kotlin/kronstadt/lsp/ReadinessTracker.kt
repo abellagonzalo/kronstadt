@@ -15,7 +15,12 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 
-/** One notification the tracker was fed, e.g. `begin Indexing`, `end Indexing` or `import FINISHED`, and when. */
+/**
+ * One notification the tracker was fed, e.g. `begin Indexing`, `end Indexing` or `import FINISHED`, and when.
+ *
+ * [at] is taken once the tracker's state reflects the notification, so readiness asked for after [at] already
+ * accounts for it (#101).
+ */
 internal data class ReadinessSignal(val text: String, val at: ComparableTimeMark)
 
 /**
@@ -68,22 +73,23 @@ internal class ReadinessTracker(private val timeSource: TimeSource.WithComparabl
     }
 
     fun importState(phase: String) {
-        signal("import $phase")
         state.update { it.copy(importPhase = phase) }
+        signal("import $phase")
     }
 
     fun progressBegin(token: String, title: String) {
-        signal("begin $title")
         state.update { it.copy(openProgress = it.openProgress + (token to title), lastTitle = title) }
+        signal("begin $title")
     }
 
     fun progressEnd(token: String) {
-        signal("end ${state.value.openProgress[token] ?: token}")
+        val text = "end ${state.value.openProgress[token] ?: token}"
         state.update {
             val open = it.openProgress - token
             val endedLast = open.isEmpty() && token in it.openProgress
             it.copy(openProgress = open, quietSince = if (endedLast) timeSource.markNow() else it.quietSince)
         }
+        signal(text)
     }
 
     /**

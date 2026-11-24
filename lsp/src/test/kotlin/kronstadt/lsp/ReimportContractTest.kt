@@ -27,6 +27,7 @@ import kotlin.time.ComparableTimeMark
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
 /**
@@ -42,6 +43,8 @@ class ReimportContractTest {
     private lateinit var indexDir: Path
     private lateinit var lsp: LspCodeIntelligence
 
+    /** How long kotlin-lsp must have said nothing before the change; well above the startup gaps seen under load (#101). */
+    private val quiet = 3.seconds
     @BeforeAll
     fun start() {
         val fixture = Path.of(requireNotNull(System.getProperty("kronstadt.fixture")) { "run via ./gradlew :lsp:contractTest" })
@@ -59,8 +62,8 @@ class ReimportContractTest {
         if (::indexDir.isInitialized) indexDir.parent.deleteRecursively()
     }
 
-    /** Whether Kronstadt reported ready at [at]. */
-    private class ReadinessSample(val at: ComparableTimeMark, val ready: Boolean)
+    /** Whether Kronstadt reported ready when asked at [at]; [answeredAt] is when the answer came back. */
+    private class ReadinessSample(val at: ComparableTimeMark, val answeredAt: ComparableTimeMark, val ready: Boolean)
 
     @Test
     fun `a build script change re-imports with no import phase but FINISHED, through gaps the settle period covers`() = runBlocking {
@@ -68,21 +71,33 @@ class ReimportContractTest {
 
         val signals = Collections.synchronizedList(mutableListOf<ReadinessSignal>())
         val samples = Collections.synchronizedList(mutableListOf<ReadinessSample>())
+        val subscribed = TimeSource.Monotonic.markNow()
         val recorder = launch(Dispatchers.Default) { lsp.readinessSignals.collect { signals += it } }
+
+        // kotlin-lsp can keep indexing after Kronstadt is first ready, with gaps longer than the settle period, and while
+        // other kotlin-lsp or Gradle runs are busy on the machine it even re-imports on its own (#101). The change must
+        // find kotlin-lsp quiet, or the re-import below mixes with that work. This also gives the recorder time to subscribe.
+        withTimeout(5.minutes) {
+            while ((signals.lastOrNull()?.at ?: subscribed).elapsedNow() < quiet) delay(50.milliseconds)
+        }
+        assertEquals(Readiness.Ready, lsp.awaitReady(5.minutes))
+
         val sampler = launch(Dispatchers.Default) {
             while (true) {
-                samples += ReadinessSample(TimeSource.Monotonic.markNow(), lsp.awaitReady(Duration.ZERO) == Readiness.Ready)
+                val at = TimeSource.Monotonic.markNow()
+                val ready = lsp.awaitReady(Duration.ZERO) == Readiness.Ready
+                samples += ReadinessSample(at, TimeSource.Monotonic.markNow(), ready)
                 delay(5.milliseconds)
             }
         }
-        delay(100.milliseconds) // the recorder is subscribed before the change
+        delay(100.milliseconds) // the sampler is running before the change
 
         val edited = TimeSource.Monotonic.markNow()
         project.resolve("build.gradle.kts").appendText(
             "\ndependencies {\n    implementation(\"org.jetbrains:annotations:24.1.0\")\n}\n",
         )
         withTimeout(5.minutes) {
-            while (!importFinished(signals.toList().map { it.text })) delay(50.milliseconds)
+            while (!importFinished(signals.toList().filter { it.at > edited }.map { it.text })) delay(50.milliseconds)
         }
         assertEquals(Readiness.Ready, lsp.awaitReady(5.minutes))
         val readyAt = TimeSource.Monotonic.markNow()
@@ -94,7 +109,7 @@ class ReimportContractTest {
         val texts = seen.map { it.text }
         val importing = texts.indexOf("begin Importing")
         val importEnd = texts.indexOf("end Importing")
-        assertTrue(importing >= 0 && importEnd > importing, "signals: $texts")
+        assertTrue(importing >= 0 && importEnd > importing, "no Importing after the change\n" + timeline(edited, signals.toList(), emptyList()))
 
         // The import state never leaves FINISHED: open progress is the only sign of a re-import.
         assertEquals(listOf("import FINISHED"), texts.filter { it.startsWith("import ") }, "signals: $texts")
@@ -104,16 +119,22 @@ class ReimportContractTest {
         val busyFrom = seen.first().at
         val busyUntil = seen.last().at
         val readyWhileBusy = samples.toList().filter { it.ready && it.at > busyFrom && it.at < busyUntil }
-        assertEquals(0, readyWhileBusy.size, "ready during the re-import; signals: $texts")
+        assertEquals(0, readyWhileBusy.size, "ready during the re-import\n" + timeline(edited, seen, readyWhileBusy))
 
         // As on first startup, Indexing begins before Importing ends, so those two leave no gap.
         assertTrue("begin Indexing" in texts.subList(importing, importEnd), "signals: $texts")
 
         // But before Importing begins, an Indexing run notices the change and ends: no progress is open for a moment.
         // Every gap in the re-import is shorter than the settle period.
-        assertTrue(gapsWithNoProgressOpen(seen.subList(0, importing + 1)).isNotEmpty(), "no gap before Importing; signals: $texts")
+        assertTrue(
+            gapsWithNoProgressOpen(seen.subList(0, importing + 1)).isNotEmpty(),
+            "no gap before Importing\n" + timeline(edited, seen, emptyList()),
+        )
         val gaps = gapsWithNoProgressOpen(seen)
-        assertTrue(gaps.all { it < ReadinessTracker.SETTLE }, "gaps $gaps not all below ${ReadinessTracker.SETTLE}")
+        assertTrue(
+            gaps.all { it < ReadinessTracker.SETTLE },
+            "gaps not all below ${ReadinessTracker.SETTLE}\n" + timeline(edited, seen, emptyList()),
+        )
 
         val calculator = lsp.workspaceSymbols("Calculator").symbols.filter { it.name == "Calculator" }
         assertEquals(listOf(SymbolKind.CLASS), calculator.map { it.kind })
@@ -124,20 +145,50 @@ class ReimportContractTest {
         "import FINISHED" in texts.dropWhile { it != "begin Importing" }
 
     /** How long no progress was open each time all open progress ended and another began later in [signals]. */
-    private fun gapsWithNoProgressOpen(signals: List<ReadinessSignal>): List<Duration> {
+    private fun gapsWithNoProgressOpen(signals: List<ReadinessSignal>): List<Duration> =
+        gapsWithNoProgressOpenBetween(signals).map { it.first }
+
+    /** Each gap of [gapsWithNoProgressOpen], with the `end` signal that opened it and the `begin` signal that closed it. */
+    private fun gapsWithNoProgressOpenBetween(signals: List<ReadinessSignal>): List<Triple<Duration, ReadinessSignal, ReadinessSignal>> {
         var open = 0
-        var quietSince: ComparableTimeMark? = null
-        val gaps = mutableListOf<Duration>()
+        var quietSince: ReadinessSignal? = null
+        val gaps = mutableListOf<Triple<Duration, ReadinessSignal, ReadinessSignal>>()
         for (signal in signals) {
             when {
                 signal.text.startsWith("begin ") -> {
-                    quietSince?.let { gaps += signal.at - it }
+                    quietSince?.let { gaps += Triple(signal.at - it.at, it, signal) }
                     quietSince = null
                     open++
                 }
-                signal.text.startsWith("end ") -> if (--open == 0) quietSince = signal.at
+                signal.text.startsWith("end ") -> if (--open == 0) quietSince = signal
             }
         }
         return gaps
+    }
+
+    /**
+     * For a failure message: when each of [signals] came, each gap with no progress open and the signals around it, and
+     * when each of the [readySamples] was asked and answered, all relative to [edited].
+     */
+    private fun timeline(edited: ComparableTimeMark, signals: List<ReadinessSignal>, readySamples: List<ReadinessSample>): String {
+        fun ms(at: ComparableTimeMark) = (at - edited).inWholeMilliseconds.let { if (it < 0) "$it ms" else "+$it ms" }
+        fun around(at: ComparableTimeMark): String {
+            val before = signals.lastOrNull { it.at <= at }
+            val after = signals.firstOrNull { it.at > at }
+            return "after ${before?.let { "'${it.text}' by ${(at - it.at).inWholeMicroseconds} µs" } ?: "no signal"}, " +
+                "before ${after?.let { "'${it.text}' by ${(it.at - at).inWholeMicroseconds} µs" } ?: "no signal"}"
+        }
+        return buildString {
+            appendLine("signals:")
+            signals.forEach { appendLine("  ${ms(it.at)} ${it.text}") }
+            appendLine("gaps with no progress open (settle period ${ReadinessTracker.SETTLE}):")
+            gapsWithNoProgressOpenBetween(signals).forEach { (gap, end, begin) ->
+                appendLine("  $gap from ${ms(end.at)} '${end.text}' to ${ms(begin.at)} '${begin.text}'")
+            }
+            appendLine("ready samples:")
+            readySamples.forEach {
+                appendLine("  asked ${ms(it.at)} (${around(it.at)}), answered ${ms(it.answeredAt)} (${around(it.answeredAt)})")
+            }
+        }
     }
 }
