@@ -94,6 +94,9 @@ To make agents use Kronstadt for every Kotlin change and report what goes wrong,
 ```markdown
 ## Kotlin code (Kronstadt)
 
+This section applies only when the Kronstadt MCP server is enabled in the session, i.e. `mcp__kronstadt__*` tools are
+available. If they aren't, ignore it and use the built-in tools.
+
 For every change to a `.kt` file, production and test code alike, use the Kronstadt MCP tools (`mcp__kronstadt__*`)
 instead of the built-in tools:
 - Read: `kt_read_structure` for a file's skeleton, then `kt_read_symbol` for one declaration, instead of Read.
