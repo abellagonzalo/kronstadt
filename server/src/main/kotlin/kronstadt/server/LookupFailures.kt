@@ -36,7 +36,12 @@ private fun message(failure: LookupFailure, tool: String): String = when (failur
         "Index out of sync for ${failure.symbol} in ${failure.file}: its name is not where kotlin-lsp says; retry"
     is LookupFailure.SharedLine ->
         "${failure.symbol} shares line ${failure.line} of ${failure.file} with other code, so it has no whole-line span; " +
-            (if (tool == EDIT) "replace" else "read") + " the enclosing symbol instead"
+            // Replacing the enclosing Symbol costs more, and it may share a line too (#99).
+            if (tool == EDIT) {
+                "use a whole-file edit_in instead: file '${failure.file}' with no symbol, and an 'old' of exact text from that file"
+            } else {
+                "read the enclosing symbol instead"
+            }
     is LookupFailure.FileNotFound -> "File not found: ${failure.path}"
     is LookupFailure.NotKotlin -> "Not a Kotlin file: ${failure.path}. $tool only supports .kt and .kts files."
     is LookupFailure.OutsideProject -> "Path is outside the project root: ${failure.path}"

@@ -79,7 +79,7 @@ class LookupFailuresTest {
     }
 
     @Test
-    fun `an untrustworthy span says to retry, or to use the enclosing Symbol`() {
+    fun `an untrustworthy span says to retry, to read the enclosing Symbol, or to edit_in the whole file`() {
         assertEquals(
             "Index out of sync for greet in src/A.kt: its name is not where kotlin-lsp says; retry",
             describe(LookupFailure.OutOfSync("greet", "src/A.kt"), "kt_read_symbol"),
@@ -89,8 +89,14 @@ class LookupFailuresTest {
             describe(LookupFailure.SharedLine("Box/width", "src/A.kt", 3), "kt_read_symbol"),
         )
         assertEquals(
-            "Box/width shares line 3 of src/A.kt with other code, so it has no whole-line span; replace the enclosing symbol instead",
+            "Box/width shares line 3 of src/A.kt with other code, so it has no whole-line span; use a whole-file edit_in " +
+                "instead: file 'src/A.kt' with no symbol, and an 'old' of exact text from that file",
             describe(LookupFailure.SharedLine("Box/width", "src/A.kt", 3), "kt_edit"),
+        )
+        assertEquals(
+            "Box/constructor(Int, Int) shares line 1 of src/A.kt with other code, so it has no whole-line span; use a " +
+                "whole-file edit_in instead: file 'src/A.kt' with no symbol, and an 'old' of exact text from that file",
+            describe(LookupFailure.SharedLine("Box/constructor(Int, Int)", "src/A.kt", 1), "kt_edit"),
         )
     }
 

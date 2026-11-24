@@ -12,6 +12,7 @@ import kotlinx.coroutines.withTimeout
 import kronstadt.core.application.Create
 import kronstadt.core.application.Delete
 import kronstadt.core.application.Edit
+import kronstadt.core.application.EditIn
 import kronstadt.core.application.EditResult
 import kronstadt.core.application.EditedSymbol
 import kronstadt.core.application.FileMatches
@@ -25,6 +26,7 @@ import kronstadt.core.application.GetDefinition
 import kronstadt.core.application.GetDefinitionResult
 import kronstadt.core.application.InsertAfter
 import kronstadt.core.application.LookupFailure
+import kronstadt.core.application.OperationFailure
 import kronstadt.core.application.Problem
 import kronstadt.core.application.ReadStructure
 import kronstadt.core.application.ReadStructureResult
@@ -65,6 +67,7 @@ import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.copyToRecursively
 import kotlin.io.path.deleteRecursively
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
@@ -593,6 +596,25 @@ class KotlinLspContractTest {
         )
         // Still there for the next search, before kotlin-lsp's file watcher could have caught up.
         assertIs<FindSymbolResult.Found>(FindSymbol(files, lsp)("Polygon"), "second search")
+    }
+
+    // A primary constructor has no whole-line span, so kt_edit refuses it and points to a whole-file edit_in instead (#99).
+    // Following that advice adds a constructor parameter, and the result lists the class.
+    @Test
+    @Order(17)
+    fun `kt_edit refuses a primary constructor, and a whole-file edit_in adds a parameter to it`() = runBlocking<Unit> {
+        val path = "src/main/kotlin/fixture/Initializers.kt"
+        val old = "    val second: String?,\n) {"
+        val new = "    val second: String?,\n    val third: String? = null,\n) {"
+
+        val refused = assertIs<EditResult.OperationFailed>(Edit(files, lsp)(EditIn(path, "Checked/constructor", old, new)))
+        assertIs<LookupFailure.SharedLine>(assertIs<OperationFailure.LookupFailed>(refused.failure).failure)
+
+        val result = Edit(files, lsp)(EditIn(path, null, old, new))
+
+        val written = assertIs<EditResult.Written>(result, "$result").files.single()
+        assertEquals(listOf("Checked"), written.symbols.map { it.path })
+        assertContains(Files.readString(project.resolve(path)), new)
     }
 
     // kt_find_usages: textDocument/references without the declaration, attributed through each file's own tree.
