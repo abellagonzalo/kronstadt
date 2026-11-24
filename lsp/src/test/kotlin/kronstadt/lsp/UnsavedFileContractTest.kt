@@ -122,7 +122,6 @@ class UnsavedFileContractTest {
     @Order(7)
     fun `another open file resolves a class declared only in a file that isn't on disk, in test`() = resolvesFromAnotherFile("test", TEST_USER)
 
-    /** The fixture's test source has errors of its own, so this compares against them: the new reference adds none. */
     private fun resolvesFromAnotherFile(sourceSet: String, userFile: String) = runBlocking {
         val file = unsaved(sourceSet)
         val user = project.resolve(userFile)
@@ -130,16 +129,17 @@ class UnsavedFileContractTest {
         val using = "$original\nfun greeting(): String = fixture.created.Greeter().greet()\n"
         val before = lsp.session { session -> session.diagnostics(user, TextDocument(original)) }
             .filter { it.severity == Severity.ERROR }
+        assertEquals(emptyList(), before, "before: $before")
         val unopened = lsp.session { session -> session.diagnostics(user, TextDocument(using)) }
             .filter { it.severity == Severity.ERROR }
-        assertEquals(before.size + 1, unopened.size, "without Greeter open: $unopened")
+        assertEquals(1, unopened.size, "without Greeter open: $unopened")
 
         val after = lsp.session { session ->
             session.documentSymbols(file, TextDocument(GREETER))
             session.diagnostics(user, TextDocument(using))
         }.filter { it.severity == Severity.ERROR }
 
-        assertEquals(before, after, "diagnostics: $after")
+        assertEquals(emptyList(), after, "diagnostics: $after")
         assertFalse(file.exists())
     }
 

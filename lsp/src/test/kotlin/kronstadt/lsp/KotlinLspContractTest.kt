@@ -610,7 +610,7 @@ class KotlinLspContractTest {
             |    L7: constructor(name: String, scale: Int) : this(name) {
             |src/test/kotlin/fixture/ShapesCheck.kt
             |  checkShapes
-            |    L8: return Calculator("c").parse("2") == 2 && triangle.sides == 3 && Operation.PLUS.apply(1, 2) == 3
+            |    L8: return Calculator("c").parse("2") == 2 && circle.radius == 1.0 && Operation.PLUS.apply(1, 2) == 3
             """.trimMargin(),
             usages("Calculator"),
         )
@@ -633,13 +633,13 @@ class KotlinLspContractTest {
         // Two references on one line: counted twice, shown once.
         assertEquals("2 usages in 1 file\nsrc/main/kotlin/fixture/Shapes.kt\n  create\n    L48: fun create(): Outer = Outer()", usages("Outer"))
         assertEquals(
-            "1 usage in 1 file (+1 import)\nsrc/test/kotlin/fixture/ShapesCheck.kt\n  checkShapes\n    L7: val triangle = Shape(3)",
+            "1 usage in 1 file (+1 import)\nsrc/test/kotlin/fixture/ShapesCheck.kt\n  checkShapes\n    L7: val circle = Shape(1.0)",
             usages("fixture.beta/Shape"),
         )
         // The call is a Usage; the overrides in PLUS and TIMES aren't.
         assertEquals(
             "1 usage in 1 file\nsrc/test/kotlin/fixture/ShapesCheck.kt\n  checkShapes\n" +
-                "    L8: return Calculator(\"c\").parse(\"2\") == 2 && triangle.sides == 3 && Operation.PLUS.apply(1, 2) == 3",
+                "    L8: return Calculator(\"c\").parse(\"2\") == 2 && circle.radius == 1.0 && Operation.PLUS.apply(1, 2) == 3",
             usages("Operation/apply"),
         )
         assertEquals(FindUsagesResult.NoUsages("describe", searchedFiles = 1), find("Outer/Nested/describe", file = "src/main/kotlin/fixture/Shapes.kt"))
@@ -801,7 +801,7 @@ class KotlinLspContractTest {
                             check,
                             listOf(
                                 TextEdit(TextRange(Position(2, 20), Position(2, 25)), "Polygon"),
-                                TextEdit(TextRange(Position(6, 19), Position(6, 24)), "Polygon"),
+                                TextEdit(TextRange(Position(6, 17), Position(6, 22)), "Polygon"),
                             ),
                         ),
                         FileChange.Edited(shape, listOf(TextEdit(TextRange(name, Position(2, 11)), "Polygon"))),
@@ -836,21 +836,18 @@ class KotlinLspContractTest {
         val shapes = "src/main/kotlin/fixture/Shapes.kt"
         val check = "src/test/kotlin/fixture/ShapesCheck.kt"
 
-        // The fixture's test source has two errors of its own: beta's Shape takes a Double and has no 'sides'.
-        fun checkErrors(shape: String) = listOf(
-            Problem(check, "checkShapes", 7, "Argument type mismatch: actual type is 'Int', but 'Double' was expected.", "val triangle = $shape(3)"),
-            Problem(
-                check, "checkShapes", 8, "Unresolved reference 'sides' on receiver of type '$shape'.",
-                "return Calculator(\"c\").parseText(\"2\") == 2 && triangle.sides == 3 && Operation.PLUS.apply(1, 2) == 3",
-            ),
-        )
+        // A deliberate error in the test source that neither rename touches, removed again at the end.
+        val clean = Files.readString(project.resolve(check))
+        val broken = "fun broken(): Int = \"x\""
+        Files.writeString(project.resolve(check), "$clean\n$broken\n")
+        val checkErrors = listOf(Problem(check, "broken", 11, "Return type mismatch: expected 'Int', actual 'String'.", broken))
 
         val parse = RenameSymbol(files, lsp)("Calculator/parse(String)", "parseText")
 
         assertEquals(
             RenameResult.Renamed(
                 "parseText",
-                listOf(RenamedFile(shapes, usages = 0), RenamedFile(check, usages = 1, preexistingErrors = checkErrors("Shape"))),
+                listOf(RenamedFile(shapes, usages = 0), RenamedFile(check, usages = 1, preexistingErrors = checkErrors)),
             ),
             parse,
         )
@@ -865,7 +862,7 @@ class KotlinLspContractTest {
                 "Polygon",
                 listOf(
                     RenamedFile("src/main/kotlin/fixture/beta/Shape.kt", usages = 0),
-                    RenamedFile(check, usages = 1, imports = 1, preexistingErrors = checkErrors("Polygon")),
+                    RenamedFile(check, usages = 1, imports = 1, preexistingErrors = checkErrors),
                 ),
                 fileRenamed = FileRenamed("src/main/kotlin/fixture/beta/Shape.kt", moved),
             ),
@@ -874,6 +871,10 @@ class KotlinLspContractTest {
         assertTrue(Files.notExists(project.resolve("src/main/kotlin/fixture/beta/Shape.kt")))
         assertEquals("package fixture.beta\n\nclass Polygon(val radius: Double)\n", Files.readString(project.resolve(moved)))
         assertTrue(Files.readString(project.resolve(check)).contains("import fixture.beta.Polygon"))
+
+        // No later test sees the deliberate error.
+        Files.writeString(project.resolve(check), Files.readString(project.resolve(check)).removeSuffix("\n$broken\n"))
+        assertTrue(broken !in Files.readString(project.resolve(check)))
     }
 
     // kt_edit import removal under a star import (#81): organize-imports collapses a package once 5 of its names are used.
