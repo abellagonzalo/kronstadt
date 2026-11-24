@@ -79,6 +79,46 @@ If Kronstadt comes bundled in a Claude Code plugin, the rule is `mcp__plugin_<pl
 The server's instructions tell agents which tool to use instead of `Read`, `grep` and `Edit` for Kotlin, and to retry
 rather than fall back while kotlin-lsp is still indexing.
 
+### Use it in all your repos
+
+Register Kronstadt at user scope, and put the allow rule in `~/.claude/settings.json`:
+
+```sh
+claude mcp add --scope user kronstadt -- /path/to/kronstadt/server/build/install/kronstadt/bin/kronstadt
+```
+
+Rebuilding with `./gradlew installDist` updates that binary in place. Restart Claude Code sessions to pick it up.
+
+To make agents use Kronstadt for every Kotlin change and report what goes wrong, add this to `~/.claude/CLAUDE.md`:
+
+```markdown
+## Kotlin code (Kronstadt)
+
+For every change to a `.kt` file, production and test code alike, use the Kronstadt MCP tools (`mcp__kronstadt__*`)
+instead of the built-in tools:
+- Read: `kt_read_structure` for a file's skeleton, then `kt_read_symbol` for one declaration, instead of Read.
+- Search: `kt_find_symbol` and `kt_find_usages` instead of grep. Navigate with `kt_get_definition`.
+- Change: `kt_edit` (create new files with its `create` Operation) and `kt_rename_symbol` instead of Edit/Write.
+- If a tool fails because kotlin-lsp is still indexing, retry it; don't fall back.
+
+Use another tool only when a Kronstadt tool failed or gave a wrong result. Say so, and use the other tool for that
+one change only.
+
+### Reporting Kronstadt bugs and feature requests
+
+When you hit a Kronstadt bug, or a missing capability that would have helped, open an issue directly in
+`abellagonzalo/kronstadt` (`gh issue create -R abellagonzalo/kronstadt`) without asking. Check
+`gh issue list -R abellagonzalo/kronstadt --search "<keywords>"` first to avoid duplicates.
+
+That repo is **public**. Anonymise everything in the issue, including code:
+- No company, repo, service, team, people or customer names, and no internal URLs, hostnames, paths, tickets, data,
+  or secrets.
+- Rewrite code as a minimal generic repro (`com.example`, `Foo`, `Bar`, `doSomething`) that keeps only the Kotlin
+  constructs that trigger the bug. Never paste the original code.
+- Give the tool name, the arguments (anonymised), the expected result, the actual result and error text
+  (anonymised), and the Kronstadt and kotlin-lsp versions if known.
+```
+
 Options:
 - `--project-root <dir>`: project or worktree to serve (default: current directory, i.e. where Claude Code runs).
 - `--language-server "<command>"`: which kotlin-lsp to run. Defaults to `$KRONSTADT_LANGUAGE_SERVER`, else
