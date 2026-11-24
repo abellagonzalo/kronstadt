@@ -56,7 +56,7 @@ class KtReadStructureToolTest {
     }
 }
 
-/** Always ready; knows one function, `greet`, in [a]. */
+/** Knows one function, `greet`, in [a]. */
 private class OneFunctionIntelligence(private val a: Path) : UnstubbedCodeIntelligence() {
     override suspend fun <T> session(block: suspend (AnalysisSession) -> T): T = block(object : UnstubbedAnalysisSession() {
         override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> =
