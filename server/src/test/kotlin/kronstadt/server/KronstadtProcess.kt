@@ -50,7 +50,7 @@ internal class KronstadtProcess(projectRoot: Path, home: Path, private val stder
     }
 
     /** Sends request [method] and returns the raw response line. */
-    fun call(method: String, params: String): String {
+    private fun call(method: String, params: String): String {
         val id = nextId++
         input.write("""{"jsonrpc":"2.0","id":$id,"method":"$method","params":$params}${"\n"}""")
         input.flush()
@@ -60,7 +60,7 @@ internal class KronstadtProcess(projectRoot: Path, home: Path, private val stder
         }
     }
 
-    fun notify(method: String) {
+    private fun notify(method: String) {
         input.write("""{"jsonrpc":"2.0","method":"$method"}${"\n"}""")
         input.flush()
     }

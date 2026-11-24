@@ -17,7 +17,6 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration
@@ -61,7 +60,7 @@ class TwoServersContractTest {
             val indexBefore = snapshot(index)
             val b = start("b", repo)
             b.initialize()
-            val refused = b.callTool("kt_find_symbol", SHAPE)
+            val refused = b.callTool("kt_find_symbol", FIND_SHAPE)
             tracked += b.process.toHandle().descendants().toList()
             assertTrue(refused.isError, "B should fail: $refused")
             assertEquals(worktreeInUse(a.process.pid(), repo), refused.text)
@@ -91,16 +90,21 @@ class TwoServersContractTest {
         Thread.sleep(3_000)
         assertEquals(logAfterA, log.readText(), "B refreshed the Index Seed; B's stderr:\n${b.stderr()}")
         assertEquals(seedAfterA, snapshot(seed), "B changed the Index Seed")
+        // A's kotlin-lsp wrote the index until it exited, so B's shutdown is checked by what only B could leave.
+        assertEquals(a.process.pid().toString(), index.resolveSibling("lock").readText().trim(), "B wrote the lock")
+        val nextToIndex = Files.list(index.parent).use { it.map { path -> path.fileName.toString() }.toList() }.sorted()
+        assertEquals(listOf("kotlin-server", "lock", "worktree"), nextToIndex, "B left something next to the index")
 
-        val gone = awaitNotNull(30.seconds) { true.takeIf { leftBehind().isEmpty() } }
-        assertNotNull(gone, "processes left behind: ${leftBehind().map { it.info().commandLine().orElse(it.toString()) }}")
+        val deadline = TimeSource.Monotonic.markNow() + 30.seconds
+        while (leftBehind().isNotEmpty() && deadline.hasNotPassedNow()) Thread.sleep(200)
+        assertEquals(emptyList(), leftBehind().map { it.info().commandLine().orElse(it.toString()) }, "processes left behind")
     }
 
     private fun start(name: String, repo: Path): KronstadtProcess =
         KronstadtProcess(repo, home, tmp.resolve("$name.stderr")).also { tracked += it.process.toHandle() }
 
     private fun assertFindsShape(kronstadt: KronstadtProcess) {
-        val found = kronstadt.callTool("kt_find_symbol", SHAPE)
+        val found = kronstadt.callTool("kt_find_symbol", FIND_SHAPE)
         assertFalse(found.isError, "kt_find_symbol failed: $found")
         assertContains(found.text, "Shape")
     }
@@ -133,6 +137,6 @@ class TwoServersContractTest {
     }
 
     private companion object {
-        const val SHAPE = """{"query":"Shape"}"""
+        const val FIND_SHAPE = """{"query":"Shape"}"""
     }
 }
