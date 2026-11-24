@@ -2,6 +2,7 @@ package kronstadt.core.application
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
+import kronstadt.core.domain.AnalysedFile
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SymbolTree
@@ -29,8 +30,8 @@ internal data class ChangedFile(val file: Path, val base: TextDocument, val curr
 internal class CollateralCheck(
     private val files: FileStore,
     private val session: AnalysisSession,
-    /** A file's Symbol tree for a text, possibly known already. */
-    private val tree: suspend (Path, TextDocument) -> SymbolTree,
+    /** A file analysed with a text, possibly known already. */
+    private val analysed: suspend (Path, TextDocument) -> AnalysedFile,
     private val timeout: Duration,
 ) {
     /** The Collateral Errors of the Edit that made [changed]. */
@@ -45,7 +46,7 @@ internal class CollateralCheck(
 
     private suspend fun check(changed: List<ChangedFile>): CollateralErrors {
         val headersChanged = changed.filterNot { it.created }.flatMap { file ->
-            headersChanged(tree(file.file, file.base), tree(file.file, file.current)).map { file to it }
+            headersChanged(analysed(file.file, file.base), analysed(file.file, file.current)).map { file to it }
         }
         if (headersChanged.isEmpty()) return CollateralErrors()
         // Every changed file back at its base text: Usages and base diagnostics are of the code as it was before the Edit.
@@ -66,8 +67,8 @@ internal class CollateralCheck(
             val (file, document) = checked[i]
             val introduced = Validation.introduced(before[i], after[i], Severity.ERROR, editedLines = emptyList())
             if (introduced.isEmpty()) return@flatMap emptyList()
-            val tree = tree(file, document)
-            introduced.map { problem(files.display(file), tree, document, it) }
+            val analysed = analysed(file, document)
+            introduced.map { problem(analysed, it) }
         }
         return CollateralErrors(
             errors = errors.take(CollateralErrors.MAX_LISTED),
@@ -82,11 +83,11 @@ internal class CollateralCheck(
          * renamed), or what it resolves to differs in kind, receiver, parameters or the type the language server shows.
          * Changes it doesn't show, such as visibility or supertypes, go unseen.
          */
-        fun headersChanged(base: SymbolTree, current: SymbolTree): List<SymbolTree.Node> = base.nodes.filter { node ->
-            when (val resolution = current.resolve(base.canonicalPath(node))) {
-                is SymbolTree.Resolution.Found -> !sameHeader(node.symbol, resolution.node.symbol)
-                is SymbolTree.Resolution.NotFound -> true
-                is SymbolTree.Resolution.Ambiguous -> resolution.candidates.none { sameHeader(node.symbol, it.symbol) }
+        fun headersChanged(base: AnalysedFile, current: AnalysedFile): List<SymbolTree.Node> = base.nodes.filter { node ->
+            when (val resolution = current.resolve(base.path(node))) {
+                is AnalysedFile.Resolution.Found -> !sameHeader(node.symbol, resolution.node.symbol)
+                is AnalysedFile.Resolution.NotFound -> true
+                is AnalysedFile.Resolution.Ambiguous -> resolution.matches.none { sameHeader(node.symbol, it.symbol) }
             }
         }
 

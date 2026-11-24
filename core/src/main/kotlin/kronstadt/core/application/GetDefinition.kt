@@ -1,5 +1,6 @@
 package kronstadt.core.application
 
+import kronstadt.core.domain.AnalysedFile
 import kronstadt.core.domain.Definition
 import kronstadt.core.domain.DeclarationHead
 import kronstadt.core.domain.Position
@@ -36,13 +37,14 @@ public class GetDefinition(
     /** Resolves the Symbol, then [name] in it, analysing every file in the tool call's one [session]. */
     private suspend fun definitions(session: AnalysisSession, parsed: ParsedLookup, name: String, at: String?): GetDefinitionResult {
         val found = resolver.resolve(session, parsed).getOrElse { return GetDefinitionResult.LookupFailed(it) }
-        val document = found.document
-        val (first, last) = SymbolSpan.lines(document, found.node.symbol)
-        val span = document.offsetOf(Position(first, 0)) until document.offsetOf(Position(last, Int.MAX_VALUE))
+        val analysed = found.analysed
+        val document = analysed.document
+        val lines = analysed.listedLines(found.node)
+        val span = document.offsetOf(Position(lines.first, 0)) until document.offsetOf(Position(lines.last, Int.MAX_VALUE))
         fun notExactlyOnce(text: String, matches: List<IntRange>, indentation: IndentationHint? = null) = GetDefinitionResult.NotExactlyOnce(
             text,
             found.canonical,
-            files.display(found.file),
+            analysed.shown,
             occurrenceLines(document, matches.map { it.first }),
             indentation,
         )
@@ -56,10 +58,10 @@ public class GetDefinition(
         val names = identifier(name).findAll(document.text, scope.first).map { it.range }.takeWhile { it.last <= scope.last }.toList()
         val nameRange = names.singleOrNull() ?: return notExactlyOnce(name, names)
         val position = document.positionOf(nameRange.first)
-        val definitions = session.definition(found.file, document, position)
+        val definitions = session.definition(analysed.file, document, position)
         if (definitions.isEmpty()) {
             val range = TextRange(position, document.positionOf(nameRange.last + 1))
-            val diagnostic = session.diagnostics(found.file, document).firstOrNull { it.range.start < range.end && range.start < it.range.end }
+            val diagnostic = session.diagnostics(analysed.file, document).firstOrNull { it.range.start < range.end && range.start < it.range.end }
             return GetDefinitionResult.Unresolved(
                 name,
                 found.canonical,
@@ -97,13 +99,13 @@ public class GetDefinition(
             return "// ${document?.slice(location.range) ?: name} in $shown, L${line + 1} (not Kotlin: read-only, not addressable)" +
                 (document?.let { "\n" + it.line(line).trim() } ?: "")
         }
-        val analysed = AnalysedFile.of(files, session, file) ?: return "// $name in $shown, L${line + 1} (file not found)"
-        val node = analysed.tree.nodes.lastOrNull { it.symbol.selectionRange.start == location.range.start }
-            ?: return local(analysed, location.range, shown)
-        val canonical = analysed.tree.canonicalPath(node).toString()
-        val (first, last) = SymbolSpan.lines(analysed.document, node.symbol)
-        return "// $canonical in $shown, L${first + 1}-${last + 1}\n" +
-            DeclarationHead.of(analysed.document, node.symbol, first) + "\n" +
+        val analysed = session.analyse(files, file) ?: return "// $name in $shown, L${line + 1} (file not found)"
+        val node = analysed.nodes.lastOrNull { it.symbol.selectionRange.start == location.range.start }
+            ?: return local(analysed, location.range)
+        val listing = analysed.listing(node)
+        val canonical = listing.path.toString()
+        return "// $canonical in $shown, L${listing.firstLine}-${listing.lastLine}\n" +
+            DeclarationHead.of(analysed.document, node.symbol, analysed.listedLines(node).first) + "\n" +
             "// Body omitted. Full source: kt_read_symbol(symbol=\"$canonical\", file=\"$shown\")"
     }
 
@@ -127,12 +129,12 @@ public class GetDefinition(
     }
 
     /** A declaration no Symbol Path addresses (a local variable, parameter or local function): where it is. */
-    private fun local(analysed: AnalysedFile, range: TextRange, shown: String): String {
+    private fun local(analysed: AnalysedFile, range: TextRange): String {
         val name = analysed.document.slice(range)
-        val enclosing = analysed.tree.nodes.lastOrNull { range.start in it.symbol.range }
-            ?.let { analysed.tree.canonicalPath(it).toString() } ?: FILE_LEVEL
+        val enclosing = analysed.nodes.lastOrNull { range.start in it.symbol.range }
+            ?.let { analysed.path(it).toString() } ?: FILE_LEVEL
         val line = range.start.line
-        return "// $name is local to $enclosing in $shown, not addressable; declared at L${line + 1}\n" +
+        return "// $name is local to $enclosing in ${analysed.shown}, not addressable; declared at L${line + 1}\n" +
             analysed.document.line(line).trim()
     }
 

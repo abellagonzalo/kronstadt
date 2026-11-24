@@ -50,14 +50,14 @@ public class RenameSymbol(
     private suspend fun rename(session: AnalysisSession, parsed: ParsedLookup, newName: String): RenameResult {
         val shadow = ShadowWorkspace(files, session, resolver, validationTimeout)
         val declaration = resolver.resolve(session, parsed, shadow).getOrElse { return RenameResult.LookupFailed(it) }
-        val target = declaration.file
+        val target = declaration.analysed.file
         val node = declaration.node
         val canonical = declaration.canonical
         if (node.symbol.kind == SymbolKind.CONSTRUCTOR) return RenameResult.CannotRename(canonical, CONSTRUCTOR)
         val name = node.symbol.selectionRange
-        val preparation = session.prepareRename(target, declaration.document, name.start)
+        val preparation = session.prepareRename(target, declaration.analysed.document, name.start)
         if (preparation is RenamePreparation.Refused) return RenameResult.CannotRename(canonical, preparation.reason)
-        val changes = when (val renamed = session.rename(target, declaration.document, name.start, newName)) {
+        val changes = when (val renamed = session.rename(target, declaration.analysed.document, name.start, newName)) {
             is Rename.Changes -> renamed.changes
             is Rename.Refused -> return RenameResult.CannotRename(canonical, renamed.reason)
         }
@@ -194,10 +194,10 @@ public class RenameSymbol(
     private suspend fun newPath(shadow: ShadowWorkspace, file: Path, node: SymbolTree.Node, newName: String): String? {
         val analysed = shadow.analysed(file) ?: return null
         val names = node.chain.dropLast(1).map { it.name } + newName
-        val renamed = analysed.tree.nodes.singleOrNull {
+        val renamed = analysed.nodes.singleOrNull {
             it.chain.map { symbol -> symbol.name } == names && it.symbol.kind == node.symbol.kind && it.symbol.receiver == node.symbol.receiver && it.symbol.type == node.symbol.type
         } ?: return null
-        return analysed.tree.canonicalPath(renamed).toString()
+        return analysed.path(renamed).toString()
     }
 
     /** What a rename changed in one file: its Usages renamed, imports of the Symbol apart. */

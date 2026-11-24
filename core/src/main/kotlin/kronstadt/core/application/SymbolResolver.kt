@@ -1,20 +1,18 @@
 package kronstadt.core.application
 
+import kronstadt.core.domain.AnalysedFile
 import kronstadt.core.domain.Suggestions
+import kronstadt.core.domain.SymbolCandidate
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.SymbolPath
 import kronstadt.core.domain.SymbolSearch
 import kronstadt.core.domain.SymbolSpan
 import kronstadt.core.domain.SymbolTree
-import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.packageName
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.core.port.FileStore
 import java.nio.file.Path
-
-/** A Symbol a path could mean: its canonical Symbol Path within [file], and [file] as shown to the agent. */
-public data class SymbolCandidate(val path: String, val file: String)
 
 /**
  * A Symbol Path as the agent passed it, parsed: [symbol] as written, its [path], and the [file] to look in, if any.
@@ -33,9 +31,9 @@ internal class SymbolResolver(
     private val files: FileStore,
     private val intelligence: CodeIntelligence,
 ) {
-    /** A resolved Symbol: its [node] in [file]'s [tree], analysed from [document]. */
-    data class Found(val file: Path, val document: TextDocument, val tree: SymbolTree, val node: SymbolTree.Node) {
-        val canonical: String get() = tree.canonicalPath(node).toString()
+    /** A resolved Symbol: its [node] in [analysed], whose canonical path is [path]. */
+    data class Found(val analysed: AnalysedFile, val node: SymbolTree.Node, val path: SymbolPath) {
+        val canonical: String get() = path.toString()
     }
 
     /**
@@ -49,7 +47,7 @@ internal class SymbolResolver(
         } else {
             val found = resolveProjectWide(session, parsed).getOrElse { return Outcome.Failed(it) }
             if (source == null) return Outcome.Ok(found)
-            found.file
+            found.analysed.file
         }
         return resolveIn(source ?: DocumentSource.disk(files, session), file, parsed)
             ?: Outcome.Failed(LookupFailure.FileNotFound(parsed.file ?: files.display(file)))
@@ -58,22 +56,21 @@ internal class SymbolResolver(
     /** Resolves [parsed] in [file] as [source] has it; null if [source] has no such file. */
     suspend fun resolveIn(source: DocumentSource, file: Path, parsed: ParsedLookup): Outcome<Found>? {
         val analysed = source.analysed(file) ?: return null
-        val shown = files.display(file)
-        return when (val resolution = analysed.tree.resolve(parsed.path)) {
-            is SymbolTree.Resolution.Found -> Outcome.Ok(found(analysed, resolution.node))
-            is SymbolTree.Resolution.Ambiguous ->
-                Outcome.Failed(LookupFailure.Ambiguous(parsed.symbol, shown, resolution.candidates.map { candidate(analysed, it) }))
-            is SymbolTree.Resolution.NotFound ->
-                Outcome.Failed(LookupFailure.NotFound(parsed.symbol, shown, resolution.suggestions.map { candidate(analysed, it) }))
+        return when (val resolution = analysed.resolve(parsed.path)) {
+            is AnalysedFile.Resolution.Found -> Outcome.Ok(Found(analysed, resolution.node, resolution.path))
+            is AnalysedFile.Resolution.Ambiguous ->
+                Outcome.Failed(LookupFailure.Ambiguous(parsed.symbol, analysed.shown, resolution.candidates))
+            is AnalysedFile.Resolution.NotFound ->
+                Outcome.Failed(LookupFailure.NotFound(parsed.symbol, analysed.shown, resolution.suggestions))
         }
     }
 
     /** The Symbol Span of [found], whole lines a replace or delete acts on, unless its range can't be trusted. */
-    fun span(found: Found): Outcome<SymbolSpan> = when (val computation = SymbolSpan.of(found.document, found.node.symbol)) {
+    fun span(found: Found): Outcome<SymbolSpan> = when (val computation = found.analysed.span(found.node)) {
         is SymbolSpan.Computation.Computed -> Outcome.Ok(computation.span)
-        SymbolSpan.Computation.OutOfSync -> Outcome.Failed(LookupFailure.OutOfSync(found.canonical, files.display(found.file)))
+        SymbolSpan.Computation.OutOfSync -> Outcome.Failed(LookupFailure.OutOfSync(found.canonical, found.analysed.shown))
         is SymbolSpan.Computation.SharedLine ->
-            Outcome.Failed(LookupFailure.SharedLine(found.canonical, files.display(found.file), computation.line + 1))
+            Outcome.Failed(LookupFailure.SharedLine(found.canonical, found.analysed.shown, computation.line + 1))
     }
 
     /**
@@ -92,19 +89,19 @@ internal class SymbolResolver(
         }
         val hits = search.symbols.filter { AnalysedFile.isKotlin(it.file) }
         val cache = mutableMapOf<Path, AnalysedFile?>()
-        val analysed: suspend (Path) -> AnalysedFile? = { file -> cache.getOrPut(file) { AnalysedFile.of(files, session, file) } }
+        val analysed: suspend (Path) -> AnalysedFile? = { file -> cache.getOrPut(file) { session.analyse(files, file) } }
 
         val matches = hits.filter { it.name == query }.map { it.file }.distinct().sorted().flatMap { file ->
             val candidate = analysed(file)?.takeIf { inPackage(it, symbol) } ?: return@flatMap emptyList()
-            when (val resolution = candidate.tree.resolve(symbol)) {
-                is SymbolTree.Resolution.Found -> listOf(candidate to resolution.node)
-                is SymbolTree.Resolution.Ambiguous -> resolution.candidates.map { candidate to it }
-                is SymbolTree.Resolution.NotFound -> emptyList()
+            when (val resolution = candidate.resolve(symbol)) {
+                is AnalysedFile.Resolution.Found -> listOf(Found(candidate, resolution.node, resolution.path))
+                is AnalysedFile.Resolution.Ambiguous -> resolution.matches.map { Found(candidate, it, candidate.path(it)) }
+                is AnalysedFile.Resolution.NotFound -> emptyList()
             }
         }
-        if (matches.size == 1) return matches.single().let { (file, node) -> Outcome.Ok(found(file, node)) }
+        if (matches.size == 1) return Outcome.Ok(matches.single())
         if (matches.isNotEmpty()) {
-            return Outcome.Failed(LookupFailure.Ambiguous(parsed.symbol, null, matches.map { (file, node) -> candidate(file, node) }))
+            return Outcome.Failed(LookupFailure.Ambiguous(parsed.symbol, null, matches.map { it.analysed.candidate(it.node) }))
         }
         return Outcome.Failed(LookupFailure.NotFound(parsed.symbol, null, suggestionsProjectWide(symbol, query, hits, analysed)))
     }
@@ -129,20 +126,15 @@ internal class SymbolResolver(
         val unscoped = if (symbol.packageName == null) symbol else symbol.copy(anchored = false, packageName = null)
         val suggestions = suggestionFiles.flatMap { file ->
             val candidate = analysed(file) ?: return@flatMap emptyList()
-            val nodes = when (val resolution = candidate.tree.resolve(unscoped)) {
-                is SymbolTree.Resolution.NotFound -> resolution.suggestions
-                is SymbolTree.Resolution.Found -> listOf(resolution.node)
-                is SymbolTree.Resolution.Ambiguous -> resolution.candidates
+            val nodes = when (val resolution = candidate.resolve(unscoped)) {
+                is AnalysedFile.Resolution.NotFound -> resolution.close
+                is AnalysedFile.Resolution.Found -> listOf(resolution.node)
+                is AnalysedFile.Resolution.Ambiguous -> resolution.matches
             }
-            nodes.map { candidate(candidate, it) to Suggestions.distance(wanted, it.symbol.name.lowercase()) }
+            nodes.map { candidate.candidate(it) to Suggestions.distance(wanted, it.symbol.name.lowercase()) }
         }.sortedBy { (_, distance) -> distance }.map { (suggestion, _) -> suggestion }
         return suggestions.take(Suggestions.MAX)
     }
-
-    private fun found(analysed: AnalysedFile, node: SymbolTree.Node) = Found(analysed.file, analysed.document, analysed.tree, node)
-
-    private fun candidate(analysed: AnalysedFile, node: SymbolTree.Node) =
-        SymbolCandidate(analysed.tree.canonicalPath(node).toString(), files.display(analysed.file))
 
     private fun inPackage(analysed: AnalysedFile, symbol: SymbolPath) =
         symbol.packageName == null || analysed.document.packageName == symbol.packageName

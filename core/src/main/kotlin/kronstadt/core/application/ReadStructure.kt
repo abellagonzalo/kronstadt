@@ -16,10 +16,9 @@ public class ReadStructure(
     public suspend operator fun invoke(path: String, xml: Boolean = true): ReadStructureResult {
         val file = files.classify(path).getOrElse { return ReadStructureResult.LookupFailed(it) }
         val document = files.read(file) ?: return ReadStructureResult.LookupFailed(LookupFailure.FileNotFound(path))
-        val symbols = intelligence.session { it.documentSymbols(file, document) }
-        val shown = files.display(file)
-        val text = StructureRenderer.render(shown, document, symbols, xml)
-        return if (text.isEmpty()) ReadStructureResult.NoDeclarations(shown) else ReadStructureResult.Structure(text)
+        val analysed = intelligence.session { it.analyse(files, file, document) }
+        val text = StructureRenderer.render(analysed, xml)
+        return if (text.isEmpty()) ReadStructureResult.NoDeclarations(analysed.shown) else ReadStructureResult.Structure(text)
     }
 }
 

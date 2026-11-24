@@ -2,10 +2,10 @@ package kronstadt.core.application
 
 import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.CodeSymbol
-import kronstadt.core.domain.Position
+import kronstadt.core.domain.SymbolCandidate
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
-import kronstadt.core.domain.TextRange
+import kronstadt.core.domain.range
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -14,9 +14,6 @@ import kotlin.test.assertIs
 /** The lookup module every tool goes through: parsing a Symbol Path, checking its file, and resolving it. */
 class SymbolResolverTest {
     private val root = Path.of("/project")
-
-    private fun range(startLine: Int, startChar: Int, endLine: Int, endChar: Int) =
-        TextRange(Position(startLine, startChar), Position(endLine, endChar))
 
     private fun function(name: String, line: Int) =
         CodeSymbol(name, SymbolKind.FUNCTION, range(line, 0, line, 20), range(line, 4, line, 4 + name.length), parameterTypes = "", type = "(): Int")
@@ -82,7 +79,7 @@ class SymbolResolverTest {
             Outcome.Failed(LookupFailure.Ambiguous("greet", null, listOf(SymbolCandidate("greet", aKt), SymbolCandidate("greet", bKt)))),
             resolve(null, "greet"),
         )
-        assertEquals(root.resolve(bKt), assertIs<Outcome.Ok<SymbolResolver.Found>>(resolve(null, "com.b/greet")).value.file)
+        assertEquals(root.resolve(bKt), assertIs<Outcome.Ok<SymbolResolver.Found>>(resolve(null, "com.b/greet")).value.analysed.file)
     }
 
     @Test

@@ -12,7 +12,7 @@ import kotlin.time.Duration
  * index. Without one it resolves project-wide, which waits up to [readinessTimeout] for the index.
  */
 public class ReadSymbol(
-    private val files: FileStore,
+    files: FileStore,
     private val intelligence: CodeIntelligence,
     private val readinessTimeout: Duration = Readiness.DEFAULT_TIMEOUT,
 ) {
@@ -28,7 +28,7 @@ public class ReadSymbol(
         return intelligence.session { session ->
             val found = resolver.resolve(session, parsed).getOrElse { return@session ReadSymbolResult.LookupFailed(it) }
             val span = resolver.span(found).getOrElse { return@session ReadSymbolResult.LookupFailed(it) }
-            ReadSymbolResult.Found("// ${found.canonical} in ${files.display(found.file)}, L${span.firstLine + 1}-${span.lastLine + 1}\n${span.text}")
+            ReadSymbolResult.Found("// ${found.canonical} in ${found.analysed.shown}, L${span.firstLine + 1}-${span.lastLine + 1}\n${span.text}")
         }
     }
 }

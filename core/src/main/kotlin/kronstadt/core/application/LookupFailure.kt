@@ -1,5 +1,7 @@
 package kronstadt.core.application
 
+import kronstadt.core.domain.SymbolCandidate
+
 /**
  * Why a Symbol Path, or the file it is looked up in, names no one Symbol: the one failure vocabulary of every tool that
  * takes a Symbol Path or a file. Paths and files are as the agent passed or should pass them.

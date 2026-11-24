@@ -1,9 +1,11 @@
 package kronstadt.core.application
 
+import kronstadt.core.domain.AnalysedFile
 import kronstadt.core.domain.FileLayout
 import kronstadt.core.domain.ImportDirective
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
+import kronstadt.core.domain.SymbolCandidate
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.addingImports
 import kronstadt.core.domain.Validation
@@ -207,7 +209,7 @@ public class Edit(
     private suspend fun locate(session: AnalysisSession, shadow: ShadowWorkspace, parsed: ParsedLookup): Located {
         val lookup = resolver.resolve(session, parsed)
         val onDisk: List<Pair<SymbolCandidate, Path?>> = when (lookup) {
-            is Outcome.Ok -> listOf(SymbolCandidate(lookup.value.canonical, files.display(lookup.value.file)) to lookup.value.file)
+            is Outcome.Ok -> listOf(lookup.value.let { it.analysed.candidate(it.node) to it.analysed.file })
             is Outcome.Failed -> when (val failure = lookup.failure) {
                 is LookupFailure.Ambiguous -> failure.candidates.map { it to files.resolve(it.file) }
                 is LookupFailure.NotFound -> emptyList()
@@ -221,7 +223,7 @@ public class Edit(
             candidate != null -> onDisk.firstOrNull { (shown, _) -> shown.file == candidate.file }?.second
                 ?.let { Located.In(it) }
                 ?: Located.Failed(OperationFailure.NeedsFile(parsed.symbol, candidates))
-            lookup is Outcome.Ok -> Located.In(lookup.value.file)
+            lookup is Outcome.Ok -> Located.In(lookup.value.analysed.file)
             lookup is Outcome.Failed && lookup.failure is LookupFailure.NotFound -> Located.Failed(OperationFailure.LookupFailed(lookup.failure))
             else -> Located.Failed(
                 removedEarlier(shadow, parsed, onDisk)
@@ -301,7 +303,7 @@ public class Edit(
         val analysed = shadow.analysed(file) ?: return Applied.Failed(OperationFailure.LookupFailed(LookupFailure.FileNotFound(path)))
         val document = analysed.document
         val splice = Splice.inFile(document, operation) { occurrence ->
-            analysed.tree.innermostSpanHolding(document, occurrence)?.let { it.firstLine..it.lastLine } ?: occurrence
+            analysed.innermostSpanHolding(occurrence)?.let { it.firstLine..it.lastLine } ?: occurrence
         }
         return applySplice(shadow, file, splice, operation, EditInScope(null, files.display(file)))
     }

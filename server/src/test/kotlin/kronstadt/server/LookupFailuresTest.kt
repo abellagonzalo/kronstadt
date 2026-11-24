@@ -1,7 +1,7 @@
 package kronstadt.server
 
 import kronstadt.core.application.LookupFailure
-import kronstadt.core.application.SymbolCandidate
+import kronstadt.core.domain.SymbolCandidate
 import kotlin.test.Test
 import kotlin.test.assertEquals
 

@@ -7,28 +7,25 @@ package kronstadt.core.domain
  * server shows it, without an extension receiver (so overloads look different), and its 1-based line span, as `kt_read_symbol` reports it.
  */
 public object StructureRenderer {
-    public fun render(path: String, document: TextDocument, symbols: List<CodeSymbol>, xml: Boolean): String {
-        val tree = SymbolTree(symbols)
-        val body = tree.nodes.joinToString("\n") { entry(document, tree, it) }
+    public fun render(file: AnalysedFile, xml: Boolean): String {
+        val body = file.listings.joinToString("\n", transform = ::entry)
         if (body.isEmpty()) return ""
         // The tags are delimiters for the model, not a document to be parsed: the body stays unescaped so
         // signatures like `List<User>` read naturally.
-        return if (xml) "<file_structure path=\"${escapeAttribute(path)}\">\n$body\n</file_structure>" else body
+        return if (xml) "<file_structure path=\"${escapeAttribute(file.shown)}\">\n$body\n</file_structure>" else body
     }
 
-    private fun entry(document: TextDocument, tree: SymbolTree, node: SymbolTree.Node): String = buildString {
-        val symbol = node.symbol
-        append("  ".repeat(node.ancestors.size))
+    private fun entry(listing: SymbolListing): String = buildString {
+        append("  ".repeat(listing.depth))
         // A constructor's path already says `constructor`.
-        if (symbol.kind != SymbolKind.CONSTRUCTOR) append(symbol.kind.keyword).append(' ')
-        val path = tree.canonicalPath(node)
+        if (listing.kind != SymbolKind.CONSTRUCTOR) append(listing.kind.keyword).append(' ')
+        val path = listing.path
         append(path)
         // A constructor's signature is only its parameter list, which a path that needs it already shows.
-        symbol.type
+        listing.signature
             ?.takeUnless { it == path.segments.last().signature?.let { params -> "($params)" } }
             ?.let { append("  ").append(it) }
-        val (first, last) = SymbolSpan.lines(document, symbol)
-        append("  // L").append(first + 1).append('-').append(last + 1)
+        append("  // L").append(listing.firstLine).append('-').append(listing.lastLine)
     }
 
     private fun escapeAttribute(s: String): String =

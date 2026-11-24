@@ -1,7 +1,7 @@
 package kronstadt.server
 
 import kronstadt.core.application.LookupFailure
-import kronstadt.core.application.SymbolCandidate
+import kronstadt.core.domain.SymbolCandidate
 
 /**
  * What every tool tells the agent when a Symbol Path or file names no one Symbol: one wording for all of them. [tool]
