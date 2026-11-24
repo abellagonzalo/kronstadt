@@ -12,7 +12,6 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
-import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
@@ -70,10 +69,6 @@ internal class KronstadtTools(
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
                     stringProperty("file", "Path to a .kt/.kts file, absolute or relative to the project root.")
-                    putJsonObject("formatOutputAsXml") {
-                        put("type", "boolean")
-                        put("description", "Wrap the result in <file_structure> tags. Default: true.")
-                    }
                 },
                 required = listOf("file"),
             ),
@@ -542,8 +537,7 @@ internal class KronstadtTools(
 
     private suspend fun readStructure(args: JsonObject): CallToolResult {
         val path = args.string("file") ?: return error("Missing required argument: file")
-        val xml = args.boolean("formatOutputAsXml") ?: true
-        return when (val result = readStructure(path, xml)) {
+        return when (val result = readStructure(path)) {
             is ReadStructureResult.Structure -> text(result.text)
             is ReadStructureResult.NoDeclarations -> text("No declarations found in ${result.path}.")
             is ReadStructureResult.LookupFailed -> error(describe(result.failure, "kt_read_structure"))
@@ -689,8 +683,6 @@ internal class KronstadtTools(
             put("description", description)
         }
     }
-
-    private fun JsonObject.boolean(key: String): Boolean? = (this[key] as? JsonPrimitive)?.booleanOrNull
 
     private fun JsonObject.int(key: String): Int? = (this[key] as? JsonPrimitive)?.intOrNull
 }

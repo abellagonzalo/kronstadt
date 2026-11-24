@@ -295,9 +295,10 @@ class KotlinLspContractTest {
         assertEquals(SymbolKind.PROPERTY, kind("topLevelVal"))
         assertEquals(SymbolKind.VARIABLE, kind("topLevelVar"))
 
-        val structure = assertIs<ReadStructureResult.Structure>(ReadStructure(files, lsp)(path, xml = false)).text
+        val structure = assertIs<ReadStructureResult.Structure>(ReadStructure(files, lsp)(path)).text
         assertEquals(
             """
+            // $path
             class Mutability  // L3-15
               constructor  (Int, Int, Int)  // L4-4
               val ctorVal  : Int  // L4-4
@@ -341,9 +342,10 @@ class KotlinLspContractTest {
         listOf("Nested", "Single", "Companion").forEach { assertEquals(listOf(initializer), constructors(reported("Initialized", it)), it) }
         assertEquals(listOf("Checked" to "(String?, String?)", initializer), constructors(reported("Checked")))
 
-        val structure = assertIs<ReadStructureResult.Structure>(ReadStructure(files, lsp)(path, xml = false)).text
+        val structure = assertIs<ReadStructureResult.Structure>(ReadStructure(files, lsp)(path)).text
         assertEquals(
             """
+        // $path
         class Initialized  // L3-35
           constructor(Int)  // L4-4
           val seed  : Int  // L4-4

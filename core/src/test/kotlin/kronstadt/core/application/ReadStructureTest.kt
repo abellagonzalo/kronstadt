@@ -25,8 +25,8 @@ class ReadStructureTest {
 
     @Test
     fun `renders the structure and analyses the content it read`() = runTest {
-        val result = assertIs<ReadStructureResult.Structure>(readStructure("src/A.kt", xml = false))
-        assertEquals("class A  // L1-2", result.text)
+        val result = assertIs<ReadStructureResult.Structure>(readStructure("src/A.kt"))
+        assertEquals("// src/A.kt\nclass A  // L1-2", result.text)
         assertEquals("class A {\n}\n", intelligence.analysed.single().second.text)
     }
 

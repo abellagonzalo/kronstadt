@@ -13,11 +13,11 @@ public class ReadStructure(
     private val files: FileStore,
     private val intelligence: CodeIntelligence,
 ) {
-    public suspend operator fun invoke(path: String, xml: Boolean = true): ReadStructureResult {
+    public suspend operator fun invoke(path: String): ReadStructureResult {
         val file = files.classify(path).getOrElse { return ReadStructureResult.LookupFailed(it) }
         val document = files.read(file) ?: return ReadStructureResult.LookupFailed(LookupFailure.FileNotFound(path))
         val analysed = intelligence.session { it.analyse(files, file, document) }
-        val text = StructureRenderer.render(analysed, xml)
+        val text = StructureRenderer.render(analysed)
         return if (text.isEmpty()) ReadStructureResult.NoDeclarations(analysed.shown) else ReadStructureResult.Structure(text)
     }
 }

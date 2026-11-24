@@ -75,19 +75,27 @@ class KtReadStructureToolTest {
     }
 
     @Test
-    fun `the schema names the target file 'file', and requires it`() {
+    fun `the schema names the target file 'file', requires it, and takes nothing else`() {
         val schema = checkNotNull(server.tools["kt_read_structure"]).tool.inputSchema
 
         assertEquals(listOf("file"), schema.required)
-        assertEquals(setOf("file", "formatOutputAsXml"), schema.properties?.keys)
+        assertEquals(setOf("file"), schema.properties?.keys)
     }
 
     @Test
-    fun `a call with file returns the structure`() = runTest {
-        val (failed, text) = call("""{"file": "A.kt", "formatOutputAsXml": false}""")
+    fun `a call with file returns the structure under a header line naming the file`() = runTest {
+        val (failed, text) = call("""{"file": "A.kt"}""")
 
         assertFalse(failed, text)
-        assertEquals("fun greet  (): Int  // L3-3", text)
+        assertEquals("// A.kt\nfun greet  (): Int  // L3-3", text)
+    }
+
+    @Test
+    fun `the retired XML flag is ignored, whatever its value`() = runTest {
+        val plain = call("""{"file": "A.kt"}""")
+
+        assertEquals(plain, call("""{"file": "A.kt", "formatOutputAsXml": true}"""))
+        assertEquals(plain, call("""{"file": "A.kt", "formatOutputAsXml": false}"""))
     }
 
     @Test
