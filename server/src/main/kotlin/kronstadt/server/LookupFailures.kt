@@ -34,9 +34,9 @@ private fun message(failure: LookupFailure, tool: String): String = when (failur
             if (tool == FIND_USAGES) "pass the file that declares it as declaredIn" else "pass its file"
     is LookupFailure.OutOfSync ->
         "Index out of sync for ${failure.symbol} in ${failure.file}: its name is not where kotlin-lsp says; retry"
+    // kt_edit doesn't advise replacing the enclosing Symbol: that costs more, and it may share a line too (#99).
     is LookupFailure.SharedLine ->
         "${failure.symbol} shares line ${failure.line} of ${failure.file} with other code, so it has no whole-line span; " +
-            // Replacing the enclosing Symbol costs more, and it may share a line too (#99).
             if (tool == EDIT) {
                 "use a whole-file edit_in instead: file '${failure.file}' with no symbol, and an 'old' of exact text from that file"
             } else {
