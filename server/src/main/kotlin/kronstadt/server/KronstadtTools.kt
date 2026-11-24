@@ -659,12 +659,18 @@ internal class KronstadtTools(
         }
     }
 
-    /** Infrastructure failures (language server down, timeouts) become tool errors instead of protocol errors. */
+    /**
+     * Infrastructure failures (language server down, timeouts) become tool errors instead of protocol errors. An
+     * [AgentFacingFailure] shows its message alone; any other exception also names its class, since its message may
+     * be empty or unclear on its own.
+     */
     private suspend fun handle(request: CallToolRequest, block: suspend (JsonObject) -> CallToolResult): CallToolResult =
         try {
             block(request.arguments ?: JsonObject(emptyMap()))
         } catch (e: CancellationException) {
             throw e
+        } catch (e: AgentFacingFailure) {
+            error(e.message)
         } catch (e: Exception) {
             error("${e::class.simpleName}: ${e.message}")
         }

@@ -17,7 +17,7 @@ internal inline fun <I, S> startUp(
 ): S {
     when (val claimed = claim()) {
         is IndexClaim.Held -> {}
-        is IndexClaim.HeldByAnother -> throw IllegalStateException(worktreeInUse(claimed.pid, worktree))
+        is IndexClaim.HeldByAnother -> throw AgentFacingFailure(worktreeInUse(claimed.pid, worktree))
         // The lock must never stop a sole instance from starting.
         is IndexClaim.Unavailable -> System.err.println("kronstadt: starting without the index lock: ${claimed.reason}")
     }
