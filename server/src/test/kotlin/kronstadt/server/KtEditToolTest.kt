@@ -1,31 +1,11 @@
 package kronstadt.server
 
-import io.modelcontextprotocol.kotlin.sdk.server.ClientConnection
-import io.modelcontextprotocol.kotlin.sdk.server.Server
-import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
-import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest
-import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequestParams
-import io.modelcontextprotocol.kotlin.sdk.types.Implementation
-import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
-import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kronstadt.core.application.Edit
-import kronstadt.core.application.FindSymbol
-import kronstadt.core.application.FindUsages
-import kronstadt.core.application.GetDefinition
-import kronstadt.core.application.ReadStructure
-import kronstadt.core.application.ReadSymbol
-import kronstadt.core.application.RenameSymbol
 import kronstadt.core.domain.CodeSymbol
-import kronstadt.core.domain.Definition
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
-import kronstadt.core.domain.Rename
-import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolKind
@@ -34,9 +14,6 @@ import kronstadt.core.domain.SymbolSearch
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.TextRange
 import kronstadt.core.port.AnalysisSession
-import kronstadt.core.port.CodeIntelligence
-import kronstadt.workspace.LocalFileStore
-import java.lang.reflect.Proxy
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.listDirectoryEntries
@@ -78,34 +55,13 @@ class KtEditToolTest {
     /** Diagnostics of a file given every analysed file's text, by file name; set by a test before it calls the tool. */
     private var inContext: (String, Map<String, String>) -> List<Diagnostic>? = { _, _ -> null }
 
-    private val server = Server(
-        Implementation(name = "kronstadt-test", version = "0"),
-        ServerOptions(capabilities = ServerCapabilities(tools = ServerCapabilities.Tools(listChanged = false))),
-    ).also { server ->
-        val files = LocalFileStore(root)
-        val intelligence = EmptyIntelligence(organized, cutOff, symbols, diagnostics, symbolsByText, index, references) { file, open -> inContext(file, open) }
-        KronstadtTools(
-            ReadStructure(files, intelligence),
-            FindSymbol(files, intelligence),
-            ReadSymbol(files, intelligence),
-            FindUsages(files, intelligence),
-            GetDefinition(files, intelligence),
-            Edit(files, intelligence),
-            RenameSymbol(files, intelligence),
-        ).registerOn(server)
-    }
-
-    /** No tool handler here talks back to the client. */
-    private val connection = Proxy.newProxyInstance(javaClass.classLoader, arrayOf(ClientConnection::class.java)) { _, method, _ ->
-        error("unexpected call to ClientConnection.${method.name}")
-    } as ClientConnection
+    private val tools = ToolHarness(
+        root,
+        EmptyIntelligence(organized, cutOff, symbols, diagnostics, symbolsByText, index, references) { file, open -> inContext(file, open) },
+    )
 
     /** Calls kt_edit with [arguments], JSON as an agent writes it; whether it failed, and its text. */
-    private suspend fun ktEdit(arguments: String): Pair<Boolean, String> {
-        val request = CallToolRequest(CallToolRequestParams("kt_edit", Json.parseToJsonElement(arguments) as JsonObject))
-        val result = checkNotNull(server.tools["kt_edit"]).handler(connection, request)
-        return (result.isError == true) to result.content.joinToString("\n") { (it as TextContent).text }
-    }
+    private suspend fun ktEdit(arguments: String): Pair<Boolean, String> = tools.call("kt_edit", arguments)
 
     @Test
     fun `an Operation's imports are added to its file`() = runTest {
@@ -144,7 +100,7 @@ class KtEditToolTest {
 
     @Test
     fun `the kt_edit description and schema explain amend`() {
-        val tool = checkNotNull(server.tools["kt_edit"]).tool
+        val tool = tools.tool("kt_edit")
 
         assertTrue("'amend'" in checkNotNull(tool.description), tool.description)
         assertTrue("amend" in tool.inputSchema.properties.toString())
@@ -152,7 +108,7 @@ class KtEditToolTest {
 
     @Test
     fun `the kt_edit description tells how to write a test before the code it calls`() {
-        val tool = checkNotNull(server.tools["kt_edit"]).tool
+        val tool = tools.tool("kt_edit")
         val description = checkNotNull(tool.description)
 
         assertTrue("TODO()" in description, description)
@@ -161,7 +117,7 @@ class KtEditToolTest {
 
     @Test
     fun `the kt_edit description says Collateral Errors are reported and never block`() {
-        val description = checkNotNull(checkNotNull(server.tools["kt_edit"]).tool.description)
+        val description = checkNotNull(tools.tool("kt_edit").description)
 
         assertTrue("Collateral Errors" in description, description)
         assertTrue("never block" in description, description)
@@ -401,7 +357,7 @@ class KtEditToolTest {
 
     @Test
     fun `the schema offers create, and a create writes the new file, its directories with it, and says it was created`() = runTest {
-        val schema = checkNotNull(server.tools["kt_edit"]).tool.inputSchema.properties.toString()
+        val schema = tools.tool("kt_edit").inputSchema.properties.toString()
         assertTrue("\"create\"" in schema, schema)
 
         val (failed, text) = ktEdit(
@@ -479,8 +435,8 @@ private class EmptyIntelligence(
     private val references: Map<String, List<SourceLocation>> = emptyMap(),
     /** Diagnostics of a file given every analysed file's text by file name, ahead of [diagnostics]; null leaves it to those. */
     private val inContext: (file: String, open: Map<String, String>) -> List<Diagnostic>? = { _, _ -> null },
-) : CodeIntelligence {
-    override suspend fun <T> session(block: suspend (AnalysisSession) -> T): T = block(object : AnalysisSession {
+) : UnstubbedCodeIntelligence() {
+    override suspend fun <T> session(block: suspend (AnalysisSession) -> T): T = block(object : UnstubbedAnalysisSession() {
         /** The text each file was last analysed with, by file name. */
         private val open = mutableMapOf<String, String>()
 
@@ -498,9 +454,6 @@ private class EmptyIntelligence(
             open[file.name] = document.text
             return references[file.name].orEmpty()
         }
-        override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> = emptyList()
-        override suspend fun prepareRename(file: Path, document: TextDocument, position: Position) = RenamePreparation.Refused("unsupported")
-        override suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String) = Rename.Refused("unsupported")
         override suspend fun organizeImports(file: Path, document: TextDocument): TextDocument? = organized[document.text]?.let(::TextDocument)
         override suspend fun writtenBack(file: Path, document: TextDocument) = Unit
     })
