@@ -4,6 +4,6 @@ import fixture.beta.Shape
 
 /** Test source using main declarations, for kt_find_usages. */
 fun checkShapes(): Boolean {
-    val triangle = Shape(3)
-    return Calculator("c").parse("2") == 2 && triangle.sides == 3 && Operation.PLUS.apply(1, 2) == 3
+    val circle = Shape(1.0)
+    return Calculator("c").parse("2") == 2 && circle.radius == 1.0 && Operation.PLUS.apply(1, 2) == 3
 }
