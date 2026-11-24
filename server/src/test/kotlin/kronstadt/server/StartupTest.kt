@@ -55,7 +55,7 @@ class StartupTest {
         val (failed, text) = callTool(startup, "kt_find_symbol", """{"query": "greet"}""")
         assertEquals(true, failed)
         assertEquals(
-            "IllegalStateException: Another Kronstadt (pid 4242) is already serving $worktree, and only one instance " +
+            "Another Kronstadt (pid 4242) is already serving $worktree, and only one instance " +
                 "per worktree can use its index. Close that session and then reconnect Kronstadt (`/mcp` in Claude " +
                 "Code), or start this session in a separate Git worktree.",
             text,
@@ -64,7 +64,7 @@ class StartupTest {
 
     @Test
     fun `the message still works when the other instance's pid can't be read`() {
-        val failure = assertIs<IllegalStateException>(runCatching { startUpRecording(IndexClaim.HeldByAnother(null)) }.exceptionOrNull())
+        val failure = assertIs<AgentFacingFailure>(runCatching { startUpRecording(IndexClaim.HeldByAnother(null)) }.exceptionOrNull())
 
         assertEquals(
             "Another Kronstadt is already serving $worktree, and only one instance per worktree can use its index. " +
@@ -72,6 +72,14 @@ class StartupTest {
                 "separate Git worktree.",
             failure.message,
         )
+    }
+
+    @Test
+    fun `an unexpected startup failure reaches the agent with its exception's class name`() = runTest {
+        val (failed, text) = callTool(Result.failure<Nothing>(IllegalStateException("no kotlin-lsp")), "kt_find_symbol", """{"query": "greet"}""")
+
+        assertEquals(true, failed)
+        assertEquals("IllegalStateException: no kotlin-lsp", text)
     }
 
     @Test
