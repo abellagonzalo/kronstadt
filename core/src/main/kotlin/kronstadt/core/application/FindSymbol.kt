@@ -1,9 +1,9 @@
 package kronstadt.core.application
 
+import kronstadt.core.domain.AnalysedFile
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
-import kronstadt.core.domain.SymbolSpan
 import kronstadt.core.domain.SymbolTree
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.core.port.FileStore
@@ -42,10 +42,9 @@ public class FindSymbol(
         intelligence.session { session ->
             for (hit in hits) {
                 if (matches.size > limit) break
-                val file = analysed.getOrPut(hit.file) { AnalysedFile.of(files, session, hit.file) } ?: continue
-                val node = nodeAt(file.tree, hit) ?: continue
-                val (first, last) = SymbolSpan.lines(file.document, node.symbol)
-                val found = FoundSymbol(node.symbol.kind, file.tree.canonicalPath(node).toString(), first + 1, last + 1)
+                val file = analysed.getOrPut(hit.file) { session.analyse(files, hit.file) } ?: continue
+                val listing = file.listing(nodeAt(file, hit) ?: continue)
+                val found = FoundSymbol(listing.kind, listing.path.toString(), listing.firstLine, listing.lastLine)
                 if (matches.none { (f, s) -> f == hit.file && s == found }) matches += hit.file to found
             }
         }
@@ -62,8 +61,8 @@ public class FindSymbol(
      * The addressable Symbol the index hit names: the innermost one with that name whose name range holds the hit's
      * start (the index reports name ranges). Null when there is none, e.g. for a local declaration.
      */
-    private fun nodeAt(tree: SymbolTree, hit: SymbolLocation): SymbolTree.Node? =
-        tree.nodes.lastOrNull { it.symbol.name == hit.name && (hit.range.start in it.symbol.selectionRange || hit.range.start == it.symbol.selectionRange.start) }
+    private fun nodeAt(file: AnalysedFile, hit: SymbolLocation): SymbolTree.Node? =
+        file.nodes.lastOrNull { it.symbol.name == hit.name && (hit.range.start in it.symbol.selectionRange || hit.range.start == it.symbol.selectionRange.start) }
 
     private fun rank(name: String, query: String): Int = when {
         name == query -> 0

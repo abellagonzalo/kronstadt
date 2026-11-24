@@ -5,20 +5,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 
 class StructureRendererTest {
-    private fun range(startLine: Int, startChar: Int, endLine: Int, endChar: Int) =
-        TextRange(Position(startLine, startChar), Position(endLine, endChar))
-
-    /** A symbol whose name sits at [nameLine]:[nameChar], as kotlin-lsp reports it. */
-    private fun symbol(
-        name: String,
-        kind: SymbolKind,
-        range: TextRange,
-        nameLine: Int,
-        nameChar: Int,
-        parameterTypes: String? = null, type: String? = null, receiver: String? = null,
-        children: List<CodeSymbol> = emptyList(),
-    ) = CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, parameterTypes = parameterTypes, type = type, receiver = receiver)
-
     private val source = """
         |package demo
         |
@@ -49,12 +35,12 @@ class StructureRendererTest {
               fun count  (): Int  // L11-11
             </file_structure>
         """.trimIndent()
-        assertEquals(expected, StructureRenderer.render("src/UserService.kt", doc, listOf(clazz), xml = true))
+        assertEquals(expected, StructureRenderer.render(analysedFile(doc, listOf(clazz), "src/UserService.kt"), xml = true))
     }
 
     @Test
     fun `plain output omits the wrapper`() {
-        assertEquals("fun count  (): Int  // L11-11", StructureRenderer.render("x.kt", doc, listOf(count), xml = false))
+        assertEquals("fun count  (): Int  // L11-11", StructureRenderer.render(analysedFile(doc, listOf(count), "x.kt"), xml = false))
     }
 
     @Test
@@ -67,7 +53,7 @@ class StructureRendererTest {
             fun parse(String)  (String): Int  // L1-1
             fun parse(String, Int)  (String, Int): Int  // L2-2
         """.trimIndent()
-        assertEquals(expected, StructureRenderer.render("P.kt", doc, listOf(one, two), xml = false))
+        assertEquals(expected, StructureRenderer.render(analysedFile(doc, listOf(one, two), "P.kt"), xml = false))
     }
 
     @Test
@@ -98,7 +84,7 @@ class StructureRendererTest {
               val String.first  : Char  // L4-4
               fun String.shout  (): String  // L5-5
         """.trimIndent()
-        assertEquals(expected, StructureRenderer.render("Box.kt", doc, listOf(box), xml = false))
+        assertEquals(expected, StructureRenderer.render(analysedFile(doc, listOf(box), "Box.kt"), xml = false))
     }
 
     @Test
@@ -118,7 +104,7 @@ class StructureRendererTest {
               val width  : Int  // L2-3
               val height  : Int  // L4-4
         """.trimIndent()
-        assertEquals(expected, StructureRenderer.render("Box.kt", doc, listOf(box), xml = false))
+        assertEquals(expected, StructureRenderer.render(analysedFile(doc, listOf(box), "Box.kt"), xml = false))
     }
 
     @Test
@@ -135,11 +121,11 @@ class StructureRendererTest {
               entry BLUE  // L3-5
                 fun hex  (): Int  // L4-4
         """.trimIndent()
-        assertEquals(expected, StructureRenderer.render("Color.kt", doc, listOf(color), xml = false))
+        assertEquals(expected, StructureRenderer.render(analysedFile(doc, listOf(color), "Color.kt"), xml = false))
     }
 
     @Test
     fun `a file without declarations renders nothing`() {
-        assertEquals("", StructureRenderer.render("build.gradle.kts", TextDocument("plugins {}\n"), emptyList(), xml = false))
+        assertEquals("", StructureRenderer.render(analysedFile(TextDocument("plugins {}\n"), emptyList(), "build.gradle.kts"), xml = false))
     }
 }

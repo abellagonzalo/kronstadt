@@ -34,7 +34,6 @@ import kronstadt.core.application.RenameResult
 import kronstadt.core.application.RenameSymbol
 import kronstadt.core.application.RenamedFile
 import kronstadt.core.application.Replace
-import kronstadt.core.application.SymbolCandidate
 import kronstadt.core.application.ValidationFailure
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.FileChange
@@ -43,6 +42,7 @@ import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
 import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.Severity
+import kronstadt.core.domain.SymbolCandidate
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolSpan
 import kronstadt.core.domain.TextDocument

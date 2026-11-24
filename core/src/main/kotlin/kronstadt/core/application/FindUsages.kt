@@ -40,7 +40,7 @@ public class FindUsages(
     /** Resolves the Symbol and lists its Usages, analysing every file in the tool call's one [session]. */
     private suspend fun usages(session: AnalysisSession, parsed: ParsedLookup, fileFilter: Path?): FindUsagesResult {
         val declaration = resolver.resolve(session, parsed).getOrElse { return FindUsagesResult.LookupFailed(it) }
-        val usagesAndImports = session.references(declaration.file, declaration.document, declaration.node.symbol.selectionRange.start)
+        val usagesAndImports = session.references(declaration.analysed.file, declaration.analysed.document, declaration.node.symbol.selectionRange.start)
             .filter { files.resolve(it.file.toString()) == it.file && (fileFilter == null || it.file == fileFilter) }
         var imports = 0
         // Only text is needed to tell imports apart; trees are fetched for the files shown.
@@ -69,12 +69,12 @@ public class FindUsages(
             append(count(withUsages.sumOf { (_, usages) -> usages.size }, "usage")).append(" in ").append(count(withUsages.size, "file"))
             if (imports > 0) append(" (+").append(count(imports, "import")).append(')')
             shown.forEach { (file, usages) ->
-                val analysed = AnalysedFile.of(files, session, file) ?: return@forEach
-                append('\n').append(files.display(file))
+                val analysed = session.analyse(files, file) ?: return@forEach
+                append('\n').append(analysed.shown)
                 usages.groupBy { usage ->
-                    analysed.tree.nodes.lastOrNull { usage.range.start in it.symbol.range }
+                    analysed.nodes.lastOrNull { usage.range.start in it.symbol.range }
                 }.forEach { (node, inNode) ->
-                    append("\n  ").append(node?.let { analysed.tree.canonicalPath(it).toString() } ?: FILE_LEVEL)
+                    append("\n  ").append(node?.let { analysed.path(it).toString() } ?: FILE_LEVEL)
                     inNode.map { it.range.start.line }.distinct().forEach { line ->
                         append("\n    L${line + 1}: ").append(truncate(analysed.document.line(line).trim()))
                     }

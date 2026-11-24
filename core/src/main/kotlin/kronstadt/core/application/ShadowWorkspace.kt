@@ -6,8 +6,9 @@ import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.FileLayout
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Severity
+import kronstadt.core.domain.AnalysedFile
+import kronstadt.core.domain.SymbolCandidate
 import kronstadt.core.domain.SymbolSpan
-import kronstadt.core.domain.SymbolTree
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.TextEdit
 import kronstadt.core.domain.Validation
@@ -84,20 +85,20 @@ internal class ShadowWorkspace(
         return analyse(file, document)
     }
 
-    private suspend fun analyse(file: Path, document: TextDocument) =
-        AnalysedFile(file, document, SymbolTree(session.documentSymbols(file, document)).also { trees[file to document.text] = it })
+    private suspend fun analyse(file: Path, document: TextDocument): AnalysedFile =
+        session.analyse(files, file, document).also { analysedTexts[file to document.text] = it }
 
-    /** Each Symbol tree analysed so far, by file and exact text: a file's Symbols depend on its text alone. */
-    private val trees = mutableMapOf<Pair<Path, String>, SymbolTree>()
+    /** Each file analysed so far, by file and exact text: a file's Symbols depend on its text alone. */
+    private val analysedTexts = mutableMapOf<Pair<Path, String>, AnalysedFile>()
 
-    /** [file]'s Symbol tree with [document] as its text, analysed unless it was before. */
-    private suspend fun tree(file: Path, document: TextDocument): SymbolTree =
-        trees[file to document.text] ?: SymbolTree(session.documentSymbols(file, document)).also { trees[file to document.text] = it }
+    /** [file] analysed with [document] as its text, unless it was before. */
+    private suspend fun analysedAs(file: Path, document: TextDocument): AnalysedFile =
+        analysedTexts[file to document.text] ?: analyse(file, document)
 
     /** The Edit's Collateral Errors, once Validation passed and before Write-back (see [CollateralCheck]), within [timeout]. */
     suspend fun collateralErrors(timeout: Duration): CollateralErrors {
         val changed = touched.filterValues { it.isChanged }.map { (file, it) -> ChangedFile(file, it.base, it.current, it.isCreated) }
-        return CollateralCheck(files, session, ::tree, timeout).run(changed)
+        return CollateralCheck(files, session, ::analysedAs, timeout).run(changed)
     }
 
     sealed interface Lookup {
@@ -130,7 +131,7 @@ internal class ShadowWorkspace(
             return Lookup.Failed(failure)
         }
         val span = resolver.span(found).getOrElse { return Lookup.Failed(it) }
-        return Lookup.Found(found.document, found.canonical, span)
+        return Lookup.Found(found.analysed.document, found.canonical, span)
     }
 
     /** Whether [parsed] resolves in [file] as read from disk, which differs from its current text only once edited. */
@@ -154,7 +155,7 @@ internal class ShadowWorkspace(
             val packageName = parsed.path.packageName
             if (packageName != null && current.packageName != packageName) return@flatMap emptyList()
             when (val resolution = resolver.resolveIn(this, file, parsed)) {
-                is Outcome.Ok -> listOf(SymbolCandidate(resolution.value.canonical, files.display(file)))
+                is Outcome.Ok -> listOf(resolution.value.let { it.analysed.candidate(it.node) })
                 is Outcome.Failed -> (resolution.failure as? LookupFailure.Ambiguous)?.candidates.orEmpty()
                 null -> emptyList()
             }
@@ -235,43 +236,38 @@ internal class ShadowWorkspace(
                 if (it.isCreated) emptyList() else Validation.withoutSpurious(file, diagnostics).map { d -> d.copy(message = inBase(d.message)) }
             }
             // Analysing every current text first is what changes every file to it.
-            val trees = edited.map { (file, it) -> SymbolTree(session.documentSymbols(file, it.current)).also { tree -> this@ShadowWorkspace.trees[file to it.current.text] = tree } }
+            val analysed = edited.map { (file, it) -> analyse(file, it.current) }
             val after = edited.map { (file, it) -> Validation.withoutSpurious(file, session.diagnostics(file, it.current)) }
-            Triple(before, trees, after)
+            Triple(before, analysed, after)
         } ?: return Validated.Failed(ValidationFailure.TimedOut)
-        val (before, trees, after) = pulled
-        val checked = edited.mapIndexed { i, (file, touched) -> Checked(file, touched, trees[i], before[i], after[i]) }
+        val (before, analysed, after) = pulled
+        val checked = edited.mapIndexed { i, (_, touched) -> Checked(touched, analysed[i], before[i], after[i]) }
         val newErrors = checked.flatMap { file -> file.newErrors.map(file::problem) }
         if (newErrors.isNotEmpty()) return Validated.Failed(ValidationFailure.Rejected(newErrors))
         return Validated.Passed(checked.map { it.report() })
     }
 
-    /** One edited file during Validation, with its current [tree] and diagnostics [before] and [after] the Edit. */
-    private inner class Checked(
-        private val file: Path,
+    /** One edited file during Validation, [analysed] at its current text, with its diagnostics [before] and [after] the Edit. */
+    private class Checked(
         private val touched: Touched,
-        private val tree: SymbolTree,
+        private val analysed: AnalysedFile,
         private val before: List<Diagnostic>,
         private val after: List<Diagnostic>,
     ) {
-        private val document = touched.current
         val newErrors = Validation.introduced(before, after, Severity.ERROR, touched.edited)
 
         /** The file's top-most Symbols that lie within an edited range, new warnings and the errors it already had. */
         fun report(): EditedFile {
-            val resulting = tree.nodes.filter { node ->
-                val (first, last) = SymbolSpan.lines(document, node.symbol)
-                touched.edited.any { first >= it.first && last <= it.last }
+            val resulting = analysed.nodes.filter { node ->
+                val lines = analysed.listedLines(node)
+                touched.edited.any { lines.first >= it.first && lines.last <= it.last }
             }
             val topMost = resulting.filter { node -> resulting.none { it.symbol in node.ancestors } }
             val newWarnings = Validation.introduced(before, after, Severity.WARNING, touched.edited)
             val preexistingErrors = Validation.preexisting(before, after, Severity.ERROR, touched.edited)
             return EditedFile(
-                file = files.display(file),
-                symbols = topMost.map { node ->
-                    val (first, last) = SymbolSpan.lines(document, node.symbol)
-                    EditedSymbol(tree.canonicalPath(node).toString(), first + 1, last + 1)
-                },
+                file = analysed.shown,
+                symbols = topMost.map { node -> analysed.listing(node).let { EditedSymbol(it.path.toString(), it.firstLine, it.lastLine) } },
                 newWarnings = newWarnings.take(MAX_WARNINGS).map(::problem),
                 moreWarnings = maxOf(newWarnings.size - MAX_WARNINGS, 0),
                 preexistingErrors = preexistingErrors.take(MAX_WARNINGS).map(::problem),
@@ -281,7 +277,7 @@ internal class ShadowWorkspace(
         }
 
         /** [diagnostic], attributed to the innermost Symbol whose range holds it. */
-        fun problem(diagnostic: Diagnostic): Problem = problem(files.display(file), tree, document, diagnostic)
+        fun problem(diagnostic: Diagnostic): Problem = problem(analysed, diagnostic)
     }
 
     /**
@@ -343,15 +339,15 @@ internal class ShadowWorkspace(
     }
 }
 
-/** [diagnostic] in [document], the text of the file shown as [file] whose [tree] it is, attributed to the innermost Symbol whose range holds it. */
-internal fun problem(file: String, tree: SymbolTree, document: TextDocument, diagnostic: Diagnostic): Problem {
+/** [diagnostic] in [analysed], attributed to the innermost Symbol whose range holds it. */
+internal fun problem(analysed: AnalysedFile, diagnostic: Diagnostic): Problem {
     val start = diagnostic.range.start
-    val enclosing = tree.nodes.filter { start in it.symbol.range }.maxByOrNull { it.ancestors.size }
+    val enclosing = analysed.nodes.filter { start in it.symbol.range }.maxByOrNull { it.ancestors.size }
     return Problem(
-        file = file,
-        symbol = enclosing?.let { tree.canonicalPath(it).toString() },
+        file = analysed.shown,
+        symbol = enclosing?.let { analysed.path(it).toString() },
         line = start.line + 1,
         message = diagnostic.message,
-        source = document.line(start.line).trim(),
+        source = analysed.document.line(start.line).trim(),
     )
 }
