@@ -29,18 +29,17 @@ class StructureRendererTest {
     @Test
     fun `prints canonical paths and signatures without bodies, nested and sorted by position`() {
         val expected = """
-            <file_structure path="src/UserService.kt">
-            class UserService  // L3-12
-              fun find  (UserId): User?  // L6-9
-              fun count  (): Int  // L11-11
-            </file_structure>
-        """.trimIndent()
-        assertEquals(expected, StructureRenderer.render(analysedFile(doc, listOf(clazz), "src/UserService.kt"), xml = true))
+        // src/UserService.kt
+        class UserService  // L3-12
+          fun find  (UserId): User?  // L6-9
+          fun count  (): Int  // L11-11
+    """.trimIndent()
+        assertEquals(expected, StructureRenderer.render(analysedFile(doc, listOf(clazz), "src/UserService.kt")))
     }
 
     @Test
-    fun `plain output omits the wrapper`() {
-        assertEquals("fun count  (): Int  // L11-11", StructureRenderer.render(analysedFile(doc, listOf(count), "x.kt"), xml = false))
+    fun `the skeleton starts with a header line naming the file, as shown, and nothing wraps it`() {
+        assertEquals("// src/x.kt\nfun count  (): Int  // L11-11", StructureRenderer.render(analysedFile(doc, listOf(count), "src/x.kt")))
     }
 
     @Test
@@ -50,10 +49,11 @@ class StructureRendererTest {
         val two = symbol("parse", SymbolKind.FUNCTION, range(1, 0, 1, 41), 1, 4, parameterTypes = "String, Int", type = "(String, Int): Int")
 
         val expected = """
+            // P.kt
             fun parse(String)  (String): Int  // L1-1
             fun parse(String, Int)  (String, Int): Int  // L2-2
         """.trimIndent()
-        assertEquals(expected, StructureRenderer.render(analysedFile(doc, listOf(one, two), "P.kt"), xml = false))
+        assertEquals(expected, StructureRenderer.render(analysedFile(doc, listOf(one, two), "P.kt")))
     }
 
     @Test
@@ -77,6 +77,7 @@ class StructureRendererTest {
 
         // The primary constructor and its property share the class's line, so they report their declaration's lines.
         val expected = """
+            // Box.kt
             class Box  // L1-6
               constructor(Int)  // L1-1
               val width  : Int  // L1-1
@@ -84,7 +85,7 @@ class StructureRendererTest {
               val String.first  : Char  // L4-4
               fun String.shout  (): String  // L5-5
         """.trimIndent()
-        assertEquals(expected, StructureRenderer.render(analysedFile(doc, listOf(box), "Box.kt"), xml = false))
+        assertEquals(expected, StructureRenderer.render(analysedFile(doc, listOf(box), "Box.kt")))
     }
 
     @Test
@@ -100,11 +101,12 @@ class StructureRendererTest {
             listOf(width, height).map { assertIs<SymbolSpan.Computation.Computed>(SymbolSpan.of(doc, it)).span.text },
         )
         val expected = """
+            // Box.kt
             class Box  // L1-5
               val width  : Int  // L2-3
               val height  : Int  // L4-4
         """.trimIndent()
-        assertEquals(expected, StructureRenderer.render(analysedFile(doc, listOf(box), "Box.kt"), xml = false))
+        assertEquals(expected, StructureRenderer.render(analysedFile(doc, listOf(box), "Box.kt")))
     }
 
     @Test
@@ -116,16 +118,17 @@ class StructureRendererTest {
         val color = symbol("Color", SymbolKind.ENUM, range(0, 0, 5, 1), 0, 11, children = listOf(red, blue))
 
         val expected = """
+            // Color.kt
             enum class Color  // L1-6
               entry RED  // L2-2
               entry BLUE  // L3-5
                 fun hex  (): Int  // L4-4
         """.trimIndent()
-        assertEquals(expected, StructureRenderer.render(analysedFile(doc, listOf(color), "Color.kt"), xml = false))
+        assertEquals(expected, StructureRenderer.render(analysedFile(doc, listOf(color), "Color.kt")))
     }
 
     @Test
     fun `a file without declarations renders nothing`() {
-        assertEquals("", StructureRenderer.render(analysedFile(TextDocument("plugins {}\n"), emptyList(), "build.gradle.kts"), xml = false))
+        assertEquals("", StructureRenderer.render(analysedFile(TextDocument("plugins {}\n"), emptyList(), "build.gradle.kts")))
     }
 }

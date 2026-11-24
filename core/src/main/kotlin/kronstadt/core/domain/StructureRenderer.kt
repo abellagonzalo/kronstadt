@@ -7,12 +7,11 @@ package kronstadt.core.domain
  * server shows it, without an extension receiver (so overloads look different), and its 1-based line span, as `kt_read_symbol` reports it.
  */
 public object StructureRenderer {
-    public fun render(file: AnalysedFile, xml: Boolean): String {
+    /** The skeleton under a `// <file>` header line, or nothing at all for a file without declarations. */
+    public fun render(file: AnalysedFile): String {
         val body = file.listings.joinToString("\n", transform = ::entry)
         if (body.isEmpty()) return ""
-        // The tags are delimiters for the model, not a document to be parsed: the body stays unescaped so
-        // signatures like `List<User>` read naturally.
-        return if (xml) "<file_structure path=\"${escapeAttribute(file.shown)}\">\n$body\n</file_structure>" else body
+        return "// ${file.shown}\n$body"
     }
 
     private fun entry(listing: SymbolListing): String = buildString {
@@ -27,7 +26,4 @@ public object StructureRenderer {
             ?.let { append("  ").append(it) }
         append("  // L").append(listing.firstLine).append('-').append(listing.lastLine)
     }
-
-    private fun escapeAttribute(s: String): String =
-        s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 }
