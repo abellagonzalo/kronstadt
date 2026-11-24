@@ -1,19 +1,5 @@
 package kronstadt.server
 
-import io.modelcontextprotocol.kotlin.sdk.server.Server
-import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
-import io.modelcontextprotocol.kotlin.sdk.types.Implementation
-import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
-import kronstadt.core.application.Edit
-import kronstadt.core.application.FindSymbol
-import kronstadt.core.application.FindUsages
-import kronstadt.core.application.GetDefinition
-import kronstadt.core.application.ReadStructure
-import kronstadt.core.application.ReadSymbol
-import kronstadt.core.application.RenameSymbol
-import kronstadt.core.port.CodeIntelligence
-import kronstadt.workspace.LocalFileStore
-import java.lang.reflect.Proxy
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
@@ -23,24 +9,7 @@ import kotlin.test.assertTrue
 class InstructionsTest {
     private val root: Path = Files.createTempDirectory("kt-instructions").toRealPath()
 
-    private val registeredTools: Set<String> = Server(
-        Implementation(name = "kronstadt-test", version = "0"),
-        ServerOptions(capabilities = ServerCapabilities(tools = ServerCapabilities.Tools(listChanged = false))),
-    ).also { server ->
-        val files = LocalFileStore(root)
-        val intelligence = Proxy.newProxyInstance(javaClass.classLoader, arrayOf(CodeIntelligence::class.java)) { _, method, _ ->
-            error("unexpected call to CodeIntelligence.${method.name}")
-        } as CodeIntelligence
-        KronstadtTools(
-            ReadStructure(files, intelligence),
-            FindSymbol(files, intelligence),
-            ReadSymbol(files, intelligence),
-            FindUsages(files, intelligence),
-            GetDefinition(files, intelligence),
-            Edit(files, intelligence),
-            RenameSymbol(files, intelligence),
-        ).registerOn(server)
-    }.tools.keys
+    private val registeredTools: Set<String> = ToolHarness(root, UnstubbedCodeIntelligence()).toolNames
 
     private val instructions = serverInstructions(root)
 
