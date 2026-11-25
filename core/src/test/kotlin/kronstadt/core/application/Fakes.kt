@@ -142,6 +142,11 @@ class FakeCodeIntelligence(
      * a file's diagnostics depend on beyond its own text. Null leaves it to [diagnosticsByText].
      */
     private val diagnosticsInContext: (file: Path, text: String, open: Map<Path, String>) -> List<Diagnostic>? = { _, _, _ -> null },
+    /**
+     * Organize-imports' answer for a file's exact text given the text of every open document, ahead of
+     * [organizedByText]: what a file's unused imports depend on beyond its own text. Null leaves it to [organizedByText].
+     */
+    private val organizedInContext: (file: Path, text: String, open: Map<Path, String>) -> String? = { _, _, _ -> null },
 ) : CodeIntelligence {
     val analysed = mutableListOf<Pair<Path, TextDocument>>()
 
@@ -267,7 +272,8 @@ class FakeCodeIntelligence(
 
         override suspend fun organizeImports(file: Path, document: TextDocument): TextDocument? {
             sync(file, document)
-            return organizedByText[document.text]?.let(::TextDocument)
+            return (organizedInContext(file, document.text, open.mapValues { it.value.text }) ?: organizedByText[document.text])
+                ?.let(::TextDocument)
         }
 
         override suspend fun writtenBack(file: Path, document: TextDocument) {
