@@ -1,11 +1,14 @@
 package kronstadt.lsp
 
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withTimeoutOrNull
 import kronstadt.core.domain.Readiness
@@ -50,6 +53,9 @@ internal class ReadinessTracker(private val timeSource: TimeSource.WithComparabl
     ) {
         /** Ready but for the settle period. */
         val idle: Boolean get() = importPhase == FINISHED && openProgress.isEmpty()
+
+        /** [idle], the condition the Index Seed refresh needs, with what keeps it false. */
+        val indexState: IndexState get() = IndexState(idle, importPhase, openProgress)
 
         /** How long [idle] still has to last before it counts as ready. */
         val settleLeft: Duration get() = quietSince?.let { SETTLE - it.elapsedNow() }?.coerceAtLeast(Duration.ZERO) ?: Duration.ZERO
@@ -99,6 +105,12 @@ internal class ReadinessTracker(private val timeSource: TimeSource.WithComparabl
      * import, and a seed taken just before a re-import is still a fine warm start.
      */
     val indexComplete: Boolean get() = state.value.idle
+
+    /** [indexComplete] with what keeps it false: the import phase and the open progress. */
+    val indexState: IndexState get() = state.value.indexState
+
+    /** [indexState] now and at each change, for logging what keeps the index from being complete. */
+    val indexStates: Flow<IndexState> get() = state.map { it.indexState }.distinctUntilChanged()
 
     suspend fun awaitReady(timeout: Duration): Readiness {
         val start = timeSource.markNow()

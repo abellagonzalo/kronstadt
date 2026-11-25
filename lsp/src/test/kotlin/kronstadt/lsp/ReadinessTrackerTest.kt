@@ -154,4 +154,48 @@ class ReadinessTrackerTest {
         tracker.progressEnd("t1")
         assertFalse(tracker.indexComplete)
     }
+
+    @Test
+    fun `the index state names the progress still open, by title and token`() = runTest {
+        val tracker = tracker()
+        tracker.importState("FINISHED")
+        tracker.progressBegin("t1", "Indexing")
+        tracker.progressBegin("t2", "Importing")
+        tracker.progressEnd("t1")
+        assertEquals(IndexState(false, "FINISHED", mapOf("t2" to "Importing")), tracker.indexState)
+        assertEquals("import FINISHED; open progress: Importing [t2]", tracker.indexState.toString())
+    }
+
+    @Test
+    fun `the index state says when no import phase was reported yet`() = runTest {
+        assertEquals("import not reported; open progress: none", tracker().indexState.toString())
+    }
+
+    @Test
+    fun `a complete index state is complete whatever ended before`() = runTest {
+        val tracker = tracker()
+        tracker.importState("FINISHED")
+        tracker.progressBegin("t1", "Indexing")
+        tracker.progressEnd("t1")
+        assertEquals("complete", tracker.indexState.toString())
+    }
+
+    @Test
+    fun `index states follow each change of the state the index is in`() = runTest {
+        val tracker = tracker()
+        val seen = mutableListOf<String>()
+        val collecting = launch { tracker.indexStates.collect { seen += it.toString() } }
+        testScheduler.runCurrent()
+        tracker.importState("FINISHED")
+        testScheduler.runCurrent()
+        tracker.progressBegin("t1", "Indexing")
+        testScheduler.runCurrent()
+        tracker.progressEnd("t1")
+        testScheduler.runCurrent()
+        collecting.cancel()
+        assertEquals(
+            listOf("import not reported; open progress: none", "complete", "import FINISHED; open progress: Indexing [t1]", "complete"),
+            seen,
+        )
+    }
 }
