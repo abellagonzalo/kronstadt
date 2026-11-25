@@ -49,26 +49,32 @@ public class SymbolTree(roots: List<CodeSymbol>) {
      */
     public fun canonicalPath(node: Node): SymbolPath {
         val chain = node.chain
-        for (length in 1..chain.size) {
-            val suffix = chain.takeLast(length)
-            val segmentings = listOf(
-                suffix.map { segment(it, withSignature = false) },
-                suffix.mapIndexed { i, s -> segment(s, withSignature = i == suffix.lastIndex) },
-                suffix.map { segment(it, withSignature = true) },
-            )
-            val anchorings = if (length == chain.size) listOf(false, true) else listOf(false)
-            segmentings.flatMap { segments -> anchorings.map { SymbolPath(segments, it) } }
-                .distinct()
-                .filter { matching(it) == listOf(node) }
-                .minByOrNull { it.toString().length }
-                ?.let { return it }
-        }
+        for (length in 1..chain.size) shortestNaming(node, length)?.let { return it }
         // Nothing addresses this Symbol alone (two declarations a path can't tell apart): show the fullest form.
         return SymbolPath(chain.map { segment(it, withSignature = true) }, anchored = true)
     }
 
     /**
-     * How a close name for [missed], a path that matched nothing, shows [node]: its canonical path, unless [missed] has
+     * The shortest-text path of the last [length] Symbols of [node]'s chain that resolves to [node] alone: signatures and
+     * a leading `/` only where needed. Null if none does.
+     */
+    private fun shortestNaming(node: Node, length: Int): SymbolPath? {
+        val chain = node.chain
+        val suffix = chain.takeLast(length)
+        val segmentings = listOf(
+            suffix.map { segment(it, withSignature = false) },
+            suffix.mapIndexed { i, s -> segment(s, withSignature = i == suffix.lastIndex) },
+            suffix.map { segment(it, withSignature = true) },
+        )
+        val anchorings = if (length == chain.size) listOf(false, true) else listOf(false)
+        return segmentings.flatMap { segments -> anchorings.map { SymbolPath(segments, it) } }
+            .distinct()
+            .filter { matching(it) == listOf(node) }
+            .minByOrNull { it.toString().length }
+    }
+
+    /**
+     * How a close name for [missed], a path that didn't name [node], shows [node]: its canonical path, unless [missed] has
      * more segments. Then it is the shortest path that resolves to [node] alone among those naming its enclosing chain
      * back to as many segments as [missed] had, or, if [missed] starts with the name of a Symbol enclosing [node], back to
      * that Symbol: `FileLayout/Companion/of` for `FileLayout/of`. The longer path shows where [node] lives.
@@ -76,20 +82,11 @@ public class SymbolTree(roots: List<CodeSymbol>) {
     public fun suggestionPath(node: Node, missed: SymbolPath): SymbolPath {
         val canonical = canonicalPath(node)
         if (missed.segments.size <= canonical.segments.size) return canonical
-        val chain = node.chain
-        val named = node.ancestors.indexOfLast { pathName(it) == missed.segments.first().name }
-        val length = maxOf(missed.segments.size, if (named < 0) 0 else chain.size - named).coerceAtMost(chain.size)
-        val suffix = chain.takeLast(length)
-        val anchorings = if (length == chain.size) listOf(false, true) else listOf(false)
-        return listOf(
-            suffix.map { segment(it, withSignature = false) },
-            suffix.mapIndexed { i, s -> segment(s, withSignature = i == suffix.lastIndex) },
-            suffix.map { segment(it, withSignature = true) },
-        ).flatMap { segments -> anchorings.map { SymbolPath(segments, it) } }
-            .distinct()
-            .filter { matching(it) == listOf(node) }
-            .minByOrNull { it.toString().length }
-            ?: canonical
+        // node.chain is node.ancestors + node, so an ancestor at index i starts the chain's last (chain.size - i) Symbols.
+        val namedAncestor = node.ancestors.indexOfLast { pathName(it) == missed.segments.first().name }
+        val backToNamed = if (namedAncestor < 0) 0 else node.chain.size - namedAncestor
+        val length = maxOf(missed.segments.size, backToNamed).coerceAtMost(node.chain.size)
+        return shortestNaming(node, length) ?: canonical
     }
 
     private fun matching(path: SymbolPath): List<Node> = matchesAndPassedOver(path).first

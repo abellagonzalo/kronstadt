@@ -54,7 +54,7 @@ public class AnalysedFile(
     public fun candidate(node: SymbolTree.Node): SymbolCandidate = SymbolCandidate(path(node).toString(), shown)
 
     /**
-     * [node] as a close name for [missed], a path that matched nothing, in this file: its canonical path, or a longer one
+     * [node] as a close name for [missed], a path that didn't name it, in this file: its canonical path, or a longer one
      * showing its enclosing chain when [missed] has more segments ([SymbolTree.suggestionPath]).
      */
     public fun suggestion(node: SymbolTree.Node, missed: SymbolPath): SymbolCandidate =

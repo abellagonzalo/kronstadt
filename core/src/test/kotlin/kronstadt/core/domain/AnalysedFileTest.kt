@@ -94,7 +94,7 @@ class AnalysedFileTest {
         val notFound = assertIs<AnalysedFile.Resolution.NotFound>(fileLayout.resolve(path("FileLayout/of")))
 
         assertEquals(listOf(SymbolCandidate("FileLayout/Companion/of", "src/A.kt")), notFound.suggestions)
-        assertEquals(fileLayout.path(notFound.close.single()), path("of"))
+        assertEquals(path("of"), fileLayout.path(notFound.close.single()))
     }
 
     @Test
