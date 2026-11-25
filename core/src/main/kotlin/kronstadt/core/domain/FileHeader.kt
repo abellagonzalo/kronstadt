@@ -19,8 +19,8 @@ internal class FileHeader(
     val packageName: String,
     /**
      * Offset just past the package directive, else past the last file annotation, else past the last leading comment
-     * a blank line follows (stopping at a KDoc, which documents the declaration below it), else past the shebang line;
-     * null if none.
+     * a blank line follows, a KDoc-style one included (stopping at a comment attached to what follows it), else past
+     * the shebang line; null if none.
      */
     val preambleEnd: Int?,
     /** The import directives in order, with the offsets of `import` and of the directive's end. */
