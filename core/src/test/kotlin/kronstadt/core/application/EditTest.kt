@@ -588,7 +588,7 @@ class EditTest {
     }
 
     @Test
-    fun `a Symbol removed earlier in no file can't be said to be`() {
+    fun `a removed-earlier failure needs at least one file`() {
         assertFailsWith<IllegalArgumentException> { OperationFailure.RemovedEarlier("Greeter/greet", emptyList(), emptyList()) }
     }
 

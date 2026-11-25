@@ -256,7 +256,8 @@ public class Edit(
             shown.file to removed.suggestions
         }
         if (removals.isEmpty()) return null
-        return OperationFailure.RemovedEarlier(parsed.symbol, removals.map { it.first }, removals.flatMap { it.second })
+        val (removedIn, suggestions) = removals.unzip()
+        return OperationFailure.RemovedEarlier(parsed.symbol, removedIn, suggestions.flatten())
     }
 
     /**
