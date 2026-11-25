@@ -142,9 +142,11 @@ private object GreetIntelligence : UnstubbedCodeIntelligence() {
         override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> = emptyList()
 
         override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> =
-            if (file.fileName.toString() != "B.kt") emptyList() else listOf(
-                Diagnostic(TextRange(Position(5, 11), Position(5, 12)), Severity.ERROR, "Unresolved reference 'm'.", "UNRESOLVED_REFERENCE"),
-            )
+            if (file.fileName.toString() == "B.kt") {
+                listOf(Diagnostic(TextRange(Position(5, 11), Position(5, 12)), Severity.ERROR, "Unresolved reference 'm'.", "UNRESOLVED_REFERENCE"))
+            } else {
+                emptyList()
+            }
     })
 
     override suspend fun awaitReady(timeout: Duration): Readiness = Readiness.Ready
