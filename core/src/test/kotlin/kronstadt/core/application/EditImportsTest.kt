@@ -10,6 +10,7 @@ import kronstadt.core.domain.TextRange
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 
 /** The imports an Operation lists: added to its file if missing, sorted in, and validated with the rest of the Edit. */
 class EditImportsTest {
@@ -176,6 +177,48 @@ class EditImportsTest {
             result,
         )
         assertEquals(sourceAfter, files.content(path))
+        assertEquals(targetAfter, files.content(other))
+    }
+
+    @Test
+    fun `an import another edited file made unused is judged against that file's current text, and its base against its base`() = runTest {
+        val other = "src/B.kt"
+        val source = "package a\n\nimport x.info\n\nfun show() = info()\n"
+        val target = "package a\n\nclass Thing {\n    fun size() = 0\n}\n"
+        val targetAfter = "package a\n\nclass Thing {\n    fun size() = 0\n\n    fun info() = 2\n}\n"
+        fun thing(last: Int, vararg members: CodeSymbol) = CodeSymbol(
+            "Thing", SymbolKind.CLASS, TextRange(Position(2, 0), Position(last, 1)), TextRange(Position(2, 6), Position(2, 11)), members.toList(),
+        )
+        fun member(name: String, line: Int) = CodeSymbol(
+            name, SymbolKind.FUNCTION, TextRange(Position(line, 4), Position(line, 18)), TextRange(Position(line, 8), Position(line, 8 + name.length)),
+            emptyList(), parameterTypes = "", type = "()",
+        )
+        val files = FakeFileStore(root, mapOf(path to source, other to target))
+        val intelligence = FakeCodeIntelligence(
+            symbolsByText = mapOf(
+                source to listOf(function("show", 4)),
+                target to listOf(thing(4, member("size", 3))),
+                targetAfter to listOf(thing(6, member("size", 3), member("info", 5))),
+            ),
+            // B.kt's member Thing.info, new in its current text, shadows the imported extension: x.info is unused in A.kt
+            // exactly when B.kt is open at that text, whatever A.kt's own text.
+            organizedInContext = { file, text, open ->
+                if (file != root.resolve(path)) null
+                else if ("fun info()" in open.getValue(root.resolve(other))) text.replace("import x.info\n\n", "")
+                else text
+            },
+        )
+
+        val result = Edit(files, intelligence)(
+            listOf(
+                InsertAfter(path, "show", "fun other() = 1"),
+                InsertAfter(other, "Thing/size", "fun info() = 2"),
+            ),
+        )
+
+        intelligence.assertOneSessionClosedEverything()
+        assertEquals(listOf("x.info"), assertIs<EditResult.Written>(result, "$result").files.first { it.file == path }.importsRemoved)
+        assertEquals("package a\n\nfun show() = info()\n\nfun other() = 1\n", files.content(path))
         assertEquals(targetAfter, files.content(other))
     }
 

@@ -32,6 +32,7 @@ import kronstadt.core.application.ReadStructure
 import kronstadt.core.application.ReadStructureResult
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.ReadSymbolResult
+import kronstadt.core.application.RemovedImport
 import kronstadt.core.application.RenameResult
 import kronstadt.core.application.RenameSymbol
 import kronstadt.core.application.RenamedFile
@@ -1091,12 +1092,20 @@ private val symCheckPath = "src/test/kotlin/fixture/SymCheck.kt"
             val result = RenameSymbol(files, lsp)("Thing/info", "describe", file = thingPath)
 
             // One Usage, the call; neither the import kotlin-lsp removed nor its blank line counts. Kronstadt puts the import
-            // back and keeps it, though the rename made it unused: organize-imports still sees Thing.kt with info (#138).
+            // back, then removes it as made unused, since organize-imports sees Thing.kt renamed too (#138).
             assertEquals(
-                RenameResult.Renamed("describe", listOf(RenamedFile(thingPath, usages = 0), RenamedFile(usePath, usages = 1))),
+                RenameResult.Renamed(
+                    "describe",
+                    listOf(RenamedFile(thingPath, usages = 0), RenamedFile(usePath, usages = 1)),
+                    importsRemoved = listOf(RemovedImport(usePath, "fixture.epsilon.ext.describe")),
+                ),
                 result,
             )
-            assertEquals(use.replace("thing.info()", "thing.describe()"), Files.readString(useFile))
+            assertEquals(
+                "package fixture.epsilon.use\n\nimport fixture.epsilon.Thing\n\n" +
+                    "fun use(thing: Thing): String = thing.describe() + thing.describe()\n",
+                Files.readString(useFile),
+            )
         } finally {
             project.resolve("src/main/kotlin/fixture/epsilon").deleteRecursively()
         }
