@@ -73,6 +73,50 @@ class AnalysedFileTest {
         assertEquals(listOf(SymbolCandidate("greet()", "src/A.kt"), SymbolCandidate("greet(Int)", "src/A.kt")), notFound.suggestions)
     }
 
+    /** `class FileLayout { companion object { fun of() = FileLayout() } }`. */
+    private val fileLayout = run {
+        val document = TextDocument(
+            """
+    |class FileLayout {
+    |    companion object {
+    |        fun of() = FileLayout()
+    |    }
+    |}
+    |""".trimMargin(),
+        )
+        val of = symbol("of", SymbolKind.FUNCTION, range(2, 8, 2, 31), 2, 12, parameterTypes = "", type = "(): FileLayout")
+        val companion = CodeSymbol("Companion", SymbolKind.OBJECT, range(1, 4, 3, 5), range(1, 4, 3, 5), listOf(of))
+        analysedFile(document, listOf(symbol("FileLayout", SymbolKind.CLASS, range(0, 0, 4, 1), 0, 6, children = listOf(companion))))
+    }
+
+    @Test
+    fun `a path missing a nested Symbol suggests it with the enclosing chain the path named`() {
+        val notFound = assertIs<AnalysedFile.Resolution.NotFound>(fileLayout.resolve(path("FileLayout/of")))
+
+        assertEquals(listOf(SymbolCandidate("FileLayout/Companion/of", "src/A.kt")), notFound.suggestions)
+        assertEquals(fileLayout.path(notFound.close.single()), path("of"))
+    }
+
+    @Test
+    fun `a suggestion longer than its canonical path keeps the signatures that tell overloads apart`() {
+        val notFound = assertIs<AnalysedFile.Resolution.NotFound>(analysed.resolve(path("Greeter/gret")))
+
+        assertEquals(
+            listOf(SymbolCandidate("Greeter/greet()", "src/A.kt"), SymbolCandidate("Greeter/greet(Int)", "src/A.kt")),
+            notFound.suggestions,
+        )
+    }
+
+    @Test
+    fun `each suggested path resolves to the suggested Symbol`() {
+        listOf(fileLayout to "FileLayout/of", analysed to "Greeter/gret", analysed to "gret").forEach { (file, missed) ->
+            val notFound = assertIs<AnalysedFile.Resolution.NotFound>(file.resolve(path(missed)))
+            notFound.close.zip(notFound.suggestions).forEach { (node, suggestion) ->
+                assertEquals(node, assertIs<AnalysedFile.Resolution.Found>(file.resolve(path(suggestion.path))).node)
+            }
+        }
+    }
+
     /** `class Tools { val edit = 0; fun edit(n: Int) = n; fun edit(s: String) = s }`, one declaration per line. */
     private val tools = run {
         val document = TextDocument(

@@ -310,7 +310,7 @@ class RenameSymbolTest {
         val result = RenameSymbol(files(), intelligence())("Greeter/gret", "hello", file = greeterPath)
 
         val failure = assertIs<LookupFailure.NotFound>(result.lookupFailure())
-        assertEquals(listOf(SymbolCandidate("greet", greeterPath)), failure.suggestions)
+        assertEquals(listOf(SymbolCandidate("Greeter/greet", greeterPath)), failure.suggestions)
     }
 
     @Test

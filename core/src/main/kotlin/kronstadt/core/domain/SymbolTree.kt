@@ -67,6 +67,31 @@ public class SymbolTree(roots: List<CodeSymbol>) {
         return SymbolPath(chain.map { segment(it, withSignature = true) }, anchored = true)
     }
 
+    /**
+     * How a close name for [missed], a path that matched nothing, shows [node]: its canonical path, unless [missed] has
+     * more segments. Then it is the shortest path that resolves to [node] alone among those naming its enclosing chain
+     * back to as many segments as [missed] had, or, if [missed] starts with the name of a Symbol enclosing [node], back to
+     * that Symbol: `FileLayout/Companion/of` for `FileLayout/of`. The longer path shows where [node] lives.
+     */
+    public fun suggestionPath(node: Node, missed: SymbolPath): SymbolPath {
+        val canonical = canonicalPath(node)
+        if (missed.segments.size <= canonical.segments.size) return canonical
+        val chain = node.chain
+        val named = node.ancestors.indexOfLast { pathName(it) == missed.segments.first().name }
+        val length = maxOf(missed.segments.size, if (named < 0) 0 else chain.size - named).coerceAtMost(chain.size)
+        val suffix = chain.takeLast(length)
+        val anchorings = if (length == chain.size) listOf(false, true) else listOf(false)
+        return listOf(
+            suffix.map { segment(it, withSignature = false) },
+            suffix.mapIndexed { i, s -> segment(s, withSignature = i == suffix.lastIndex) },
+            suffix.map { segment(it, withSignature = true) },
+        ).flatMap { segments -> anchorings.map { SymbolPath(segments, it) } }
+            .distinct()
+            .filter { matching(it) == listOf(node) }
+            .minByOrNull { it.toString().length }
+            ?: canonical
+    }
+
     private fun matching(path: SymbolPath): List<Node> = matchesAndPassedOver(path).first
 
     /** The Symbols [path] names, then the functions a bare name passed over for a non-function beside them. */

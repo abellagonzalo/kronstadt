@@ -140,7 +140,7 @@ internal class SymbolResolver(
                 is AnalysedFile.Resolution.Found -> listOf(resolution.node)
                 is AnalysedFile.Resolution.Ambiguous -> resolution.matches
             }
-            nodes.map { candidate.candidate(it) to Suggestions.distance(wanted, it.symbol.name.lowercase()) }
+            nodes.map { candidate.suggestion(it, unscoped) to Suggestions.distance(wanted, it.symbol.name.lowercase()) }
         }.sortedBy { (_, distance) -> distance }.map { (suggestion, _) -> suggestion }
         return suggestions.take(Suggestions.MAX)
     }

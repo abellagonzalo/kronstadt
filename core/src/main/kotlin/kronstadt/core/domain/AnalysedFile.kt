@@ -44,7 +44,7 @@ public class AnalysedFile(
     public fun resolve(path: SymbolPath): Resolution = when (val resolution = tree.resolve(path)) {
         is SymbolTree.Resolution.Found -> Resolution.Found(resolution.node, path(resolution.node), resolution.passedOver.map(::path))
         is SymbolTree.Resolution.Ambiguous -> Resolution.Ambiguous(resolution.candidates, resolution.candidates.map(::candidate))
-        is SymbolTree.Resolution.NotFound -> Resolution.NotFound(resolution.suggestions, resolution.suggestions.map(::candidate))
+        is SymbolTree.Resolution.NotFound -> Resolution.NotFound(resolution.suggestions, resolution.suggestions.map { suggestion(it, path) })
     }
 
     /** [node]'s canonical Symbol Path: the shortest that resolves to it alone in this file. */
@@ -52,6 +52,13 @@ public class AnalysedFile(
 
     /** [node] as a lookup failure names it: its canonical path, in this file. */
     public fun candidate(node: SymbolTree.Node): SymbolCandidate = SymbolCandidate(path(node).toString(), shown)
+
+    /**
+     * [node] as a close name for [missed], a path that matched nothing, in this file: its canonical path, or a longer one
+     * showing its enclosing chain when [missed] has more segments ([SymbolTree.suggestionPath]).
+     */
+    public fun suggestion(node: SymbolTree.Node, missed: SymbolPath): SymbolCandidate =
+        SymbolCandidate(tree.suggestionPath(node, missed).toString(), shown)
 
     /** [node]'s Symbol Span, the whole lines an Operation acts on, unless its range can't be trusted. */
     public fun span(node: SymbolTree.Node): SymbolSpan.Computation = SymbolSpan.of(document, node.symbol)
@@ -102,5 +109,8 @@ public data class SymbolListing(
     val lastLine: Int,
 )
 
-/** A Symbol a lookup failure names: its canonical Symbol [path] and its [file] as shown. */
+/**
+ * A Symbol a lookup failure names: its Symbol [path], canonical except for a close name shown with more of its enclosing
+ * chain ([AnalysedFile.suggestion]), and its [file] as shown.
+ */
 public data class SymbolCandidate(val path: String, val file: String)
