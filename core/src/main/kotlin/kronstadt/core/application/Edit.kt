@@ -305,16 +305,16 @@ public class Edit(
 
     /**
      * An [EditIn] on a whole file: its span is the whole text. The lines replaced are the innermost Symbol Span holding
-     * the occurrence's, as an [EditIn] on that Symbol would replace (#62), or only the occurrence's outside any Symbol.
+     * the lines it changes, as an [EditIn] on that Symbol would replace (#62, #129), or only those lines outside any
+     * Symbol (see [Splice.Done.narrowed] for lines only inserted or deleted).
      */
     private suspend fun applyToFile(shadow: ShadowWorkspace, operation: EditIn): Applied {
         val path = checkNotNull(operation.file) { "an edit_in without a symbol has a file" }
         val file = classify(shadow, path).getOrElse { return Applied.Failed(OperationFailure.LookupFailed(it)) }
         val analysed = shadow.analysed(file) ?: return Applied.Failed(OperationFailure.LookupFailed(LookupFailure.FileNotFound(path)))
         val document = analysed.document
-        val splice = Splice.inFile(document, operation) { occurrence ->
-            analysed.innermostSpanHolding(occurrence)?.let { it.firstLine..it.lastLine } ?: occurrence
-        }
+        // Lines outside the document (before the first, after the last) lie in no Symbol Span.
+        val splice = Splice.inFile(document, operation) { held -> analysed.innermostSpanHolding(held)?.let { it.firstLine..it.lastLine } }
         return applySplice(shadow, file, splice, operation, EditInScope(null, files.display(file)))
     }
 
@@ -359,7 +359,40 @@ public class Edit(
 
     /** [EditIn]'s change to a document: whole [lines] (0-based) to replace with [newLines]. */
     private sealed interface Splice {
-        data class Done(val lines: IntRange, val newLines: List<String>) : Splice
+        data class Done(val lines: IntRange, val newLines: List<String>) : Splice {
+            /**
+             * This splice cut to the lines it changes, which may be none (a pure insertion), then widened to the lines
+             * [holding] gives for the lines that must lie in one Symbol Span for it to count as that Symbol's edit, or none
+             * wider if it gives null. The text it leaves is the same.
+             *
+             * Lines only inserted or deleted, where the other side is all shared lines, could as well be placed anywhere
+             * from the earliest place the shared lines below them allow to the latest the shared lines above them allow:
+             * every such place must lie in the span, and lines only inserted also the lines on both sides of them. They
+             * are placed at the latest, as agents add code after the lines they quote.
+             */
+            fun narrowed(document: TextDocument, holding: (IntRange) -> IntRange?): Done {
+                val before = lines.map(document::line)
+                val shorter = minOf(before.size, newLines.size)
+                val prefix = sharedLines(before, newLines, shorter)
+                val suffix = sharedLines(before.asReversed(), newLines.asReversed(), shorter)
+                val pure = prefix + suffix >= shorter
+                val kept = if (pure) shorter - prefix else suffix
+                val beforeEnd = before.size - kept
+                val changed = (lines.first + prefix) until (lines.first + beforeEnd)
+                val earliest = lines.first + if (pure) maxOf(0, shorter - suffix) else prefix
+                val held = if (changed.isEmpty()) (earliest - 1)..changed.first else earliest until changed.last + 1
+                val widened = holding(held) ?: changed
+                val written = newLines.subList(prefix, newLines.size - kept)
+                return Done(
+                    widened,
+                    (widened.first until changed.first).map(document::line) + written + (changed.last + 1..widened.last).map(document::line),
+                )
+            }
+
+            /** How many of the first [most] lines [a] and [b] share, from their start. */
+            private fun sharedLines(a: List<String>, b: List<String>, most: Int): Int =
+                (0 until most).firstOrNull { a[it] != b[it] } ?: most
+        }
         /** `old` occurs [count] times, on [lines]; with none, [indentation] is where it occurs once with indentation ignored. */
         data class NotExactlyOnce(val count: Int, val lines: List<Occurrence>, val indentation: IndentationHint?) : Splice
         /** `old` starts inside [line]'s (0-based) indentation: after some of its leading whitespace, not all of it. */
@@ -369,9 +402,16 @@ public class Edit(
             /** In a Symbol Span, [span] (0-based lines): the whole span is replaced, so it is what Validation and the result see as edited. */
             fun inSpan(document: TextDocument, span: IntRange, operation: EditIn): Splice = of(document, span, operation) { span }
 
-            /** In a whole file: the [replaced] lines, given the occurrence's, are replaced, so they are what Validation and the result see as edited. */
-            fun inFile(document: TextDocument, operation: EditIn, replaced: (IntRange) -> IntRange): Splice =
-                of(document, 0 until document.lineCount, operation, replaced)
+            /**
+             * In a whole file: the lines the splice changes, widened to those [holding] gives for them (see
+             * [Done.narrowed]; null: none wider), are replaced, so they are what Validation and the result see as edited
+             * (#129).
+             */
+            fun inFile(document: TextDocument, operation: EditIn, holding: (IntRange) -> IntRange?): Splice =
+                when (val splice = of(document, 0 until document.lineCount, operation) { it }) {
+                    is Done -> splice.narrowed(document, holding)
+                    else -> splice
+                }
 
             /** Replaces the one occurrence of the Operation's `old` within [scope] lines of [document], in the [replaced] lines (given the occurrence's). */
             private fun of(document: TextDocument, scope: IntRange, operation: EditIn, replaced: (IntRange) -> IntRange): Splice {

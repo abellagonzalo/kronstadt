@@ -124,6 +124,87 @@ class EditInTest {
     }
 
     @Test
+    fun `edit_in on a whole file whose text crosses two Symbols but changes one lists that Symbol`() = runTest {
+        val expected = source.replace("    return n\n}\n\nfun other", "    return n + 1\n}\n\nfun other")
+        val texts = mapOf(expected to symbols)
+
+        val (result, files) = run(texts, EditIn(path, null, old = "    return n\n}\n\nfun other", new = "    return n + 1\n}\n\nfun other"))
+
+        assertEquals(expected, files.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 5, 8)), emptyList(), 0, emptyList(), 0))), result)
+    }
+
+    @Test
+    fun `edit_in on a whole file whose change crosses two Symbols lists neither`() = runTest {
+        val old = "1\n    return n\n}\n\nfun other(): Int {\n    val n = 1"
+        val new = "2\n    return n\n}\n\nfun other(): Int {\n    val n = 2"
+        val expected = source.replace(old, new)
+        val texts = mapOf(expected to symbols)
+
+        val (result, files) = run(texts, EditIn(path, null, old = old, new = new))
+
+        assertEquals(expected, files.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0))), result)
+    }
+
+    @Test
+    fun `edit_in on a whole file whose text reaches into a Symbol but changes an import lists no Symbol`() = runTest {
+        val expected = source.replace("import a.b.Unused", "import a.b.Used")
+        val texts = mapOf(expected to symbols)
+
+        val (result, files) = run(texts, EditIn(path, null, old = "import a.b.Unused\n\nfun greet(): Int {", new = "import a.b.Used\n\nfun greet(): Int {"))
+
+        assertEquals(expected, files.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0))), result)
+    }
+
+    @Test
+    fun `edit_in on a whole file that only inserts a blank line between two Symbols lists neither`() = runTest {
+        val expected = source.replace("}\n\nfun other", "}\n\n\nfun other")
+        val texts = mapOf(expected to listOf(function("greet", 4, 7), function("other", 10, 13)))
+
+        val (result, files) = run(texts, EditIn(path, null, old = "}\n\nfun other", new = "}\n\n\nfun other"))
+
+        assertEquals(expected, files.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0))), result)
+    }
+
+    @Test
+    fun `edit_in on a whole file that only inserts a function after a Symbol, repeating its last lines, lists only the new one`() = runTest {
+        // The added lines could as well go before greet()'s closing brace, inside it: they count as inside only if every
+        // place they could go is.
+        val expected = source.replace("}\n\nfun other", "}\n\nfun b() {\n}\n\nfun other")
+        val texts = mapOf(expected to listOf(function("greet", 4, 7), function("b", 9, 10), function("other", 12, 15)))
+
+        val (result, files) = run(texts, EditIn(path, null, old = "    return n\n}\n\nfun other", new = "    return n\n}\n\nfun b() {\n}\n\nfun other"))
+
+        assertEquals(expected, files.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("b", 10, 11)), emptyList(), 0, emptyList(), 0))), result)
+    }
+
+    @Test
+    fun `edit_in on a whole file whose text reaches into a Symbol but changes the package line lists no Symbol`() = runTest {
+        val expected = source.replace("package a\n", "package a.renamed\n")
+        val texts = mapOf(expected to symbols)
+
+        val (result, files) = run(texts, EditIn(path, null, old = "package a\n\nimport a.b.Unused", new = "package a.renamed\n\nimport a.b.Unused"))
+
+        assertEquals(expected, files.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0))), result)
+    }
+
+    @Test
+    fun `edit_in on a whole file that only inserts a line inside a Symbol lists that Symbol`() = runTest {
+        val expected = source.replaceFirst("    val n = 1\n", "    val n = 1\n    println(n)\n")
+        val texts = mapOf(expected to listOf(function("greet", 4, 8), function("other", 10, 13)))
+
+        val (result, files) = run(texts, EditIn(path, null, old = "greet(): Int {\n    val n = 1\n", new = "greet(): Int {\n    val n = 1\n    println(n)\n"))
+
+        assertEquals(expected, files.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 5, 9)), emptyList(), 0, emptyList(), 0))), result)
+    }
+
+    @Test
     fun `edit_in whose text isn't in the Symbol's span rejects the Edit, even if it is elsewhere in the file`() = runTest {
         val (result, files) = run(
             emptyMap(),
@@ -367,7 +448,8 @@ class EditInTest {
         )
 
         assertEquals(expected, files.content(path))
-        // The first text spans greet() and other(), so it lists neither; the second is inside other() alone.
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("other", 10, 13)), emptyList(), 0, emptyList(), 0))), result)
+        // The first text spans greet() and other(), but changes greet() alone (#129); the second is inside other() alone.
+        val edited = listOf(EditedSymbol("greet", 5, 8), EditedSymbol("other", 10, 13))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, edited, emptyList(), 0, emptyList(), 0))), result)
     }
 }
