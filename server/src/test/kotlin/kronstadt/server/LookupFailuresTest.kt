@@ -40,10 +40,14 @@ class LookupFailuresTest {
     }
 
     @Test
-    fun `kt_find_usages, resolving in declaredIn, asks for one of the paths in it`() {
+    fun `kt_find_usages, resolving in declaredIn, words its failures as the other tools do in a file`() {
         assertEquals(
             "'greet' matches 2 symbols in src/A.kt; pass one of:\n  Greeter/greet\n  greet",
             describe(LookupFailure.Ambiguous("greet", "src/A.kt", listOf(a, b)), "kt_find_usages"),
+        )
+        assertEquals(
+            "No symbol 'gret' in src/A.kt. Use kt_read_structure to list its declarations.",
+            describe(LookupFailure.NotFound("gret", "src/A.kt", emptyList()), "kt_find_usages"),
         )
     }
 
@@ -73,10 +77,6 @@ class LookupFailuresTest {
             "No symbol 'gret'. Use kt_find_symbol to search by partial name, or, if you know the file that declares it, " +
                 "pass it as declaredIn.",
             describe(LookupFailure.NotFound("gret", null, emptyList()), "kt_find_usages"),
-        )
-        assertEquals(
-            "No symbol 'gret' in src/A.kt. Use kt_read_structure to list its declarations.",
-            describe(LookupFailure.NotFound("gret", "src/A.kt", emptyList()), "kt_find_usages"),
         )
     }
 
