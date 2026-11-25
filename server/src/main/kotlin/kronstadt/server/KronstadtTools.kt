@@ -238,8 +238,11 @@ internal class KronstadtTools(
                 "call kt_edit with 'amend' set to that id and only the fixing Operations (e.g. an 'edit_in' on the " +
                 "whole file adding a missing import). They are appended after its Operations, each resolving against " +
                 "the code the earlier ones left, and the combined Edit is validated and written as one, or rejected " +
-                "with a new id you can amend in turn. An amend can't change or drop the rejected Edit's Operations, " +
-                "and is refused if a file it touched changed on disk since; then resend the whole batch. " +
+                "with a new id you can amend in turn. If an amend fails on one of its own Operations, while kotlin-lsp " +
+                "is indexing, or names another id, the rejected Edit is still kept under its id: amend it again " +
+                "with the corrected fix. An amend can't change or drop the rejected Edit's Operations, and is " +
+                "refused if a file it touched changed on disk since or one of its Operations no longer applies; " +
+                "then resend the whole batch. " +
                 "Prefer this over Edit and other text edits of Kotlin files: nothing is written that fails Validation.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
@@ -351,7 +354,9 @@ internal class KronstadtTools(
             )
             is EditResult.ValidationFailed -> error(describe(result.failure, "Edit", result.id))
             is EditResult.WriteBackFailed -> error(describe(result.failure))
-            is EditResult.NotReady -> notReady(result.readiness)
+            is EditResult.NotReady ->
+                result.kept?.let { error("${notReadyText(result.readiness)}. The rejected Edit $it is still kept: retry with kt_edit amend: \"$it\".") }
+                    ?: notReady(result.readiness)
             is EditResult.OperationFailed ->
                 if (result.inRejected) {
                     error(
@@ -359,9 +364,17 @@ internal class KronstadtTools(
                             "Nothing written; resend the whole batch.",
                     )
                 } else {
-                    error("Operation ${result.index}: ${failure(result.failure, parsed[result.index].first)} Nothing written.")
+                    val kept = result.kept?.let {
+                        "; the rejected Edit $it is still kept: amend it again with kt_edit amend: \"$it\" and only the fixing Operations"
+                    }.orEmpty()
+                    error("Operation ${result.index}: ${failure(result.failure, parsed[result.index].first)} Nothing written$kept.")
                 }
-            is EditResult.NoRejectedEdit -> error("no rejected Edit ${result.id} to amend; resend the whole batch")
+            is EditResult.NoRejectedEdit -> error(
+                result.kept?.let {
+                    "no rejected Edit ${result.id} to amend; the rejected Edit $it is still kept: amend it with kt_edit amend: \"$it\", " +
+                        "or resend the whole batch"
+                } ?: "no rejected Edit ${result.id} to amend; resend the whole batch",
+            )
         }
     }
 
@@ -681,9 +694,10 @@ internal class KronstadtTools(
             error("${e::class.simpleName}: ${e.message}")
         }
 
-    private fun notReady(readiness: Readiness.NotReady) = error(
-        "kotlin-lsp still indexing (phase ${readiness.phase}, ${readiness.elapsed.inWholeSeconds} s elapsed); nothing returned/written, retry",
-    )
+    private fun notReady(readiness: Readiness.NotReady) = error(notReadyText(readiness))
+
+    private fun notReadyText(readiness: Readiness.NotReady) =
+        "kotlin-lsp still indexing (phase ${readiness.phase}, ${readiness.elapsed.inWholeSeconds} s elapsed); nothing returned/written, retry"
 
     private fun text(s: String) = CallToolResult(content = listOf(TextContent(s)))
 

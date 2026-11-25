@@ -25,6 +25,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /** The kt_edit tool's arguments as an agent sends them, through to the file on disk. */
 class KtEditToolTest {
@@ -55,10 +56,10 @@ class KtEditToolTest {
     /** Diagnostics of a file given every analysed file's text, by file name; set by a test before it calls the tool. */
     private var inContext: (String, Map<String, String>) -> List<Diagnostic>? = { _, _ -> null }
 
-    private val tools = ToolHarness(
-        root,
-        EmptyIntelligence(organized, cutOff, symbols, diagnostics, symbolsByText, index, references) { file, open -> inContext(file, open) },
-    )
+    private val intelligence =
+        EmptyIntelligence(organized, cutOff, symbols, diagnostics, symbolsByText, index, references) { file, open -> inContext(file, open) }
+
+    private val tools = ToolHarness(root, intelligence)
 
     /** Calls kt_edit with [arguments], JSON as an agent writes it; whether it failed, and its text. */
     private suspend fun ktEdit(arguments: String): Pair<Boolean, String> = tools.call("kt_edit", arguments)
@@ -99,11 +100,49 @@ class KtEditToolTest {
     }
 
     @Test
+    fun `an amend that fails through no fault of the rejected Edit says it is still kept, and a corrected amend writes the combined Edit`() = runTest {
+        file.writeText("package a\n\nfun greet(): Int {\n    return 1\n}\n")
+        val broken = "package a\n\nfun greet(): Int {\n    return Bravo.one\n}\n"
+        diagnostics[broken] = listOf(
+            Diagnostic(TextRange(Position(3, 11), Position(3, 16)), Severity.ERROR, "Unresolved reference 'Bravo'.", "UNRESOLVED_REFERENCE"),
+        )
+        val (rejected, rejectedText) = ktEdit("""{"operations": [{"type": "edit_in", "file": "A.kt", "old": "return 1", "new": "return Bravo.one"}]}""")
+        assertEquals(true, rejected, rejectedText)
+
+        val (_, ownText) = ktEdit("""{"amend": "e1", "operations": [{"type": "edit_in", "file": "A.kt", "old": "  return Bravo", "new": "  return Bravo"}]}""")
+        val (_, otherIdText) = ktEdit("""{"amend": "e9", "operations": [{"type": "edit_in", "file": "A.kt", "old": "return Bravo", "new": "return Bravo"}]}""")
+        intelligence.readiness = Readiness.NotReady("Indexing", 5.seconds)
+        val (_, notReadyText) = ktEdit("""{"amend": "e1", "operations": [{"type": "edit_in", "file": "A.kt", "old": "return Bravo", "new": "return Bravo"}]}""")
+        intelligence.readiness = Readiness.Ready
+        val (amended, amendedText) =
+            ktEdit("""{"amend": "e1", "operations": [{"type": "edit_in", "file": "A.kt", "old": "return Bravo", "new": "return Bravo", "imports": ["b.Bravo"]}]}""")
+
+        assertEquals(
+            "Operation 0: 'old' starts inside line 4's indentation in A.kt; start it at the beginning of the line or after " +
+                "the indentation. Nothing written; the rejected Edit e1 is still kept: amend it again with kt_edit amend: \"e1\" " +
+                "and only the fixing Operations.",
+            ownText,
+        )
+        assertEquals(
+            "no rejected Edit e9 to amend; the rejected Edit e1 is still kept: amend it with kt_edit amend: \"e1\", or resend the whole batch",
+            otherIdText,
+        )
+        assertEquals(
+            "kotlin-lsp still indexing (phase Indexing, 5 s elapsed); nothing returned/written, retry. The rejected Edit e1 is " +
+                "still kept: retry with kt_edit amend: \"e1\".",
+            notReadyText,
+        )
+        assertEquals(false, amended, amendedText)
+        assertEquals("package a\n\nimport b.Bravo\n\nfun greet(): Int {\n    return Bravo.one\n}\n", file.readText())
+    }
+
+    @Test
     fun `the kt_edit description and schema explain amend`() {
         val tool = tools.tool("kt_edit")
 
         assertTrue("'amend'" in checkNotNull(tool.description), tool.description)
         assertTrue("amend" in tool.inputSchema.properties.toString())
+        assertTrue("fails on one of its own Operations, while kotlin-lsp is indexing, or names another id, the rejected Edit is still kept" in checkNotNull(tool.description), tool.description)
     }
 
     @Test
@@ -461,7 +500,7 @@ class KtEditToolTest {
 }
 
 /**
- * Always ready, and knows next to nothing: every file has [symbols] unless [symbolsByText] has its exact text, the
+ * Ready unless a test sets [readiness], and knows next to nothing: every file has [symbols] unless [symbolsByText] has its exact text, the
  * project index lists only [index], and there are no diagnostics, references or definitions, so every Edit validates.
  * Organize-imports answers [organized] for the exact text, else nothing. A search for a query in [cutOff] may miss
  * symbols named exactly like it, as when the index stops at its maximum.
@@ -505,5 +544,8 @@ private class EmptyIntelligence(
 
     override suspend fun workspaceSymbols(query: String): SymbolSearch =
         SymbolSearch(index.filter { it.name.contains(query, ignoreCase = true) }, if (query in cutOff) SymbolSearch.Completeness.INCOMPLETE else SymbolSearch.Completeness.COMPLETE)
-    override suspend fun awaitReady(timeout: Duration): Readiness = Readiness.Ready
+    /** What waiting for readiness answers, at once. */
+    var readiness: Readiness = Readiness.Ready
+
+    override suspend fun awaitReady(timeout: Duration): Readiness = readiness
 }
