@@ -115,6 +115,27 @@ class ImportsTest {
     }
 
     @Test
+    fun `a byte order mark stays the file's first character, and a new block at the top goes right after it`() {
+        assertEquals("﻿import b.B\n\nfun f() = 1\n", adding("﻿fun f() = 1\n", "b.B"))
+        assertEquals("﻿import b.A\nimport b.B\n\nfun f() = 1\n", adding("﻿\nfun f() = 1\n", "b.B", "b.A"))
+        assertEquals("﻿import b.B\n", adding("﻿", "b.B"))
+    }
+
+    @Test
+    fun `after a byte order mark, a new block goes where it would without one`() {
+        assertEquals("﻿package a\n\nimport b.B\n\nclass X\n", adding("﻿package a\n\nclass X\n", "b.B"))
+        assertEquals(
+            "﻿/* Licence */\n\nimport b.B\n\nfun f() = 1\n",
+            adding("﻿/* Licence */\n\nfun f() = 1\n", "b.B"),
+        )
+        assertEquals(
+            "﻿package a\n\nimport b.A\nimport b.B\n\nclass X\n",
+            adding("﻿package a\n\nimport b.B\n\nclass X\n", "b.A"),
+        )
+        assertEquals("﻿import b.A\nimport b.B\n\nclass X\n", adding("﻿import b.B\n\nclass X\n", "b.A"))
+    }
+
+    @Test
     fun `each missing import goes right after the existing one sorting just before it, leaving the others in place`() {
         // IntelliJ's layout puts java and kotlin last, so the block as a whole isn't sorted.
         val source = """

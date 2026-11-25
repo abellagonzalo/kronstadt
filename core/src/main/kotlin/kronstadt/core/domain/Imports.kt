@@ -47,6 +47,8 @@ internal class ImportDirective(
 /** Whole [lines] (0-based; empty to insert before `lines.first`) to replace with [newLines]. */
 internal data class LineSplice(val lines: IntRange, val newLines: List<String>)
 
+private const val BYTE_ORDER_MARK = "﻿"
+
 /**
  * The splice that adds those of [imports] this file doesn't have yet, or null if it has them all. Nothing already in
  * the file moves or goes: each missing import, in sorted order, goes on its own line next to its closest neighbours,
@@ -59,7 +61,8 @@ internal data class LineSplice(val lines: IntRange, val newLines: List<String>)
  * list, a new one, sorted, goes after the package line (else after the file annotations, else after the leading
  * comments a blank line ends, such as a licence, even one written as a KDoc, but above a KDoc or other comment
  * attached to the first declaration, else
- * after the shebang line, else at the top), one blank line from what comes before and after it.
+ * after the shebang line, else at the top, right after a byte order mark), one blank line from what comes before and
+ * after it. A leading byte order mark never moves.
  */
 internal fun TextDocument.addingImports(imports: List<ImportDirective>): LineSplice? {
     val header = FileHeader.of(text)
@@ -69,6 +72,13 @@ internal fun TextDocument.addingImports(imports: List<ImportDirective>): LineSpl
     if (header.imports.isNotEmpty()) return insertedInto(header.imports, missing)
     val directives = missing.map { it.line }
     val at = header.preambleEnd?.let { positionOf(it).line + 1 } ?: 0
+    if (at == 0 && text.startsWith(BYTE_ORDER_MARK)) {
+        // The mark shares line 0 with what follows it, so the block goes on that line, between the two.
+        val rest = line(0).drop(1)
+        val blankAfter = if (rest.isNotBlank()) listOf("") else emptyList()
+        val block = listOf(BYTE_ORDER_MARK + directives.first()) + directives.drop(1)
+        return LineSplice(0..0, block + blankAfter + rest)
+    }
     val blankBefore = if (at > 0) listOf("") else emptyList()
     val blankAfter = if (at < lineCount - 1 && line(at).isNotBlank()) listOf("") else emptyList()
     return LineSplice(at until at, blankBefore + directives + blankAfter)
@@ -80,22 +90,26 @@ private class ListLine(val text: String, val anchor: ImportDirective?)
 /**
  * The lines of the import list from its first directive to its last, with [missing] each placed by its neighbours.
  * Only a line that a directive starts and holds alone is a neighbour, so a new import never goes on or above a line it
- * shares with the package line or another import; with no such line, new ones go after the list.
+ * shares with the package line or another import; with no such line, new ones go after the list. A byte order mark
+ * in front of the first line doesn't count, and stays the first line's first character.
  */
 private fun TextDocument.insertedInto(scanned: List<FileHeader.ScannedImport>, missing: List<ImportDirective>): LineSplice {
     val first = positionOf(scanned.first().start).line
     val last = positionOf(scanned.last().end).line
+    val mark = if (first == 0 && text.startsWith(BYTE_ORDER_MARK)) BYTE_ORDER_MARK else ""
     val byLine = scanned.groupBy { positionOf(it.start).line }
     val lines = (first..last).mapTo(mutableListOf()) { n ->
-        val alone = byLine[n]?.singleOrNull()?.takeIf { line(n).take(positionOf(it.start).character).isBlank() }
-        ListLine(line(n), alone?.directive)
+        val written = if (n == first) line(n).removePrefix(mark) else line(n)
+        val dropped = line(n).length - written.length
+        val alone = byLine[n]?.singleOrNull()?.takeIf { written.take(positionOf(it.start).character - dropped).isBlank() }
+        ListLine(written, alone?.directive)
     }
     missing.forEach { directive ->
         val anchors = lines.withIndex().mapNotNull { (index, line) -> line.anchor?.let { index to it } }
         val at = slotFor(directive, anchors) ?: lines.size
         lines.add(at, ListLine(directive.line, directive))
     }
-    return LineSplice(first..last, lines.map { it.text })
+    return LineSplice(first..last, lines.mapIndexed { index, line -> if (index == 0) mark + line.text else line.text })
 }
 
 /**
