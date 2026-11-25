@@ -254,6 +254,23 @@ class GetDefinitionTest {
     }
 
     @Test
+    fun `an at snippet with LF line breaks that occurs only with different indentation in a CRLF file says where it would occur`() = runTest {
+        val (files, intelligence) = project(caller = callerSource.replace("\n", "\r\n"))
+        val at = "  val greeter = Greeter(\"Hi\")\n  return greeter.greet(guest)"
+
+        assertEquals(
+            GetDefinitionResult.NotExactlyOnce(
+                text = at,
+                symbol = "welcome",
+                file = callerKt,
+                lines = emptyList(),
+                indentation = IndentationHint(4, IndentationHint.Indents(line = 4, file = "    ", snippet = "  ")),
+            ),
+            GetDefinition(files, intelligence)("welcome", "greet", at = at),
+        )
+    }
+
+    @Test
     fun `a name that isn't inside the at snippet fails`() = runTest {
         val (files, intelligence) = project()
 

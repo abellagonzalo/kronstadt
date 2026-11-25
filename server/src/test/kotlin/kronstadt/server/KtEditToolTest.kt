@@ -325,6 +325,48 @@ class KtEditToolTest {
     }
 
     @Test
+    fun `an edit_in whose old has LF line breaks matches in a CRLF file, which keeps CRLF`() = runTest {
+        file.writeText("package a\r\n\r\nfun greet(): Int {\r\n    val n = 1\r\n    return n\r\n}\r\n")
+        symbols += CodeSymbol(
+            "greet",
+            SymbolKind.FUNCTION,
+            TextRange(Position(2, 0), Position(5, 1)),
+            TextRange(Position(2, 4), Position(2, 9)),
+            emptyList(),
+            parameterTypes = "",
+            type = "(): Int",
+        )
+
+        val (failed, _) =
+            ktEdit("""{"operations": [{"type": "edit_in", "file": "A.kt", "symbol": "greet", "old": "val n = 1\n    return n", "new": "val n = 2\n    return n + 1"}]}""")
+
+        assertEquals(false, failed)
+        assertEquals("package a\r\n\r\nfun greet(): Int {\r\n    val n = 2\r\n    return n + 1\r\n}\r\n", file.readText())
+    }
+
+    @Test
+    fun `an edit_in whose old doesn't occur in a CRLF file says any line break matches any line ending`() = runTest {
+        val source = "package a\r\n\r\nfun greet(): Int {\r\n    val n = 1\r\n    return n\r\n}\r\n"
+        file.writeText(source)
+        symbols += CodeSymbol(
+            "greet",
+            SymbolKind.FUNCTION,
+            TextRange(Position(2, 0), Position(5, 1)),
+            TextRange(Position(2, 4), Position(2, 9)),
+            emptyList(),
+            parameterTypes = "",
+            type = "(): Int",
+        )
+
+        assertEquals(
+            true to "Operation 0: 'old' doesn't occur in greet in A.kt, exactly as written (whitespace included; any line break " +
+                "matches any line ending). Use kt_read_symbol to see its source. Nothing written.",
+            ktEdit("""{"operations": [{"type": "edit_in", "file": "A.kt", "symbol": "greet", "old": "val n = 2\n    return n", "new": ""}]}"""),
+        )
+        assertEquals(source, file.readText())
+    }
+
+    @Test
     fun `an edit_in missing in a property a bare name chose over a same-named function names its kind and the function`() = runTest {
         val source = "package a\n\nclass Tools {\n    val edit =\n        0\n    fun edit(n: Int): Int {\n        return n\n    }\n}\n"
         file.writeText(source)

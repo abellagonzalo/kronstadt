@@ -45,12 +45,12 @@ public class GetDefinition(
             text,
             found.canonical,
             analysed.shown,
-            occurrenceLines(document, matches.map { it.first }),
+            occurrenceLines(document, matches),
             indentation,
         )
         // The name is looked up inside the `at` snippet when there is one, else inside the whole span.
         val scope = if (at == null) span else {
-            val snippets = exactOccurrences(document, at, span)
+            val snippets = occurrences(document, at, span)
             snippets.singleOrNull()
                 ?: return notExactlyOnce(at, snippets, if (snippets.isEmpty()) indentationHint(document, at, span) else null)
         }

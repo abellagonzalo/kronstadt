@@ -36,7 +36,7 @@ public data class FileLayout(val indentUnit: String, val lineSeparator: String) 
         /** Reads the layout from [document]: its first line separator, and its indent unit (four spaces if it has none). */
         public fun of(document: TextDocument): FileLayout {
             val text = document.text
-            val separator = Regex("\r\n|\n|\r").find(text)?.value ?: "\n"
+            val separator = TextDocument.LINE_BREAK.find(text)?.value ?: "\n"
             val source = SourceLines.of(text)
             val lines = text.lines().filterIndexed { i, _ -> source.isCode(i) }
             return FileLayout(unitOf(lines) ?: DEFAULT_UNIT, separator)
