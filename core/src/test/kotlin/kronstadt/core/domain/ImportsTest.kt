@@ -53,7 +53,7 @@ class ImportsTest {
     }
 
     @Test
-    fun `a comment attached to the first declaration, or a KDoc, stays below a new block`() {
+    fun `a comment or KDoc attached to the first declaration stays below a new block`() {
         assertEquals(
             "import b.B\n\n// Says one\nfun f() = 1\n",
             adding("// Says one\nfun f() = 1\n", "b.B"),
@@ -63,12 +63,30 @@ class ImportsTest {
             adding("/* Licence */\n\n// Says one\nfun f() = 1\n", "b.B"),
         )
         assertEquals(
-            "import b.B\n\n/** Says one */\n\nfun f() = 1\n",
-            adding("/** Says one */\n\nfun f() = 1\n", "b.B"),
+            "import b.B\n\n/** Says one */\nfun f() = 1\n",
+            adding("/** Says one */\nfun f() = 1\n", "b.B"),
         )
         assertEquals(
             "/* Licence */\n\nimport b.B\n\n/** Says one */\nfun f() = 1\n",
             adding("/* Licence */\n\n/** Says one */\nfun f() = 1\n", "b.B"),
+        )
+    }
+
+    @Test
+    fun `a KDoc-style comment a blank line or the end of the file follows is detached, and a new block goes after it`() {
+        assertEquals(
+            "/**\n * Licence\n */\n\nimport b.B\n\nfun f() = 1\n",
+            adding("/**\n * Licence\n */\n\nfun f() = 1\n", "b.B"),
+        )
+        assertEquals(
+            "/** Licence */\n\nimport b.B\n\n/** Says one */\nfun f() = 1\n",
+            adding("/** Licence */\n\n/** Says one */\nfun f() = 1\n", "b.B"),
+        )
+        assertEquals("/** Licence */\n\nimport b.B\n", adding("/** Licence */\n", "b.B"))
+        assertEquals("/** Licence */\n\nimport b.B", adding("/** Licence */", "b.B"))
+        assertEquals(
+            "#!/usr/bin/env kotlin\n/** Licence */\n\nimport b.B\n\nprintln(1)\n",
+            adding("#!/usr/bin/env kotlin\n/** Licence */\n\nprintln(1)\n", "b.B"),
         )
     }
 

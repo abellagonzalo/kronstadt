@@ -836,4 +836,18 @@ class EditTest {
             files.content("src/C.kt"),
         )
     }
+
+    @Test
+    fun `in a file without a package line, a create's imports go below a leading licence written as a KDoc`() = runTest {
+        val files = FakeFileStore(root, mapOf(path to source))
+
+        edit(createIntelligence(), files)(
+            Create("src/C.kt", "/**\n * Licence\n */\n\nclass Wait(val d: Duration)\n", listOf("kotlin.time.Duration")),
+        )
+
+        assertEquals(
+            "/**\n * Licence\n */\n\nimport kotlin.time.Duration\n\nclass Wait(val d: Duration)\n",
+            files.content("src/C.kt"),
+        )
+    }
 }
