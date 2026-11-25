@@ -463,15 +463,16 @@ public data class Problem(val file: String, val symbol: String?, val line: Int, 
 /**
  * The Collateral Errors a written Edit introduced: compiler errors in files it didn't touch, which Validation never
  * checks and which never block the Edit. They are looked for only when the Edit changed the header of a Symbol that
- * existed before it (removed or renamed it, or changed its kind, receiver, parameters or return type), in the files
- * that used such a Symbol before the Edit, at most [MAX_FILES] of them (see [CollateralCheck]).
+ * existed before it (removed or renamed it, or changed its kind, receiver, parameters or return type), or added a direct
+ * subtype of a sealed type that existed before it, in the files that used such a Symbol or sealed type before the Edit,
+ * at most [MAX_FILES] of them (see [CollateralCheck]).
  */
 public data class CollateralErrors(
     /** At most [MAX_LISTED] of them: file by file, in the order their Usages were found, and by line within a file. */
     val errors: List<Problem> = emptyList(),
     /** Collateral Errors beyond those listed in [errors]. */
     val moreErrors: Int = 0,
-    /** Files with Usages of a changed Symbol beyond the [MAX_FILES] checked, which weren't checked. */
+    /** Files with Usages of a changed Symbol or an extended sealed type beyond the [MAX_FILES] checked, which weren't checked. */
     val filesUnchecked: Int = 0,
     /** Why the check didn't finish, so other files may have errors it didn't find; null if it finished. */
     val unfinished: Unfinished? = null,

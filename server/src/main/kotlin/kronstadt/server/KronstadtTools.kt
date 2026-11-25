@@ -234,7 +234,8 @@ internal class KronstadtTools(
                 "Files are written only if the Edit adds no compiler errors to them; otherwise nothing is written and " +
                 "the new errors are listed. " +
                 "If the Edit changed the header of an existing Symbol (removed or renamed it, or changed its kind, " +
-                "receiver, parameters or return type), the other files that used it are checked too, and the errors the Edit " +
+                "receiver, parameters or return type), or added a direct subtype of an existing sealed type, the other files " +
+                "that used that Symbol or sealed type are checked too, and the errors the Edit " +
                 "introduced there are listed as Collateral Errors. Collateral Errors never block the Edit: it is written, " +
                 "so fix them with another Edit. " +
                 "An Edit is an ordered batch of Operations, possibly across files: each resolves against the code the " +
