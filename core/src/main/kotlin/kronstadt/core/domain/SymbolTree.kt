@@ -35,7 +35,7 @@ public class SymbolTree(roots: List<CodeSymbol>) {
     }
 
     public fun resolve(path: SymbolPath): Resolution {
-        val (matches, passedOver) = match(path)
+        val (matches, passedOver) = matchesAndPassedOver(path)
         return when (matches.size) {
             1 -> Resolution.Found(matches.single(), passedOver)
             0 -> Resolution.NotFound(suggestionsFor(path))
@@ -67,10 +67,10 @@ public class SymbolTree(roots: List<CodeSymbol>) {
         return SymbolPath(chain.map { segment(it, withSignature = true) }, anchored = true)
     }
 
-    private fun matching(path: SymbolPath): List<Node> = match(path).first
+    private fun matching(path: SymbolPath): List<Node> = matchesAndPassedOver(path).first
 
     /** The Symbols [path] names, then the functions a bare name passed over for a non-function beside them. */
-    private fun match(path: SymbolPath): Pair<List<Node>, List<Node>> {
+    private fun matchesAndPassedOver(path: SymbolPath): Pair<List<Node>, List<Node>> {
         val candidates = nodes.filter { node ->
             val chain = node.chain
             val segments = path.segments

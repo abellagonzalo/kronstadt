@@ -502,8 +502,7 @@ internal class KronstadtTools(
                     (if (failure.scope.wholeFile) "Read the file to copy it." else "Use kt_read_symbol to see its source.") +
                     sharedName
             } else {
-                val where = where(failure.scope)
-                "'old' occurs ${failure.count} times in $where; make it longer so it occurs exactly once:\n" +
+                "'old' occurs ${failure.count} times in ${where(failure.scope)}; make it longer so it occurs exactly once:\n" +
                     failure.lines.joinToString("\n") { "  L${it.line}: ${it.source}" } + "\n"
             }
         }
@@ -527,7 +526,6 @@ internal class KronstadtTools(
      * An `edit_in`'s [scope] as the agent named it: the Symbol and its file, or just the file. [kind], e.g. ` (the property)`,
      * follows the Symbol.
      */
-
     private fun where(scope: EditInScope, kind: String = "") = (scope.symbol?.let { "$it$kind in " } ?: "") + scope.file
 
     /** Where a snippet, [named] as the agent passed it (`'old'`), occurs with indentation ignored, and how it differs: a sentence's end. */
