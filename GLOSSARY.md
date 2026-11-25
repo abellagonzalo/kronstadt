@@ -24,6 +24,10 @@ _Avoid_: range, body, extent
 A place in project source that refers to a Symbol by name, other than its own declaration. An import of the Symbol is a Usage too, but is counted apart from the others.
 _Avoid_: reference, call site, occurrence
 
+**Snippet**:
+Text an agent copies from a file to point at a place in it: `edit_in`'s `old`, `kt_get_definition`'s `at`. It must occur exactly once in its scope, exactly as written except that any line break matches any line ending. A Snippet that occurs zero or several times fails with the lines where it does occur, and with an indentation hint when it occurs once only if indentation is ignored.
+_Avoid_: occurrence, pattern
+
 **Edit**:
 One write request: an ordered batch of Operations that is validated and written back as a whole, or rejected as a whole. An Edit can amend the last Rejected Edit: its Operations are appended to the Rejected Edit's, and the combined Edit is validated and written back as one.
 _Avoid_: change, transaction, patch
