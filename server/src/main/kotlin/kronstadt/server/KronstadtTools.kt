@@ -210,7 +210,12 @@ internal class KronstadtTools(
                 "your code, so a constructor property's new code carries its comma; omitted KDoc or annotations are " +
                 "deleted. The code may rename the declaration or hold several. " +
                 "'insert_before' and 'insert_after' add your code as a sibling of the Symbol, one blank line from it " +
-                "('insert_before' goes above its KDoc and annotations). 'delete' removes the whole span and one " +
+                "('insert_before' goes above its KDoc and annotations), so they don't add a KDoc, comment or " +
+                "annotation to the Symbol itself. For that, use 'edit_in' on the Symbol, with 'old' one whole line of " +
+                "its declaration, indentation included: for an annotation, the line with its name; for a KDoc or " +
+                "comment, its first annotation's line if it has one (a KDoc below annotations is not its doc), else " +
+                "the line with its name. 'new' is your lines, indented alike, followed by that same line; they stay " +
+                "directly above it, in the Symbol's span. 'delete' removes the whole span and one " +
                 "blank line next to it. Code is re-indented to the target's column, so indentation needn't match. " +
                 "'edit_in' replaces 'old', which must occur exactly once in the Symbol's span (whitespace included, " +
                 "but $LINE_BREAK_RULE; no regex or fuzzy matching) and must not start inside a " +

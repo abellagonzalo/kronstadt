@@ -163,6 +163,15 @@ class KtEditToolTest {
     }
 
     @Test
+    fun `the kt_edit description says a KDoc, comment or annotation goes on a Symbol with edit_in, not insert_before`() {
+        val description = checkNotNull(tools.tool("kt_edit").description)
+
+        assertTrue("so they don't add a KDoc, comment or annotation to the Symbol itself" in description, description)
+        assertTrue("For that, use 'edit_in' on the Symbol" in description, description)
+        assertTrue("its first annotation's line if it has one" in description, description)
+    }
+
+    @Test
     fun `a written Edit that broke a caller in another file lists it under Collateral Errors`() = runBlocking {
         // Real time: the check's timeout must not race the caller's read from disk on a virtual clock.
         val caller = root.resolve("B.kt").apply { writeText("package b\n\nimport a.greet\n\nfun use(): Int = greet() + 1\n") }
