@@ -142,7 +142,7 @@ class KtEditToolTest {
 
         assertTrue("'amend'" in checkNotNull(tool.description), tool.description)
         assertTrue("amend" in tool.inputSchema.properties.toString())
-        assertTrue("fails on one of its own Operations, while kotlin-lsp is indexing, or names another id, the rejected Edit is still kept" in tool.description!!, tool.description)
+        assertTrue("fails on one of its own Operations, while kotlin-lsp is indexing, or names another id, the rejected Edit is still kept" in checkNotNull(tool.description), tool.description)
     }
 
     @Test

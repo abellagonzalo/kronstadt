@@ -237,12 +237,15 @@ class EditAmendTest {
     }
 
     @Test
-    fun `a successful amend, and one whose Validation times out, drop the Rejected Edit`() = runTest {
+    fun `a successful amend drops the Rejected Edit`() = runTest {
         edit(listOf(useDuration))
         assertIs<EditResult.Written>(edit(listOf(importDuration), amend = "e1"))
-        assertEquals(EditResult.NoRejectedEdit("e1"), edit(listOf(importDuration), amend = "e1"))
 
-        files.writeOutside(path, source)
+        assertEquals(EditResult.NoRejectedEdit("e1"), edit(listOf(importDuration), amend = "e1"))
+    }
+
+    @Test
+    fun `an amend whose Validation times out drops the Rejected Edit`() = runTest {
         edit(listOf(useDuration))
         val slow = Edit(
             files,
@@ -250,7 +253,18 @@ class EditAmendTest {
             validationTimeout = 15.seconds,
             writeLock = lock,
         )
-        assertEquals(EditResult.ValidationFailed(ValidationFailure.TimedOut), slow(listOf(importDuration), amend = "e2"))
-        assertEquals(EditResult.NoRejectedEdit("e2"), edit(listOf(importDuration), amend = "e2"))
+        assertEquals(EditResult.ValidationFailed(ValidationFailure.TimedOut), slow(listOf(importDuration), amend = "e1"))
+
+        assertEquals(EditResult.NoRejectedEdit("e1"), edit(listOf(importDuration), amend = "e1"))
+    }
+
+    @Test
+    fun `an amend whose insert has blank code keeps the Rejected Edit`() = runTest {
+        edit(listOf(useDuration))
+
+        val result = edit(listOf(InsertAfter(path, "greet", "  \n")), amend = "e1")
+
+        assertEquals(EditResult.OperationFailed(0, OperationFailure.BlankCode, kept = "e1"), result)
+        assertIs<EditResult.Written>(edit(listOf(importDuration), amend = "e1"))
     }
 }

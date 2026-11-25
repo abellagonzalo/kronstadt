@@ -30,7 +30,10 @@ public class WriteLock {
         return id
     }
 
-    /** Puts back [edit], the Rejected Edit [withLock] took out, under its id, for an amend that failed through no fault of its own; returns that id. */
+    /**
+     * Puts back [edit], the Rejected Edit [withLock] took out, under its id, for an amend that failed through no fault
+     * of the Rejected Edit's; returns that id.
+     */
     internal fun restore(edit: RejectedEdit): String {
         check(mutex.isLocked) { "a Rejected Edit is kept under the write lock" }
         rejected = edit
@@ -39,8 +42,9 @@ public class WriteLock {
 }
 
 /**
- * An Edit that failed Validation, kept in memory until the next write call (or, if that call is an amend that fails on its own Operations,
- * the one after) so a follow-up can amend it; nothing of it is
- * written. [bases] are the content hashes of every file it touched as it read them, null for a file it creates.
+ * An Edit that failed Validation, kept in memory until the next write call so a follow-up can amend it; nothing of it is
+ * written. An amend that fails through no fault of its own (one of the amend's Operations fails, the index isn't ready,
+ * or it names another id) keeps it for the call after. [bases] are the content hashes of every file it touched as it
+ * read them, null for a file it creates.
  */
 internal class RejectedEdit(val id: String, val operations: List<Operation>, val bases: Map<Path, ContentHash?>)
