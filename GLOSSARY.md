@@ -41,7 +41,7 @@ Checking the Shadow Workspace for errors the edit introduced in the files it tou
 _Avoid_: check, lint, verify
 
 **Rejected Edit**:
-An Edit that failed Validation, kept in memory until the next write call so a follow-up can amend it. Nothing of it is written.
+An Edit that failed Validation, kept in memory until the next write call so a follow-up can amend it. Nothing of it is written. An amend that fails through no fault of the Rejected Edit (one of its own Operations fails, the index isn't ready, or it names another id) keeps it under the same id; any other write call drops it, as does an amend whose Rejected Edit no longer applies, is refused because a file changed on disk, is written, or times out in Validation.
 _Avoid_: pending edit, draft
 
 **Collateral Error**:

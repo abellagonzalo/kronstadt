@@ -4,6 +4,7 @@ import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Position
+import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.TextRange
@@ -11,6 +12,7 @@ import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.time.Duration.Companion.seconds
 
 /** An Edit that amends the last Rejected Edit with only the Operations that fix it. */
 class EditAmendTest {
@@ -74,7 +76,7 @@ class EditAmendTest {
         assertEquals(EditResult.ValidationFailed(ValidationFailure.Rejected(listOf(problem("hello"))), "e2"), again)
         assertEquals(source, files.content(path))
         assertEquals(emptyList(), files.written)
-        assertEquals(EditResult.NoRejectedEdit("e1"), edit(listOf(importDuration), amend = "e1"))
+        assertEquals(EditResult.NoRejectedEdit("e1", kept = "e2"), edit(listOf(importDuration), amend = "e1"))
 
         edit(listOf(useDuration))
         edit(listOf(EditIn(path, null, "greet", "hello")), amend = "e3")
@@ -113,27 +115,23 @@ class EditAmendTest {
     }
 
     @Test
-    fun `an amend after any other kt_edit or rename call, or with an unknown id, is refused, and nothing is written`() = runTest {
-        assertEquals(EditResult.NoRejectedEdit("e1"), edit(listOf(importDuration), amend = "e1"))
-
-        edit(listOf(useDuration))
-        assertEquals(EditResult.NoRejectedEdit("e7"), edit(listOf(importDuration), amend = "e7"))
+    fun `an amend after any other kt_edit or rename call, whatever its outcome, is refused, and nothing is written`() = runTest {
         assertEquals(EditResult.NoRejectedEdit("e1"), edit(listOf(importDuration), amend = "e1"))
 
         edit(listOf(useDuration))
         assertIs<EditResult.OperationFailed>(edit(listOf(Delete(path, "com.example/greet"))))
-        assertEquals(EditResult.NoRejectedEdit("e2"), edit(listOf(importDuration), amend = "e2"))
+        assertEquals(EditResult.NoRejectedEdit("e1"), edit(listOf(importDuration), amend = "e1"))
 
         edit(listOf(useDuration))
         assertIs<RenameResult.InvalidName>(RenameSymbol(files, intelligence, writeLock = lock)("greet", "1st", path))
-        assertEquals(EditResult.NoRejectedEdit("e3"), edit(listOf(importDuration), amend = "e3"))
+        assertEquals(EditResult.NoRejectedEdit("e2"), edit(listOf(importDuration), amend = "e2"))
 
         assertEquals(source, files.content(path))
         assertEquals(emptyList(), files.written)
     }
 
     @Test
-    fun `an amend's Operation that fails is named by its index among the amend's Operations`() = runTest {
+    fun `an amend's Operation that fails is named by its index among the amend's Operations, and the Rejected Edit is kept`() = runTest {
         edit(listOf(useDuration))
 
         val result = edit(listOf(importDuration, EditIn(path, null, "absent", "present")), amend = "e1")
@@ -141,6 +139,118 @@ class EditAmendTest {
         val failed = assertIs<EditResult.OperationFailed>(result)
         assertEquals(1, failed.index)
         assertEquals(false, failed.inRejected)
+        assertEquals("e1", failed.kept)
         assertEquals(source, files.content(path))
+        assertIs<EditResult.Written>(edit(listOf(importDuration), amend = "e1"))
+        assertEquals(fixed, files.content(path))
+    }
+
+    @Test
+    fun `an amend whose edit_in starts inside indentation keeps the Rejected Edit, and the corrected amend writes the combined Edit`() = runTest {
+        val other = "src/B.kt"
+        files.writeOutside(other, "package a\n\nclass C {\n    val x = 1\n}\n")
+        edit(listOf(useDuration))
+
+        val result = edit(listOf(EditIn(other, null, "  val x = 1", "  val x = 2")), amend = "e1")
+
+        assertEquals(EditResult.OperationFailed(0, OperationFailure.StartsInIndentation(EditInScope(null, other), 4), kept = "e1"), result)
+        assertIs<EditResult.Written>(edit(listOf(importDuration), amend = "e1"))
+        assertEquals(fixed, files.content(path))
+    }
+
+    @Test
+    fun `an amend whose own Symbol Path is ambiguous keeps the Rejected Edit`() = runTest {
+        val overloaded = "package a\n\nfun greet() = Duration.ZERO\n\nfun greet(x: Int) = 2\n"
+        val overloading = Edit(
+            files,
+            FakeCodeIntelligence(
+                symbolsByText = mapOf(
+                    source to listOf(function("greet", 2, 15)),
+                    broken to listOf(function("greet", 2, 27)),
+                    fixed to listOf(function("greet", 4, 27)),
+                    overloaded to listOf(function("greet", 2, 27), function("greet", 4, 21).copy(parameterTypes = "Int")),
+                ),
+                diagnosticsByText = mapOf(broken to listOf(unresolved(2))),
+            ),
+            writeLock = lock,
+        )
+        overloading(listOf(useDuration))
+
+        val result = overloading(listOf(InsertAfter(path, "greet", "fun greet(x: Int) = 2"), EditIn(path, "greet", "ZERO", "ZERO")), amend = "e1")
+
+        val failed = assertIs<EditResult.OperationFailed>(result, "$result")
+        assertEquals(1, failed.index)
+        assertIs<LookupFailure.Ambiguous>(assertIs<OperationFailure.LookupFailed>(failed.failure).failure)
+        assertEquals("e1", failed.kept)
+        assertIs<EditResult.Written>(overloading(listOf(importDuration), amend = "e1"))
+        assertEquals(fixed, files.content(path))
+    }
+
+    @Test
+    fun `an amend with an invalid import keeps the Rejected Edit`() = runTest {
+        edit(listOf(useDuration))
+
+        val result = edit(listOf(EditIn(path, null, "package a\n", "package a\n", imports = listOf("not an import"))), amend = "e1")
+
+        assertEquals(EditResult.OperationFailed(0, OperationFailure.InvalidImport("not an import"), kept = "e1"), result)
+        assertIs<EditResult.Written>(edit(listOf(importDuration), amend = "e1"))
+    }
+
+    @Test
+    fun `an amend that finds the index incomplete keeps the Rejected Edit`() = runTest {
+        edit(listOf(useDuration))
+        val indexing = Edit(files, FakeCodeIntelligence(notReadyPhase = "Indexing"), readinessTimeout = 5.seconds, writeLock = lock)
+
+        val result = indexing(listOf(importDuration), amend = "e1")
+
+        assertEquals(EditResult.NotReady(Readiness.NotReady("Indexing", 5.seconds), kept = "e1"), result)
+        assertIs<EditResult.Written>(edit(listOf(importDuration), amend = "e1"))
+    }
+
+    @Test
+    fun `an amend naming another id keeps the current Rejected Edit, and says so`() = runTest {
+        assertEquals(EditResult.NoRejectedEdit("e1"), edit(listOf(importDuration), amend = "e1"))
+        edit(listOf(useDuration))
+        edit(listOf(EditIn(path, null, "greet", "hello")), amend = "e1")
+
+        assertEquals(EditResult.NoRejectedEdit("e1", kept = "e2"), edit(listOf(importDuration), amend = "e1"))
+        assertEquals(EditResult.NoRejectedEdit("e7", kept = "e2"), edit(listOf(importDuration), amend = "e7"))
+        assertIs<EditResult.Written>(edit(listOf(importDuration), amend = "e2"))
+        assertEquals(renamedFixed, files.content(path))
+    }
+
+    @Test
+    fun `an amend whose Rejected Edit no longer applies drops it`() = runTest {
+        edit(listOf(useDuration))
+        val renamed = Edit(
+            files,
+            FakeCodeIntelligence(symbolsByText = mapOf(broken to emptyList()), diagnosticsByText = mapOf(broken to listOf(unresolved(2)))),
+            writeLock = lock,
+        )
+        edit(listOf(Replace(path, "greet", "fun greet() = 1"), useDuration))
+
+        val result = renamed(listOf(importDuration), amend = "e2")
+
+        assertEquals(true, assertIs<EditResult.OperationFailed>(result, "$result").inRejected)
+        assertEquals(null, result.kept)
+        assertEquals(EditResult.NoRejectedEdit("e2"), edit(listOf(importDuration), amend = "e2"))
+    }
+
+    @Test
+    fun `a successful amend, and one whose Validation times out, drop the Rejected Edit`() = runTest {
+        edit(listOf(useDuration))
+        assertIs<EditResult.Written>(edit(listOf(importDuration), amend = "e1"))
+        assertEquals(EditResult.NoRejectedEdit("e1"), edit(listOf(importDuration), amend = "e1"))
+
+        files.writeOutside(path, source)
+        edit(listOf(useDuration))
+        val slow = Edit(
+            files,
+            FakeCodeIntelligence(symbolsByText = mapOf(fixed to listOf(function("greet", 4, 27)), broken to listOf(function("greet", 2, 27))), diagnosticsDelay = 10.seconds),
+            validationTimeout = 15.seconds,
+            writeLock = lock,
+        )
+        assertEquals(EditResult.ValidationFailed(ValidationFailure.TimedOut), slow(listOf(importDuration), amend = "e2"))
+        assertEquals(EditResult.NoRejectedEdit("e2"), edit(listOf(importDuration), amend = "e2"))
     }
 }

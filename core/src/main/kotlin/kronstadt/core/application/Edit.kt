@@ -117,14 +117,23 @@ public class Edit(
      * part-way, see [WriteBackFailure.PartiallyWritten]).
      *
      * With [amend], the id of the last Rejected Edit, [operations] are appended to its Operations and the combined Edit is
-     * applied, validated and written as one, provided no file it touched changed on disk since it read them. Every call
-     * drops the Rejected Edit kept so far, whatever its outcome; one that is rejected is kept in its place.
+     * applied, validated and written as one, provided no file it touched changed on disk since it read them. A call
+     * without [amend] drops the Rejected Edit kept so far, whatever its outcome. An amend keeps it, under its id, when it
+     * fails for reasons that aren't the Rejected Edit's: one of [operations] fails, the index isn't ready, or [amend] names
+     * another id; otherwise it drops it. Either way, one that is rejected is kept in its place.
      */
     public suspend operator fun invoke(operations: List<Operation>, amend: String? = null): EditResult = writeLock.withLock { rejected ->
         if (amend == null) return@withLock apply(emptyList(), operations, emptyMap())
-        if (rejected == null || rejected.id != amend) return@withLock EditResult.NoRejectedEdit(amend)
+        if (rejected == null || rejected.id != amend) {
+            rejected?.let(writeLock::restore)
+            return@withLock EditResult.NoRejectedEdit(amend, rejected?.id)
+        }
         changedSince(rejected.bases)?.let { return@withLock EditResult.WriteBackFailed(WriteBackFailure.ChangedOnDisk(it)) }
-        apply(rejected.operations, operations, rejected.bases)
+        when (val result = apply(rejected.operations, operations, rejected.bases)) {
+            is EditResult.OperationFailed if !result.inRejected -> result.copy(kept = writeLock.restore(rejected))
+            is EditResult.NotReady -> result.copy(kept = writeLock.restore(rejected))
+            else -> result
+        }
     }
 
     /** The first of [bases]' files whose content hash on disk is no longer its base's (or that now exists, for a null one), as shown. */
@@ -460,15 +469,24 @@ public sealed interface EditResult {
 
     /**
      * The Operation at [index] (0-based) can't be applied; nothing was written. In an amend, [index] counts the amend's
-     * Operations, unless [inRejected]: then it is one of the Rejected Edit's, which no longer applies.
+     * Operations, unless [inRejected]: then it is one of the Rejected Edit's, which no longer applies and is dropped.
+     * Otherwise the Rejected Edit is still kept, as [kept], to amend again; [kept] is null outside an amend.
      */
-    public data class OperationFailed(val index: Int, val failure: OperationFailure, val inRejected: Boolean = false) : EditResult
+    public data class OperationFailed(
+        val index: Int,
+        val failure: OperationFailure,
+        val inRejected: Boolean = false,
+        val kept: String? = null,
+    ) : EditResult
 
-    /** There is no Rejected Edit [id] to amend: it never was, or a later write call dropped it. Nothing was written. */
-    public data class NoRejectedEdit(val id: String) : EditResult
+    /**
+     * There is no Rejected Edit [id] to amend: it never was, or a later write call dropped it. Nothing was written. The
+     * current Rejected Edit, if any, is still kept as [kept].
+     */
+    public data class NoRejectedEdit(val id: String, val kept: String? = null) : EditResult
 
-    /** The index was still incomplete after waiting [elapsed]; nothing was written. */
-    public data class NotReady(val readiness: Readiness.NotReady) : EditResult
+    /** The index was still incomplete after waiting [elapsed]; nothing was written. In an amend, the Rejected Edit is still kept as [kept]. */
+    public data class NotReady(val readiness: Readiness.NotReady, val kept: String? = null) : EditResult
 }
 
 /**

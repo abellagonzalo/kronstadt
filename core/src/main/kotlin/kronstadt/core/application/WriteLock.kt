@@ -7,8 +7,8 @@ import java.nio.file.Path
 
 /**
  * Serializes write tools (ADR 0003): one per Kronstadt instance, shared by every use case that writes. Read tools
- * don't take it. It also keeps the last Rejected Edit, which every write call takes out of it (so drops it) and only an
- * Edit rejected again puts back.
+ * don't take it. It also keeps the last Rejected Edit, which every write call takes out of it (so drops it); an Edit
+ * rejected again keeps another, and an amend that failed through no fault of the Rejected Edit's puts it back.
  */
 public class WriteLock {
     private val mutex = Mutex()
@@ -29,10 +29,18 @@ public class WriteLock {
         rejected = RejectedEdit(id, operations, bases)
         return id
     }
+
+    /** Puts back [edit], the Rejected Edit [withLock] took out, under its id, for an amend that failed through no fault of its own; returns that id. */
+    internal fun restore(edit: RejectedEdit): String {
+        check(mutex.isLocked) { "a Rejected Edit is kept under the write lock" }
+        rejected = edit
+        return edit.id
+    }
 }
 
 /**
- * An Edit that failed Validation, kept in memory until the next write call so a follow-up can amend it; nothing of it is
+ * An Edit that failed Validation, kept in memory until the next write call (or, if that call is an amend that fails on its own Operations,
+ * the one after) so a follow-up can amend it; nothing of it is
  * written. [bases] are the content hashes of every file it touched as it read them, null for a file it creates.
  */
 internal class RejectedEdit(val id: String, val operations: List<Operation>, val bases: Map<Path, ContentHash?>)
