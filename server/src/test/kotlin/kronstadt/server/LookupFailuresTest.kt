@@ -31,10 +31,10 @@ class LookupFailuresTest {
     }
 
     @Test
-    fun `kt_find_usages, resolving project-wide, asks for a package prefix or signature instead`() {
+    fun `kt_find_usages, resolving project-wide, asks for one of the paths with its file as declaredIn`() {
         assertEquals(
-            "'greet' matches 2 symbols; tell them apart with a package prefix or a signature, e.g. " +
-                "'com.example/Greeter/greet(String)':\n  Greeter/greet — src/A.kt\n  greet — src/B.kt",
+            "'greet' matches 2 symbols; pass one of these paths with its file as declaredIn:\n" +
+                "  Greeter/greet — src/A.kt\n  greet — src/B.kt",
             describe(LookupFailure.Ambiguous("greet", null, listOf(a, b)), "kt_find_usages"),
         )
     }
@@ -63,7 +63,20 @@ class LookupFailuresTest {
         )
         assertEquals(
             "No symbol 'gret'. Use kt_find_symbol to search by partial name.",
+            describe(LookupFailure.NotFound("gret", null, emptyList()), "kt_read_symbol"),
+        )
+    }
+
+    @Test
+    fun `kt_find_usages, resolving project-wide, offers declaredIn for a missing Symbol too`() {
+        assertEquals(
+            "No symbol 'gret'. Use kt_find_symbol to search by partial name, or, if you know the file that declares it, " +
+                "pass it as declaredIn.",
             describe(LookupFailure.NotFound("gret", null, emptyList()), "kt_find_usages"),
+        )
+        assertEquals(
+            "No symbol 'gret' in src/A.kt. Use kt_read_structure to list its declarations.",
+            describe(LookupFailure.NotFound("gret", "src/A.kt", emptyList()), "kt_find_usages"),
         )
     }
 
