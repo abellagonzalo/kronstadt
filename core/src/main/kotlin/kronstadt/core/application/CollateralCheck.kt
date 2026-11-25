@@ -4,6 +4,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 import kronstadt.core.domain.AnalysedFile
 import kronstadt.core.domain.CodeSymbol
+import kronstadt.core.domain.DeclarationHead
+import kronstadt.core.domain.Definition
+import kronstadt.core.domain.Position
+import kronstadt.core.domain.SourceLocation
+import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SymbolTree
 import kronstadt.core.domain.TextDocument
@@ -19,14 +24,18 @@ internal data class ChangedFile(val file: Path, val base: TextDocument, val curr
 
 /**
  * Looks for an Edit's Collateral Errors (see [CollateralErrors]) once Validation passed, before Write-back, in the Edit's
- * [session]. Only an Edit that changed the header of a Symbol that existed before it is checked: the files that used
- * such a Symbol before the Edit, other than the changed ones, get their diagnostics pulled while every changed file is at
- * its base text and again once every one is at its current text, and the errors the Edit added are reported, as
- * Validation finds them. The check has its own [timeout], and neither running out of it nor failing fails the Edit.
+ * [session]. Only an Edit that changed the header of a Symbol that existed before it, or that added a direct subtype of a
+ * sealed type that existed before it, is checked: the files that used such a Symbol or sealed type before the Edit, other
+ * than the changed ones, each once and at most [CollateralErrors.MAX_FILES] in all, get their diagnostics pulled while
+ * every changed file is at its base text and again once every one is at its current text, and the errors the Edit added
+ * are reported, as Validation finds them. The check has its own [timeout], and neither running out of it nor failing
+ * fails the Edit.
  *
- * A header is what the language server shows of a Symbol: its kind, receiver, parameters and type. Changes it doesn't
- * show go unseen: visibility, supertypes, an overload that makes calls ambiguous, and a new subtype of a sealed type
- * that leaves a `when` over it non-exhaustive (no Symbol of the sealed type's file changed its header).
+ * A header is what the language server shows of a Symbol: its kind, receiver, parameters and type. A new subtype is a
+ * class-like Symbol whose path doesn't resolve in its file's base text (or in a file the Edit created), and its direct
+ * supertypes are the names after the `:` of its declaration head, resolved by the language server; one that can't be
+ * parsed or resolved isn't checked. Changes neither shows go unseen: visibility, the supertypes of an existing Symbol,
+ * and an overload that makes calls ambiguous.
  */
 internal class CollateralCheck(
     private val files: FileStore,
@@ -46,15 +55,17 @@ internal class CollateralCheck(
         }
 
     private suspend fun check(changed: List<ChangedFile>): CollateralErrors {
-        val headersChanged = changed.filterNot { it.created }.flatMap { file ->
-            headersChanged(analysed(file.file, file.base), analysed(file.file, file.current)).map { file to it }
+        val withChangedHeaders = changed.filterNot { it.created }.flatMap { file ->
+            headersChanged(analysed(file.file, file.base), analysed(file.file, file.current))
+                .map { CheckedSymbol(file.file, file.base, it.symbol.namePosition(file.base)) }
         }
-        if (headersChanged.isEmpty()) return CollateralErrors()
+        val sealedExtended = sealedSupertypesOfNewSymbols(changed)
+        if (withChangedHeaders.isEmpty() && sealedExtended.isEmpty()) return CollateralErrors()
         // Every changed file back at its base text: Usages and base diagnostics are of the code as it was before the Edit.
         changed.forEach { session.documentSymbols(it.file, it.base) }
         val changedFiles = changed.map { it.file }.toSet()
-        val using = headersChanged
-            .flatMap { (file, node) -> session.references(file.file, file.base, node.symbol.namePosition(file.base)) }
+        val using = (withChangedHeaders + sealedExtended).distinct()
+            .flatMap { session.references(it.file, it.base, it.namePosition) }
             .map { it.file }
             .distinct()
             .filter { it !in changedFiles && AnalysedFile.isKotlin(it) && files.resolve(it.toString()) == it }
@@ -78,6 +89,53 @@ internal class CollateralCheck(
         )
     }
 
+    /** A Symbol whose Usages before the Edit are checked, its name at [namePosition] in [base], [file]'s text then. */
+    private data class CheckedSymbol(val file: Path, val base: TextDocument, val namePosition: Position)
+
+    /**
+     * The sealed types that existed before the Edit and that a class-like Symbol it added (one whose path doesn't resolve
+     * in its file's base text) names as a direct supertype: a `when` over one of them may no longer be exhaustive. A
+     * supertype that doesn't resolve to project source is skipped.
+     */
+    private suspend fun sealedSupertypesOfNewSymbols(changed: List<ChangedFile>): List<CheckedSymbol> {
+        val added = changed.flatMap { file ->
+            val current = analysed(file.file, file.current)
+            val base = if (file.created) null else analysed(file.file, file.base)
+            current.nodes
+                .filter { it.symbol.kind in CLASS_LIKE && (base == null || base.resolve(current.path(it)) is AnalysedFile.Resolution.NotFound) }
+                .flatMap { node -> DeclarationHead.supertypes(file.current, node.symbol).map { file to it } }
+        }
+        if (added.isEmpty()) return emptyList()
+        // Every changed file at its current text, where the added Symbols' supertypes resolve.
+        changed.forEach { session.documentSymbols(it.file, it.current) }
+        val byFile = changed.associateBy { it.file }
+        return added
+            .flatMap { (file, name) -> session.definition(file.file, file.current, name) }
+            .filterIsInstance<Definition.InSource>()
+            .map { it.location }
+            .distinct()
+            .mapNotNull { location -> sealedBeforeEdit(location, byFile[location.file]) }
+    }
+
+    /**
+     * The class-like Symbol declared at [location] as it was before the Edit, if it was sealed then; [changed] is its file
+     * if the Edit changed it. Null for one the Edit created.
+     */
+    private suspend fun sealedBeforeEdit(location: SourceLocation, changed: ChangedFile?): CheckedSymbol? {
+        if (changed?.created == true) return null
+        val file = location.file
+        val current = changed?.current ?: files.read(file) ?: return null
+        val inCurrent = analysed(file, current)
+        val node = inCurrent.nodes.lastOrNull { it.symbol.kind in CLASS_LIKE && location.range.start in it.symbol.selectionRange } ?: return null
+        val base = changed?.base ?: current
+        val atBase = if (changed == null) node else {
+            val inBase = analysed(file, base)
+            (inBase.resolve(inCurrent.path(node)) as? AnalysedFile.Resolution.Found)?.node ?: return null
+        }
+        if (!DeclarationHead.isSealed(base, atBase.symbol)) return null
+        return CheckedSymbol(file, base, atBase.symbol.namePosition(base))
+    }
+
     private companion object {
         /**
          * The Symbols of [base] whose header [current] changed: their canonical path no longer resolves (removed or
@@ -94,5 +152,8 @@ internal class CollateralCheck(
 
         fun sameHeader(a: CodeSymbol, b: CodeSymbol) =
             a.kind == b.kind && a.receiver == b.receiver && a.parameterTypes == b.parameterTypes && a.type == b.type
+
+        /** The kinds of Symbol that can extend a sealed type, and be one. */
+        val CLASS_LIKE = setOf(SymbolKind.CLASS, SymbolKind.INTERFACE, SymbolKind.OBJECT, SymbolKind.ENUM)
     }
 }

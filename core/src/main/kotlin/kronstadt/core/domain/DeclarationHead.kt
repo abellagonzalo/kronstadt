@@ -10,6 +10,10 @@ public object DeclarationHead {
 
     private val BINDING = Regex("""\b(val|var)\b""")
 
+    private val SEALED = Regex("""\bsealed\b""")
+
+    private val COMMENT_OR_STRING = Regex("""/\*[\s\S]*?\*/|//[^\n]*|"(\\.|[^"\\])*"""")
+
     /**
      * The head of [symbol] in [document], starting at 0-based line [firstLine]. It ends at the first `{` or `=` after
      * the name that isn't nested in brackets, at a delegating `by`, or before a property's accessor on a new line;
@@ -60,7 +64,88 @@ public object DeclarationHead {
         }
     }
 
+    /**
+     * Where the names of the class-like [symbol]'s direct supertypes are in [document]: each name after the `:` of its
+     * declaration head, at its last segment when qualified (`a.b.Base`), ignoring type arguments, constructor-call
+     * parentheses, annotations and what a delegating `by` names. Empty if it lists none, or if [symbol] lies outside
+     * [document].
+     */
+    public fun supertypes(document: TextDocument, symbol: CodeSymbol): List<Position> {
+        if (symbol.range.end.line >= document.lineCount) return emptyList()
+        val text = document.text
+        val end = document.offsetOf(symbol.range.end)
+        var i = document.offsetOf(symbol.selectionRange.end)
+        var depth = 0
+        var listed = false
+        var expectingName = true
+        val names = mutableListOf<Position>()
+        while (i < end) {
+            val c = text[i]
+            when {
+                c == '"' || c == '\'' -> i = skipQuoted(text, i, end) - 1
+                c == '/' && text.startsWith("//", i) -> i = text.indexOf('\n', i).let { if (it < 0) end else it } - 1
+                c == '/' && text.startsWith("/*", i) -> i = text.indexOf("*/", i + 2).let { if (it < 0) end else it + 1 }
+                c == '-' && text.startsWith("->", i) -> i++
+                // A function type, such as `(Int) -> Unit`, names no class to extend.
+                c == '(' && listed && depth == 0 && expectingName -> {
+                    expectingName = false
+                    depth++
+                }
+                c == '(' || c == '[' || c == '<' -> depth++
+                c == ')' || c == ']' || c == '>' -> depth = maxOf(0, depth - 1)
+                depth > 0 -> {}
+                c == '{' || c == '=' -> break
+                !listed -> if (c == ':') listed = true
+                c == ',' -> expectingName = true
+                isWord(text, i, "where") -> break
+                isWord(text, i, "by") -> {
+                    expectingName = false
+                    i++
+                }
+                c == '@' -> i = skipArguments(text, qualifiedName(text, i + 1, end).first, end) - 1
+                expectingName && Character.isJavaIdentifierStart(c) -> {
+                    val (after, lastSegment) = qualifiedName(text, i, end)
+                    names += document.positionOf(lastSegment)
+                    expectingName = false
+                    i = after - 1
+                }
+            }
+            i++
+        }
+        return names
+    }
+
+    /**
+     * Whether the class-like [symbol] in [document] is declared `sealed`, by its modifiers: the text between the start of
+     * its range and its name, without comments or string literals, so none in its KDoc or annotations counts.
+     */
+    public fun isSealed(document: TextDocument, symbol: CodeSymbol): Boolean {
+        val start = symbol.range.start
+        val name = symbol.selectionRange.start
+        if (name.line >= document.lineCount || start > name) return false
+        val head = document.text.substring(document.offsetOf(start), document.offsetOf(name))
+        return SEALED.containsMatchIn(head.replace(COMMENT_OR_STRING, " "))
+    }
+
     private fun lineEnd(text: String, from: Int) = text.indexOf('\n', from).let { if (it < 0) text.length else it }
+
+    /** Whether [word] stands alone at [at] in [text], not as part of a longer identifier. */
+    private fun isWord(text: String, at: Int, word: String): Boolean =
+        text.startsWith(word, at) &&
+            text.getOrNull(at - 1)?.let(Character::isJavaIdentifierPart) != true &&
+            text.getOrNull(at + word.length)?.let(Character::isJavaIdentifierPart) != true
+
+    /** The end of the dotted name starting at [from], and where its last segment starts. */
+    private fun qualifiedName(text: String, from: Int, end: Int): Pair<Int, Int> {
+        var i = from
+        var lastSegment = from
+        while (i < end) {
+            lastSegment = i
+            while (i < end && Character.isJavaIdentifierPart(text[i])) i++
+            if (i + 1 < end && text[i] == '.' && Character.isJavaIdentifierStart(text[i + 1])) i++ else break
+        }
+        return i to lastSegment
+    }
 
     /** Index just past the string or char literal opening at [open]; raw strings (`"""`) included. */
     private fun skipQuoted(text: String, open: Int, end: Int): Int {
@@ -69,5 +154,21 @@ public object DeclarationHead {
         var i = open + 1
         while (i < end && text[i] != quote) i += if (text[i] == '\\') 2 else 1
         return minOf(i + 1, end)
+    }
+
+    /** Index just past the parenthesized arguments opening at [from], such as an annotation's; [from] if there are none. */
+    private fun skipArguments(text: String, from: Int, end: Int): Int {
+        if (text.getOrNull(from) != '(') return from
+        var depth = 0
+        var i = from
+        while (i < end) {
+            when (text[i]) {
+                '"', '\'' -> i = skipQuoted(text, i, end) - 1
+                '(' -> depth++
+                ')' -> if (--depth == 0) return i + 1
+            }
+            i++
+        }
+        return end
     }
 }
