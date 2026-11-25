@@ -19,8 +19,8 @@ internal class FileHeader(
     val packageName: String,
     /**
      * Offset just past the package directive, else past the last file annotation, else past the last leading comment
-     * a blank line follows (stopping at a KDoc, which documents the declaration below it), else past the shebang line;
-     * null if none.
+     * a blank line follows, a KDoc-style one included (stopping at a comment attached to what follows it), else past
+     * the shebang line; null if none.
      */
     val preambleEnd: Int?,
     /** The import directives in order, with the offsets of `import` and of the directive's end. */
@@ -97,15 +97,16 @@ private class HeaderScanner(private val text: String) {
 
     /**
      * Offset just past the last comment from [i] on that a blank line, or the end of the file, follows; null if none.
-     * Comments with no blank line between them and the next comment or code belong to what follows, and a KDoc documents
-     * the declaration below it, so the scan stops at either. [i] is left where it was.
+     * Comments with no blank line between them and the next comment or code belong to what follows, so the scan stops
+     * there. A KDoc is no exception: one a blank line follows, such as a licence written in KDoc style, is detached too.
+     * [i] is left where it was.
      */
     private fun detachedCommentsEnd(): Int? {
         val start = i
         var end: Int? = null
         while (true) {
             skipBlanks()
-            if (startsKDoc() || !skipComment()) break
+            if (!skipComment()) break
             if (blankLineFollows()) end = i
         }
         i = start
@@ -116,9 +117,6 @@ private class HeaderScanner(private val text: String) {
     private fun skipBlanks() {
         while (i < text.length && text[i].isWhitespace()) i++
     }
-
-    /** Whether a KDoc starts at [i]: a block comment opened with two stars, other than the empty one closed right away. */
-    private fun startsKDoc(): Boolean = text.startsWith("/**", i) && !text.startsWith("/**/", i)
 
     /** Whether the whitespace from [i] on holds a blank line or runs to the end of the file. [i] doesn't move. */
     private fun blankLineFollows(): Boolean {
