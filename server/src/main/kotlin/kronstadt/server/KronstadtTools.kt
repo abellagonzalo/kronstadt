@@ -687,7 +687,9 @@ internal class KronstadtTools(
     /**
      * Infrastructure failures (language server down, timeouts) become tool errors instead of protocol errors. An
      * [AgentFacingFailure] shows its message alone; any other exception also names its class, since its message may
-     * be empty or unclear on its own.
+     * be empty or unclear on its own. A [LinkageError] means a class failed to load, most likely because the install
+     * was rebuilt while this server ran, so it says to reconnect. Any other [Error] is named like an exception, except
+     * a [VirtualMachineError], which leaves the JVM in no state to go on and still propagates.
      */
     private suspend fun handle(request: CallToolRequest, block: suspend (JsonObject) -> CallToolResult): CallToolResult =
         try {
@@ -697,8 +699,16 @@ internal class KronstadtTools(
         } catch (e: AgentFacingFailure) {
             error(e.message)
         } catch (e: Exception) {
-            error("${e::class.simpleName}: ${e.message}")
+            error(named(e))
+        } catch (e: VirtualMachineError) {
+            throw e
+        } catch (e: LinkageError) {
+            error("Kronstadt's installed files changed while it was running (${named(e)}); reconnect it with /mcp.")
+        } catch (e: Error) {
+            error(named(e))
         }
+
+    private fun named(e: Throwable): String = "${e::class.simpleName}: ${e.message}"
 
     private fun notReady(readiness: Readiness.NotReady) = error(notReadyText(readiness))
 
