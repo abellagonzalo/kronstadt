@@ -14,6 +14,10 @@ import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.copyToRecursively
 import kotlin.io.path.exists
 import kotlin.test.assertTrue
+import kotlin.test.fail
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 /**
  * A Kronstadt server for contract tests: its own JVM on [projectRoot], with [home] as `user.home` (so its cache is the
@@ -24,6 +28,7 @@ internal class KronstadtProcess(projectRoot: Path, home: Path, private val stder
         ProcessHandle.current().info().command().orElseThrow(),
         "--enable-native-access=ALL-UNNAMED",
         "-Duser.home=$home",
+        "-D$LOG_INDEX_STATE=true",
         "-cp", System.getProperty("java.class.path"),
         "kronstadt.server.MainKt",
         "--project-root", projectRoot.toString(),
@@ -66,6 +71,38 @@ internal class KronstadtProcess(projectRoot: Path, home: Path, private val stder
     }
 
     fun stderr(): String = if (stderr.exists()) Files.readString(stderr) else ""
+
+    /**
+     * Waits until kotlin-lsp's index is in the state Kronstadt's hand-off needs to refresh the Index Seed, as Kronstadt
+     * logs it (see [LOG_INDEX_STATE]), and has stayed so for [hold]: kotlin-lsp leaves gaps of a few ms between progress
+     * runs. Fails naming the last state, and so the progress still open, if that doesn't happen within [timeout].
+     */
+    fun awaitIndexComplete(timeout: Duration = 120.seconds, hold: Duration = 1.seconds) {
+        val deadline = TimeSource.Monotonic.markNow() + timeout
+        var logged = 0
+        var since = TimeSource.Monotonic.markNow()
+        while (true) {
+            val states = indexStates()
+            if (states.size != logged) {
+                logged = states.size
+                since = TimeSource.Monotonic.markNow()
+            }
+            if (states.lastOrNull() == "complete" && since.elapsedNow() >= hold) return
+            if (deadline.hasPassedNow()) {
+                fail("kotlin-lsp's index was not complete within $timeout; last index state: ${states.lastOrNull() ?: "none logged"}")
+            }
+            Thread.sleep(100)
+        }
+    }
+
+    /** Each index state Kronstadt logged, oldest first. */
+    private fun indexStates(): List<String> =
+        stderr().lineSequence().filter { it.startsWith(INDEX_STATE_PREFIX) }.map { it.removePrefix(INDEX_STATE_PREFIX) }.toList()
+
+    /** What Kronstadt's hand-off logged it did with the Index Seed as it ended, naming the open progress if it skipped the refresh for it. */
+    fun handOffLog(): String =
+        stderr().lineSequence().lastOrNull { it.startsWith("kronstadt: Index Seed not refreshed") || it.startsWith("kronstadt: refreshing the Index Seed") }
+            ?: "no hand-off logged"
 
     /** SIGINT, SIGTERM 0.1 s later, SIGKILL 0.4 s after that, to Kronstadt's process only (measured in #52). */
     fun endLikeClaudeCode() {

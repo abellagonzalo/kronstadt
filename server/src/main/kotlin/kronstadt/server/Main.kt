@@ -11,6 +11,7 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.io.asSink
 import kotlinx.io.asSource
@@ -23,6 +24,7 @@ import kronstadt.core.application.ReadStructure
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.RenameSymbol
 import kronstadt.core.application.WriteLock
+import kronstadt.lsp.IndexState
 import kronstadt.lsp.LspCodeIntelligence
 import kronstadt.workspace.DetachedSeedRefresh
 import kronstadt.workspace.IndexDirectories
@@ -39,6 +41,15 @@ internal const val VERSION = "0.1.0"
 
 /** How long Kronstadt waits for kotlin-lsp to answer `shutdown` as it ends. It took 6 ms; SIGKILL comes 0.5 s after SIGINT. */
 private val HAND_OFF_ANSWER_WAIT = 200.milliseconds
+
+/**
+ * System property that, set to `true`, makes Kronstadt log each change of kotlin-lsp's [IndexState] to stderr as
+ * `kronstadt: index state: <state>`, so contract tests can wait for the state the hand-off needs before ending it.
+ */
+internal const val LOG_INDEX_STATE = "kronstadt.logIndexState"
+
+/** The stderr line prefix [LOG_INDEX_STATE] logs each [IndexState] with. */
+internal const val INDEX_STATE_PREFIX = "kronstadt: index state: "
 
 /**
  * Composition root.
@@ -103,6 +114,11 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
     // Claude Code never closes stdin: it ends Kronstadt with SIGINT, SIGTERM and SIGKILL within 0.5 s (#52). A
     // shutdown hook runs on those signals and on the exit after a closed stdin alike.
     Runtime.getRuntime().addShutdownHook(Thread { handOff(languageServer, worktreeIndex) })
+    val indexStateLog = if (System.getProperty(LOG_INDEX_STATE) == "true") {
+        launch { languageServer.await().getOrNull()?.indexStates?.collect { System.err.println("$INDEX_STATE_PREFIX$it") } }
+    } else {
+        null
+    }
 
     val server = Server(
         Implementation(name = "kronstadt", version = VERSION),
@@ -118,7 +134,7 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
         ReadSymbol(files, intelligence, config.readinessTimeout),
         FindUsages(files, intelligence, config.readinessTimeout),
         GetDefinition(files, intelligence, config.readinessTimeout),
-        Edit(files, intelligence, config.readinessTimeout, config.validationTimeout, writeLock),
+        Edit(files, intelligence, config.readinessTimeout, config.validationTimeout, writeLock, collateralTimeout = config.collateralTimeout),
         RenameSymbol(files, intelligence, config.readinessTimeout, config.validationTimeout, writeLock),
     ).registerOn(server)
 
@@ -127,6 +143,7 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
     val closed = CompletableDeferred<Unit>()
     session.onClose { closed.complete(Unit) }
     closed.await()
+    indexStateLog?.cancel()
     // The shutdown hook ends a started kotlin-lsp.
     if (!languageServer.isCompleted) languageServer.cancel()
 }
@@ -139,9 +156,9 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
 private fun handOff(languageServer: Deferred<Result<LspCodeIntelligence>>, worktreeIndex: Deferred<WorktreeIndex>) {
     if (!languageServer.isCompleted || languageServer.isCancelled) return
     val started = runBlocking { languageServer.await() }.getOrNull() ?: return
-    val indexComplete = started.indexComplete
+    val indexState = started.indexState
     val answered = started.requestExit(HAND_OFF_ANSWER_WAIT)
-    val message = handOffMessage(indexComplete, answered) {
+    val message = handOffMessage(indexState, answered) {
         DetachedSeedRefresh.start(started.processHandle, runBlocking { worktreeIndex.await() })
     }
     System.err.println("kronstadt: $message")
@@ -149,11 +166,12 @@ private fun handOff(languageServer: Deferred<Result<LspCodeIntelligence>>, workt
 
 /**
  * What [handOff] did with the Index Seed: [refresh] runs only if kotlin-lsp's index was complete when Kronstadt began
- * ending it (see [LspCodeIntelligence.indexComplete]; no readiness settle period, #79) and it answered `shutdown`.
+ * ending it (see [LspCodeIntelligence.indexState]; no readiness settle period, #79) and it answered `shutdown`. If it
+ * wasn't, the message says what was still open.
  */
-internal fun handOffMessage(indexComplete: Boolean, answeredShutdown: Boolean, refresh: () -> SeedRefreshStart): String =
+internal fun handOffMessage(indexState: IndexState, answeredShutdown: Boolean, refresh: () -> SeedRefreshStart): String =
     when {
-        !indexComplete -> "Index Seed not refreshed: kotlin-lsp had not finished indexing"
+        !indexState.complete -> "Index Seed not refreshed: kotlin-lsp had not finished indexing ($indexState)"
         !answeredShutdown -> "Index Seed not refreshed: kotlin-lsp did not answer shutdown"
         else -> when (val start = refresh()) {
             is SeedRefreshStart.Started -> "refreshing the Index Seed once kotlin-lsp exits, in the background; see ${start.log}"

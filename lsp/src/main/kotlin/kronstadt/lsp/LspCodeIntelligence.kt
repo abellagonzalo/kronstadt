@@ -3,6 +3,7 @@ package kronstadt.lsp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.sync.Mutex
@@ -136,8 +137,11 @@ public class LspCodeIntelligence private constructor(
 
     override suspend fun awaitReady(timeout: Duration): Readiness = readiness.awaitReady(timeout)
 
-    /** Whether kotlin-lsp's index may become the Index Seed now; see [ReadinessTracker.indexComplete]. */
-    public val indexComplete: Boolean get() = readiness.indexComplete
+    /** Whether kotlin-lsp's index may become the Index Seed now, and if not why; see [ReadinessTracker.indexState]. */
+    public val indexState: IndexState get() = readiness.indexState
+
+    /** [indexState] now and at each change; see [ReadinessTracker.indexStates]. */
+    public val indexStates: Flow<IndexState> get() = readiness.indexStates
 
     /** The readiness signals kotlin-lsp sends from here on; see [ReadinessTracker.signals]. */
     internal val readinessSignals: SharedFlow<ReadinessSignal> get() = readiness.signals
