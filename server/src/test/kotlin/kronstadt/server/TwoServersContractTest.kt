@@ -81,7 +81,7 @@ class TwoServersContractTest {
         a.awaitIndexComplete()
         a.endLikeClaudeCode()
         val seed = awaitNotNull(60.seconds) { seedIndex(cache.resolve("seed")) }
-            ?: error("A refreshed no Index Seed; ${a.handOff()}; A's stderr:\n${a.stderr()}")
+            ?: error("A refreshed no Index Seed; ${a.handOffLog()}; A's stderr:\n${a.stderr()}")
         val log = seed.resolveSibling("last-refresh.log")
         assertContains(log.readText(), "kronstadt: refreshed the Index Seed")
         val seedAfterA = snapshot(seed)

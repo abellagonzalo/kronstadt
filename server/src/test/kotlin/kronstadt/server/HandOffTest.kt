@@ -13,7 +13,7 @@ class HandOffTest {
 
     @Test
     fun `refreshes the Index Seed when the index is complete and kotlin-lsp answered shutdown`() {
-        // indexComplete ignores the readiness settle period; ReadinessTrackerTest pins that.
+        // IndexState.complete ignores the readiness settle period; ReadinessTrackerTest pins that.
         val message = handOffMessage(complete, answeredShutdown = true) { SeedRefreshStart.Started(log) }
         assertEquals("refreshing the Index Seed once kotlin-lsp exits, in the background; see $log", message)
     }

@@ -137,7 +137,7 @@ public class LspCodeIntelligence private constructor(
 
     override suspend fun awaitReady(timeout: Duration): Readiness = readiness.awaitReady(timeout)
 
-    /** Whether kotlin-lsp's index may become the Index Seed now, and if not why; see [ReadinessTracker.indexComplete]. */
+    /** Whether kotlin-lsp's index may become the Index Seed now, and if not why; see [ReadinessTracker.indexState]. */
     public val indexState: IndexState get() = readiness.indexState
 
     /** [indexState] now and at each change; see [ReadinessTracker.indexStates]. */

@@ -100,7 +100,7 @@ internal class KronstadtProcess(projectRoot: Path, home: Path, private val stder
         stderr().lineSequence().filter { it.startsWith(INDEX_STATE_PREFIX) }.map { it.removePrefix(INDEX_STATE_PREFIX) }.toList()
 
     /** What Kronstadt's hand-off logged it did with the Index Seed as it ended, naming the open progress if it skipped the refresh for it. */
-    fun handOff(): String =
+    fun handOffLog(): String =
         stderr().lineSequence().lastOrNull { it.startsWith("kronstadt: Index Seed not refreshed") || it.startsWith("kronstadt: refreshing the Index Seed") }
             ?: "no hand-off logged"
 
