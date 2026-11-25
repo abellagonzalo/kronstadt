@@ -355,7 +355,7 @@ class EditTest {
 
         val result = edit(intelligence, files)(Replace(path, "Greeter/greeet", "fun greet() = 1"))
 
-        assertEquals(EditResult.OperationFailed(0, OperationFailure.LookupFailed(LookupFailure.NotFound("Greeter/greeet", path, listOf(SymbolCandidate("greet", path), SymbolCandidate("Greeter", path))))), result)
+        assertEquals(EditResult.OperationFailed(0, OperationFailure.LookupFailed(LookupFailure.NotFound("Greeter/greeet", path, listOf(SymbolCandidate("Greeter/greet", path), SymbolCandidate("Greeter", path))))), result)
         assertEquals(emptyList(), files.written)
         intelligence.assertOneSessionClosedEverything()
     }
@@ -489,7 +489,7 @@ class EditTest {
             listOf(Replace(path, "Greeter/greet", "fun greets(): Int = 1"), Replace(path, "Greeter/greet", "fun greet() = 1")),
         )
 
-        assertEquals(EditResult.OperationFailed(1, OperationFailure.RemovedEarlier("Greeter/greet", path, listOf(SymbolCandidate("greets", path)))), result)
+        assertEquals(EditResult.OperationFailed(1, OperationFailure.RemovedEarlier("Greeter/greet", path, listOf(SymbolCandidate("Greeter/greets", path)))), result)
         assertEquals(emptyList(), files.written)
         intelligence.assertOneSessionClosedEverything()
     }
@@ -536,8 +536,8 @@ class EditTest {
                 OperationFailure.RemovedEarlierInFiles(
                     "Greeter/greet",
                     listOf(
-                        OperationFailure.RemovedEarlierInFiles.Removal(b, listOf(SymbolCandidate("greets", b))),
-                        OperationFailure.RemovedEarlierInFiles.Removal(c, listOf(SymbolCandidate("greets", c))),
+                        OperationFailure.RemovedEarlierInFiles.Removal(b, listOf(SymbolCandidate("Greeter/greets", b))),
+                        OperationFailure.RemovedEarlierInFiles.Removal(c, listOf(SymbolCandidate("Greeter/greets", c))),
                     ),
                 ),
             ),
@@ -581,7 +581,7 @@ class EditTest {
         assertEquals(
             EditResult.OperationFailed(
                 2,
-                OperationFailure.RemovedEarlier("Greeter/greet", b, listOf(SymbolCandidate("greets()", b), SymbolCandidate("greets(Int)", b))),
+                OperationFailure.RemovedEarlier("Greeter/greet", b, listOf(SymbolCandidate("Greeter/greets()", b), SymbolCandidate("Greeter/greets(Int)", b))),
             ),
             result,
         )

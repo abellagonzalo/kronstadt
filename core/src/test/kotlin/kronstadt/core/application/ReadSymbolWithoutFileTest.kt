@@ -213,6 +213,12 @@ class ReadSymbolWithoutFileTest {
     }
 
     @Test
+    fun `a miss of a nested Symbol suggests it with the enclosing chain the path named, with its file`() = runTest {
+        val result = assertIs<LookupFailure.NotFound>(read("Registry/empty").lookupFailure())
+        assertEquals(listOf(SymbolCandidate("Registry/Companion/empty", registryKt)), result.suggestions)
+    }
+
+    @Test
     fun `the index only names candidate files, whose own trees decide`() = runTest {
         // Listed twice by the index, yet one Symbol.
         assertEquals("// Box in $boxKt, L3-10", assertIs<ReadSymbolResult.Found>(read("Box")).text.lines().first())

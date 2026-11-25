@@ -322,7 +322,7 @@ class FindUsagesTest {
         val result = FindUsages(files, intelligence)("Greeter/gret", declaredIn = greeterKt)
 
         assertEquals(
-            FindUsagesResult.LookupFailed(LookupFailure.NotFound("Greeter/gret", greeterKt, listOf(SymbolCandidate("greet", greeterKt)))),
+            FindUsagesResult.LookupFailed(LookupFailure.NotFound("Greeter/gret", greeterKt, listOf(SymbolCandidate("Greeter/greet", greeterKt)))),
             result,
         )
     }
@@ -369,7 +369,7 @@ class FindUsagesTest {
 
         val result = FindUsages(files, intelligence)("Greeter/gret")
 
-        assertEquals(FindUsagesResult.LookupFailed(LookupFailure.NotFound("Greeter/gret", null, listOf(SymbolCandidate("greet", greeterKt)))), result)
+        assertEquals(FindUsagesResult.LookupFailed(LookupFailure.NotFound("Greeter/gret", null, listOf(SymbolCandidate("Greeter/greet", greeterKt)))), result)
     }
 
     @Test
