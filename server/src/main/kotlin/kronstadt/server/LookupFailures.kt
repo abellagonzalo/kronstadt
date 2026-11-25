@@ -14,18 +14,22 @@ internal fun describe(failure: LookupFailure, tool: String, argument: String? = 
 
 private fun message(failure: LookupFailure, tool: String): String = when (failure) {
     is LookupFailure.InvalidPath -> "Invalid Symbol Path '${failure.symbol}': ${failure.reason}"
-    // Resolved project-wide, kt_find_usages's path is what tells candidates apart; its file only filters Usages.
-    is LookupFailure.Ambiguous -> if (tool == FIND_USAGES && failure.file == null) {
-        "'${failure.symbol}' matches ${failure.candidates.size} symbols; tell them apart with a package prefix or a " +
-            "signature, e.g. 'com.example/Greeter/greet(String)':\n" + candidates(failure.candidates, withFiles = true)
-    } else {
-        "'${failure.symbol}' matches ${failure.candidates.size} symbols${failure.file.inFile()}; pass one of" +
-            (if (failure.file == null) " these paths with its file" else "") + ":\n" +
+    // Resolved project-wide, kt_find_usages takes a candidate's file as declaredIn, not as file, which only filters Usages.
+    is LookupFailure.Ambiguous -> {
+        val pass = when {
+            failure.file != null -> "pass one of"
+            tool == FIND_USAGES -> "pass one of these paths with its file as declaredIn"
+            else -> "pass one of these paths with its file"
+        }
+        "'${failure.symbol}' matches ${failure.candidates.size} symbols${failure.file.inFile()}; $pass:\n" +
             candidates(failure.candidates, withFiles = failure.file == null)
     }
+    // kotlin-lsp's index can drop a name (#87), and kt_find_symbol then misses it too; declaredIn doesn't need the index.
     is LookupFailure.NotFound -> "No symbol '${failure.symbol}'${failure.file.inFile()}." + when {
         failure.suggestions.isNotEmpty() -> " Close names:\n" + candidates(failure.suggestions, withFiles = failure.file == null)
         failure.file != null -> " Use kt_read_structure to list its declarations."
+        tool == FIND_USAGES ->
+            " Use kt_find_symbol to search by partial name, or, if you know the file that declares it, pass it as declaredIn."
         else -> " Use kt_find_symbol to search by partial name."
     }
     is LookupFailure.TooManyDeclarations ->
