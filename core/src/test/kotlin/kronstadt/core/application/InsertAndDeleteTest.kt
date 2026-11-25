@@ -104,6 +104,74 @@ class InsertAndDeleteTest {
     }
 
     @Test
+    fun `a KDoc goes on an annotated Symbol with edit_in on its first annotation's line, above it and in its span`() = runTest {
+        val annotated = """
+        |package a
+        |
+        |class Greeter {
+        |    @Deprecated("old")
+        |    fun greet(): Int = 1
+        |}
+        |""".trimMargin()
+        val expected = """
+        |package a
+        |
+        |class Greeter {
+        |    /** Says hi. */
+        |    @Deprecated("old")
+        |    fun greet(): Int = 1
+        |}
+        |""".trimMargin()
+        val texts = mapOf(
+            annotated to listOf(greeter(2, 5, function("greet", 4, 4, extraLinesAbove = 1))),
+            expected to listOf(greeter(2, 6, function("greet", 5, 4, extraLinesAbove = 2))),
+        )
+
+        val (result, files) = run(
+            texts,
+            EditIn(path, "Greeter/greet", old = "    @Deprecated(\"old\")", new = "    /** Says hi. */\n    @Deprecated(\"old\")"),
+        )
+
+        assertEquals(expected, files.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 4, 6)), emptyList(), 0, emptyList(), 0))), result)
+        assertEquals(
+            ReadSymbolResult.Found("// greet in src/A.kt, L4-6\n    /** Says hi. */\n    @Deprecated(\"old\")\n    fun greet(): Int = 1"),
+            ReadSymbol(files, FakeCodeIntelligence(symbolsByText = texts))(path, "Greeter/greet"),
+        )
+    }
+
+    @Test
+    fun `a KDoc goes on a Symbol with edit_in on its declaration line, directly above it and in its span`() = runTest {
+        val expected = """
+        |package a
+        |
+        |class Greeter {
+        |    /** Says hi. */
+        |    fun greet(): Int = 1
+        |
+        |    /** Says it again. */
+        |    fun other(): Int = 1
+        |}
+        |""".trimMargin()
+        val texts = mapOf(
+            source to listOf(greeter(2, 7, greet, other)),
+            expected to listOf(greeter(2, 8, greet, function("other", 7, 4, extraLinesAbove = 1))),
+        )
+
+        val (result, files) = run(
+            texts,
+            EditIn(path, "Greeter/other", old = "    fun other(): Int = 1", new = "    /** Says it again. */\n    fun other(): Int = 1"),
+        )
+
+        assertEquals(expected, files.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("other", 7, 8)), emptyList(), 0, emptyList(), 0))), result)
+        assertEquals(
+            ReadSymbolResult.Found("// other in src/A.kt, L7-8\n    /** Says it again. */\n    fun other(): Int = 1"),
+            ReadSymbol(files, FakeCodeIntelligence(symbolsByText = texts))(path, "Greeter/other"),
+        )
+    }
+
+    @Test
     fun `insert_before and insert_after with no non-blank line of code fail with the Operation's index, writing nothing`() = runTest {
         val texts = mapOf(source to listOf(greeter(2, 7, greet, other)))
 
