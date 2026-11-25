@@ -170,6 +170,30 @@ class EditInTest {
     }
 
     @Test
+    fun `edit_in on a whole file that only inserts a function after a Symbol, repeating its last lines, lists only the new one`() = runTest {
+        // The added lines could as well go before greet()'s closing brace, inside it: they count as inside only if every
+        // place they could go is.
+        val expected = source.replace("}\n\nfun other", "}\n\nfun b() {\n}\n\nfun other")
+        val texts = mapOf(expected to listOf(function("greet", 4, 7), function("b", 9, 10), function("other", 12, 15)))
+
+        val (result, files) = run(texts, EditIn(path, null, old = "    return n\n}\n\nfun other", new = "    return n\n}\n\nfun b() {\n}\n\nfun other"))
+
+        assertEquals(expected, files.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("b", 10, 11)), emptyList(), 0, emptyList(), 0))), result)
+    }
+
+    @Test
+    fun `edit_in on a whole file whose text reaches into a Symbol but changes the package line lists no Symbol`() = runTest {
+        val expected = source.replace("package a\n", "package a.renamed\n")
+        val texts = mapOf(expected to symbols)
+
+        val (result, files) = run(texts, EditIn(path, null, old = "package a\n\nimport a.b.Unused", new = "package a.renamed\n\nimport a.b.Unused"))
+
+        assertEquals(expected, files.content(path))
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0))), result)
+    }
+
+    @Test
     fun `edit_in on a whole file that only inserts a line inside a Symbol lists that Symbol`() = runTest {
         val expected = source.replaceFirst("    val n = 1\n", "    val n = 1\n    println(n)\n")
         val texts = mapOf(expected to listOf(function("greet", 4, 8), function("other", 10, 13)))
