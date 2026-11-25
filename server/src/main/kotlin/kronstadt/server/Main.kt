@@ -118,7 +118,7 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
         ReadSymbol(files, intelligence, config.readinessTimeout),
         FindUsages(files, intelligence, config.readinessTimeout),
         GetDefinition(files, intelligence, config.readinessTimeout),
-        Edit(files, intelligence, config.readinessTimeout, config.validationTimeout, writeLock, config.collateralTimeout),
+        Edit(files, intelligence, config.readinessTimeout, config.validationTimeout, writeLock, collateralTimeout = config.collateralTimeout),
         RenameSymbol(files, intelligence, config.readinessTimeout, config.validationTimeout, writeLock),
     ).registerOn(server)
 

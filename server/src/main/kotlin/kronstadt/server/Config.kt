@@ -27,7 +27,7 @@ internal data class Config(
                        with a retry error. Default: ${'$'}KRONSTADT_READINESS_TIMEOUT, else 90.
   --validation-timeout Seconds kt_edit waits for diagnostics before rejecting the edit with nothing written.
                        Default: ${'$'}KRONSTADT_VALIDATION_TIMEOUT, else 15.
-  --collateral-timeout Seconds kt_edit spends looking for Collateral Errors once validation passed; running out
+  --collateral-timeout Seconds kt_edit spends looking for Collateral Errors once Validation passed; running out
                        of it never fails the edit.
                        Default: ${'$'}KRONSTADT_COLLATERAL_TIMEOUT, else the validation timeout."""
 
