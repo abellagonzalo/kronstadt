@@ -412,9 +412,9 @@ class KotlinLspContractTest {
         assertEquals(listOf("String.shout"), assertIs<LookupFailure.NotFound>(read(shapes, "shout").lookupFailure()).suggestions.map { it.path })
 
         // A bare name prefers the property; parentheses select the function.
-        assertEquals("// size in $spansKt, L46-46", header(spansKt, "Sized/size"))
+        assertEquals("// size in $spansKt, L46-46 (the property; a function shares its name: size(Int))", header(spansKt, "Sized/size"))
         assertEquals("// size(Int) in $spansKt, L48-48", header(spansKt, "size(Int)"))
-        assertEquals("// total in $shapes, L17-17", header(shapes, "Calculator/total"))
+        assertEquals("// total in $shapes, L17-17 (the property; a function shares its name: total())", header(shapes, "Calculator/total"))
         assertEquals("// total() in $shapes, L19-19", header(shapes, "total()"))
 
         // Constructors and primary-constructor val parameters.
