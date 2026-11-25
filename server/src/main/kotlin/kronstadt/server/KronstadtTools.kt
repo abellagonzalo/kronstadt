@@ -371,14 +371,16 @@ internal class KronstadtTools(
             is EditResult.OperationFailed ->
                 if (result.inRejected) {
                     error(
-                        "The rejected Edit $amend no longer applies: ${failure(result.failure, "operation")} " +
-                            "Nothing written; resend the whole batch.",
+                        nothingWritten(
+                            "The rejected Edit $amend no longer applies: ${failure(result.failure, "operation")}",
+                            "; resend the whole batch.",
+                        ),
                     )
                 } else {
                     val kept = result.kept?.let {
                         "; the rejected Edit $it is still kept: amend it again with kt_edit amend: \"$it\" and only the fixing Operations"
                     }.orEmpty()
-                    error("Operation ${result.index}: ${failure(result.failure, parsed[result.index].first)} Nothing written$kept.")
+                    error(nothingWritten("Operation ${result.index}: ${failure(result.failure, parsed[result.index].first)}", "$kept."))
                 }
             is EditResult.NoRejectedEdit -> error(
                 result.kept?.let {
@@ -395,7 +397,7 @@ internal class KronstadtTools(
         val file = args.string("file")?.takeIf { it.isNotBlank() }
         return when (val result = renameSymbol(symbol, newName, file)) {
             is RenameResult.Renamed -> text(renamed(symbol, newName, result))
-            is RenameResult.LookupFailed -> error("${sentence(describe(result.failure, "kt_rename_symbol"))} Nothing written.")
+            is RenameResult.LookupFailed -> error(nothingWritten(sentence(describe(result.failure, "kt_rename_symbol"))))
             is RenameResult.InvalidName -> error("'${result.name}' is not a Kotlin identifier; pass a plain name, or one in backticks. Nothing written.")
             is RenameResult.CannotRename -> error("Cannot rename ${result.symbol}: ${result.reason}. Nothing written.")
             is RenameResult.ValidationFailed -> error(describe(result.failure, "Rename"))

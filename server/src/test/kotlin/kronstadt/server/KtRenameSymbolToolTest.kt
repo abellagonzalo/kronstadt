@@ -55,6 +55,22 @@ class KtRenameSymbolToolTest {
     }
 
     @Test
+        fun `a one-line lookup failure is followed by Nothing written after a space`() = runTest {
+            val (failed, text) = call("kt_rename_symbol", """{"symbol": "nope", "newName": "hello", "file": "A.kt"}""")
+
+            assertEquals(true, failed)
+            assertEquals("No symbol 'nope' in A.kt. Use kt_read_structure to list its declarations. Nothing written.", text)
+        }
+
+    @Test
+    fun `a lookup failure that ends on a list is followed by Nothing written on its own line`() = runTest {
+        val (failed, text) = call("kt_rename_symbol", """{"symbol": "gree", "newName": "hello", "file": "A.kt"}""")
+
+        assertEquals(true, failed)
+        assertEquals("No symbol 'gree' in A.kt. Close names:\n  greet\nNothing written.", text)
+    }
+
+    @Test
     fun `a rename can't be an Operation of a kt_edit batch`() = runTest {
         val (failed, text) = call("kt_edit", """{"operations": [{"type": "rename", "symbol": "greet", "file": "A.kt"}]}""")
 

@@ -58,6 +58,13 @@ internal fun sentence(message: String): String = when {
     else -> "$message."
 }
 
+/**
+ * [message], a failure that ends a sentence or a list, followed by "Nothing written" and [rest]: after a space, or on its
+ * own line after a list.
+ */
+internal fun nothingWritten(message: String, rest: String = "."): String =
+    (if (message.endsWith('\n')) message else "$message ") + "Nothing written$rest"
+
 /** One candidate per line; resolved project-wide, each with the file to pass along with its path. */
 internal fun candidates(candidates: List<SymbolCandidate>, withFiles: Boolean): String =
     candidates.joinToString("\n") { if (withFiles) "  ${it.path} — ${it.file}" else "  ${it.path}" }
