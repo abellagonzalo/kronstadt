@@ -699,16 +699,16 @@ internal class KronstadtTools(
         } catch (e: AgentFacingFailure) {
             error(e.message)
         } catch (e: Exception) {
-            error(named(e))
+            error(classAndMessage(e))
         } catch (e: VirtualMachineError) {
             throw e
         } catch (e: LinkageError) {
-            error("Kronstadt's installed files changed while it was running (${named(e)}); reconnect it with /mcp.")
+            error("Kronstadt's installed files changed while it was running (${classAndMessage(e)}); reconnect it with /mcp.")
         } catch (e: Error) {
-            error(named(e))
+            error(classAndMessage(e))
         }
 
-    private fun named(e: Throwable): String = "${e::class.simpleName}: ${e.message}"
+    private fun classAndMessage(e: Throwable): String = "${e::class.simpleName}: ${e.message}"
 
     private fun notReady(readiness: Readiness.NotReady) = error(notReadyText(readiness))
 
