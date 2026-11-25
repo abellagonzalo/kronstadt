@@ -14,6 +14,7 @@ import kronstadt.core.domain.TextEdit
 import kronstadt.core.domain.TextRange
 import kronstadt.core.domain.Validation
 import kronstadt.core.domain.addingImports
+import kronstadt.core.domain.namePosition
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.core.port.FileStore
@@ -55,9 +56,10 @@ public class RenameSymbol(
         val canonical = declaration.canonical
         if (node.symbol.kind == SymbolKind.CONSTRUCTOR) return RenameResult.CannotRename(canonical, CONSTRUCTOR)
         val name = node.symbol.selectionRange
-        val preparation = session.prepareRename(target, declaration.analysed.document, name.start)
+        val position = node.symbol.namePosition(declaration.analysed.document)
+        val preparation = session.prepareRename(target, declaration.analysed.document, position)
         if (preparation is RenamePreparation.Refused) return RenameResult.CannotRename(canonical, preparation.reason)
-        val changes = when (val renamed = session.rename(target, declaration.analysed.document, name.start, newName)) {
+        val changes = when (val renamed = session.rename(target, declaration.analysed.document, position, newName)) {
             is Rename.Changes -> renamed.changes
             is Rename.Refused -> return RenameResult.CannotRename(canonical, renamed.reason)
         }
@@ -69,7 +71,7 @@ public class RenameSymbol(
         }
         touchedPaths.firstOrNull { files.resolve(it.toString()) != it }
             ?.let { return RenameResult.CannotRename(canonical, "it would change $it, outside the project") }
-        val oldWord = wholeWord(node.symbol.name)
+        val oldWord = nameAsWritten(node.symbol.name)
         val applied = when (val applying = applyChanges(shadow, changes, target, name, oldWord, canonical)) {
             is Applying.Applied -> applying
             is Applying.Failed -> return applying.result
@@ -183,17 +185,24 @@ public class RenameSymbol(
     /** Imports in [before] that [after] lacks, other than those it has with [oldName] renamed to [newName]. */
     private fun removedImports(before: TextDocument, after: TextDocument, oldName: String, newName: String): List<ImportDirective> {
         val kept = FileHeader.of(after.text).imports.map { it.directive.text }.toSet()
-        val renamed = wholeWord(oldName)
+        val renamed = nameAsWritten(oldName)
         return FileHeader.of(before.text).imports.map { it.directive }
             .filter { it.text !in kept && it.text.replace(renamed, newName) !in kept }
     }
 
-    private fun wholeWord(name: String) = Regex("\\b${Regex.escape(name)}\\b")
+    /**
+     * The name [name] as written in source: in backticks, and also bare if it's a plain identifier. Each place it matches
+     * is replaced by the new name as the agent gave it, which is how kotlin-lsp writes it too.
+     */
+    private fun nameAsWritten(name: String): Regex {
+        val quoted = Regex.escape("`$name`")
+        return Regex(if (PLAIN.matches(name)) "$quoted|\\b${Regex.escape(name)}\\b" else quoted)
+    }
 
     /** The renamed Symbol's canonical path in [file]'s renamed text: the same chain and kind, with [newName] last. */
     private suspend fun newPath(shadow: ShadowWorkspace, file: Path, node: SymbolTree.Node, newName: String): String? {
         val analysed = shadow.analysed(file) ?: return null
-        val names = node.chain.dropLast(1).map { it.name } + newName
+        val names = node.chain.dropLast(1).map { it.name } + newName.removeSurrounding("`")
         val renamed = analysed.nodes.singleOrNull {
             it.chain.map { symbol -> symbol.name } == names && it.symbol.kind == node.symbol.kind && it.symbol.receiver == node.symbol.receiver && it.symbol.type == node.symbol.type
         } ?: return null
@@ -206,7 +215,7 @@ public class RenameSymbol(
         var imports = 0
 
         /**
-         * Counts the occurrences of [oldName], a whole-word pattern, in [document] that [edits] change, however the code
+         * Counts the places [oldName], the name as written (see [nameAsWritten]), appears in [document] that [edits] change, however the code
          * intelligence splits them: kotlin-lsp sends minimal diffs, often several to one name (#85). One on an import line
          * counts that import once, any other is a Usage. The one within [declaration], the Symbol's own name, isn't counted.
          */
@@ -228,8 +237,11 @@ public class RenameSymbol(
     }
 
     private companion object {
+        /** A plain Kotlin identifier. */
+        val PLAIN = Regex("[\\p{L}_][\\p{L}\\p{Nd}_]*")
+
         /** A plain Kotlin identifier, or any name in backticks. */
-        val IDENTIFIER = Regex("[\\p{L}_][\\p{L}\\p{Nd}_]*|`[^`\\r\\n]+`")
+        val IDENTIFIER = Regex("${PLAIN.pattern}|`[^`\\r\\n]+`")
         const val CONSTRUCTOR = "a constructor has no name of its own; rename its class"
     }
 }

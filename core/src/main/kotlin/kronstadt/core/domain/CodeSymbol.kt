@@ -45,6 +45,17 @@ public data class CodeSymbol(
     val type: String? = null,
 )
 
+/**
+ * Where to point the code intelligence at this Symbol's name in [document]: inside the identifier. A backticked name's
+ * [CodeSymbol.selectionRange] starts at its opening backtick, where kotlin-lsp finds no name to rename, so it's the
+ * character after it.
+ */
+public fun CodeSymbol.namePosition(document: TextDocument): Position {
+    val start = selectionRange.start
+    val backticked = start < selectionRange.end && document.text.getOrNull(document.offsetOf(start)) == '`'
+    return if (backticked) start.copy(character = start.character + 1) else start
+}
+
 /** A symbol found by a workspace-wide search. */
 public data class SymbolLocation(
     val name: String,

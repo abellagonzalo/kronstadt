@@ -1,6 +1,7 @@
 package kronstadt.core.application
 
 import kronstadt.core.domain.Readiness
+import kronstadt.core.domain.namePosition
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.core.port.FileStore
@@ -40,7 +41,7 @@ public class FindUsages(
     /** Resolves the Symbol and lists its Usages, analysing every file in the tool call's one [session]. */
     private suspend fun usages(session: AnalysisSession, parsed: ParsedLookup, fileFilter: Path?): FindUsagesResult {
         val declaration = resolver.resolve(session, parsed).getOrElse { return FindUsagesResult.LookupFailed(it) }
-        val usagesAndImports = session.references(declaration.analysed.file, declaration.analysed.document, declaration.node.symbol.selectionRange.start)
+        val usagesAndImports = session.references(declaration.analysed.file, declaration.analysed.document, declaration.node.symbol.namePosition(declaration.analysed.document))
             .filter { files.resolve(it.file.toString()) == it.file && (fileFilter == null || it.file == fileFilter) }
         var imports = 0
         // Only text is needed to tell imports apart; trees are fetched for the files shown.
