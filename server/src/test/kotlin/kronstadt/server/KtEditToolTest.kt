@@ -554,6 +554,32 @@ class KtEditToolTest {
     }
 
     @Test
+    fun `a Symbol an earlier Operation renamed away in its one file fails, naming the file and its close names`() = runTest {
+        val source = "package a\n\nfun greet(): Int = 1\n"
+        val greets = "package a\n\nfun greets(): Int = 1\n"
+        val file = root.resolve("B.kt").apply { writeText(source) }
+        symbolsByText[source] = listOf(
+            CodeSymbol("greet", SymbolKind.FUNCTION, TextRange(Position(2, 0), Position(2, 20)), TextRange(Position(2, 4), Position(2, 9)), emptyList(), parameterTypes = "", type = "(): Int"),
+        )
+        symbolsByText[greets] = listOf(
+            CodeSymbol("greets", SymbolKind.FUNCTION, TextRange(Position(2, 0), Position(2, 21)), TextRange(Position(2, 4), Position(2, 10)), emptyList(), parameterTypes = "", type = "(): Int"),
+        )
+
+        val (failed, text) = ktEdit(
+            """{"operations": [{"type": "replace", "file": "B.kt", "symbol": "greet", "code": "fun greets(): Int = 1"}, """ +
+                """{"type": "replace", "file": "B.kt", "symbol": "greet", "code": "fun greet(): Int = 2"}]}""",
+        )
+
+        assertEquals(true, failed)
+        assertEquals(
+            "Operation 1: 'greet' in B.kt was removed or renamed by an earlier Operation of this Edit; target what that " +
+                "Operation left. Close names:\n  greets\nNothing written.",
+            text,
+        )
+        assertEquals(source, file.readText())
+    }
+
+    @Test
     fun `a Symbol Path without a file that earlier Operations renamed away in each of its files fails, naming each with its close names`() = runTest {
         val source = "package a\n\nfun greet(): Int = 1\n"
         val greets = "package a\n\nfun greets(): Int = 1\n"

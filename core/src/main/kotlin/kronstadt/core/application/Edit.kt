@@ -244,8 +244,7 @@ public class Edit(
 
     /**
      * The failure for [parsed] when earlier Operations removed or renamed it in every file of [onDisk], its matches on
-     * disk, each named with close names in its current text: [OperationFailure.RemovedEarlier] if they're all in one file.
-     * Null if there are none, or any is still there or unreadable.
+     * disk, with close names in each file's current text. Null if there are none, or any is still there or unreadable.
      */
     private suspend fun removedEarlier(
         shadow: ShadowWorkspace,
@@ -254,14 +253,10 @@ public class Edit(
     ): OperationFailure? {
         val removals = onDisk.distinctBy { (shown, _) -> shown.file }.map { (shown, file) ->
             val removed = file?.let { shadow.resolve(it, parsed) } as? ShadowWorkspace.Lookup.RemovedEarlier ?: return null
-            OperationFailure.RemovedEarlierInFiles.Removal(shown.file, removed.suggestions)
+            shown.file to removed.suggestions
         }
-        val only = removals.singleOrNull()
-        return when {
-            removals.isEmpty() -> null
-            only != null -> OperationFailure.RemovedEarlier(parsed.symbol, only.file, only.suggestions)
-            else -> OperationFailure.RemovedEarlierInFiles(parsed.symbol, removals)
-        }
+        if (removals.isEmpty()) return null
+        return OperationFailure.RemovedEarlier(parsed.symbol, removals.map { it.first }, removals.flatMap { it.second })
     }
 
     /**
@@ -283,7 +278,7 @@ public class Edit(
             is ShadowWorkspace.Lookup.Found -> lookup
             is ShadowWorkspace.Lookup.Failed -> return Applied.Failed(OperationFailure.LookupFailed(lookup.failure))
             is ShadowWorkspace.Lookup.RemovedEarlier ->
-                return Applied.Failed(OperationFailure.RemovedEarlier(parsed.symbol, shown, lookup.suggestions))
+                return Applied.Failed(OperationFailure.RemovedEarlier(parsed.symbol, listOf(shown), lookup.suggestions))
         }
         val document = found.document
         val span = found.span
@@ -545,18 +540,13 @@ public sealed interface OperationFailure {
     public data class LookupFailed(val failure: LookupFailure) : OperationFailure
 
     /**
-     * [symbol] is in [file] on disk, but an earlier Operation of this Edit removed or renamed it; [suggestions] are
-     * close names in what the earlier Operations left.
+     * [symbol] is on disk in [files], one or more, but earlier Operations of this Edit removed or renamed it in each of them;
+     * [suggestions] are close names in what those Operations left. Several files only when [symbol] was passed without a file.
      */
-    public data class RemovedEarlier(val symbol: String, val file: String, val suggestions: List<SymbolCandidate>) : OperationFailure
-
-    /**
-     * [symbol], passed without a file, is in two or more files on disk, but earlier Operations of this Edit removed or renamed
-     * it in every one of them; each of [removals] names one such file with close names in what those Operations left.
-     */
-    public data class RemovedEarlierInFiles(val symbol: String, val removals: List<Removal>) : OperationFailure {
-        /** [file] no longer has the Symbol; [suggestions] are close names in its current text. */
-        public data class Removal(val file: String, val suggestions: List<SymbolCandidate>)
+    public data class RemovedEarlier(val symbol: String, val files: List<String>, val suggestions: List<SymbolCandidate>) : OperationFailure {
+        init {
+            require(files.isNotEmpty()) { "'$symbol' must have been removed earlier in at least one file" }
+        }
     }
 
     /**

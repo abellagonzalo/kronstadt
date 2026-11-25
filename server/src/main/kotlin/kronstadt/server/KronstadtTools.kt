@@ -500,16 +500,17 @@ internal class KronstadtTools(
     /** Why an Operation of [type], as the agent named it, can't be applied. */
     private fun failure(failure: OperationFailure, type: String): String = when (failure) {
         is OperationFailure.LookupFailed -> sentence(describe(failure.failure, "kt_edit"))
-        is OperationFailure.RemovedEarlier ->
-            "'${failure.symbol}' in ${failure.file} was removed or renamed by an earlier Operation of this Edit; target " +
-                "what that Operation left." +
-                (if (failure.suggestions.isEmpty()) "" else " Close names:\n" + candidates(failure.suggestions, withFiles = false) + "\n")
-        is OperationFailure.RemovedEarlierInFiles -> {
-            val files = failure.removals.map { it.file }
-            val suggestions = failure.removals.flatMap { it.suggestions }
-            "'${failure.symbol}' was removed or renamed by earlier Operations of this Edit in " +
-                files.dropLast(1).joinToString(", ") + " and " + files.last() + "; target what those Operations left." +
-                (if (suggestions.isEmpty()) "" else " Close names:\n" + candidates(suggestions, withFiles = true) + "\n")
+        is OperationFailure.RemovedEarlier -> {
+            val files = failure.files
+            val several = files.size > 1
+            (if (several) {
+                "'${failure.symbol}' was removed or renamed by earlier Operations of this Edit in " +
+                    files.dropLast(1).joinToString(", ") + " and " + files.last() + "; target what those Operations left."
+            } else {
+                "'${failure.symbol}' in ${files.single()} was removed or renamed by an earlier Operation of this Edit; target " +
+                    "what that Operation left."
+            }) +
+                (if (failure.suggestions.isEmpty()) "" else " Close names:\n" + candidates(failure.suggestions, withFiles = several) + "\n")
         }
         is OperationFailure.NeedsFile ->
             "'${failure.symbol}' exists only in what earlier Operations of this Edit wrote, and a Symbol Path without a " +
