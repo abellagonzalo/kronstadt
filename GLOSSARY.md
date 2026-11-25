@@ -37,7 +37,7 @@ A single step inside an Edit (replace, insert before or after, delete, or a text
 _Avoid_: action, command, step
 
 **Shadow Workspace**:
-Kronstadt's in-memory copy of the files one edit touches, which the language server sees and validates before Write-back. It lasts only as long as that edit.
+Kronstadt's in-memory copy of the files one edit touches, which the language server sees and validates before Write-back. It is how the edit sees the project so far: the files it touched as its earlier Operations left them, and every other file as it is on disk. Each Operation's Symbol Path is looked up in that view. It lasts only as long as that edit.
 _Avoid_: shadow file system, in-memory buffer, working memory copy
 
 **Validation**:
