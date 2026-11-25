@@ -121,13 +121,8 @@ private class HeaderScanner(private val text: String) {
     /** Whether the whitespace from [i] on holds a blank line or runs to the end of the file. [i] doesn't move. */
     private fun blankLineFollows(): Boolean {
         var j = i
-        var lineBreaks = 0
-        while (j < text.length && text[j].isWhitespace()) {
-            val crlf = text[j] == '\r' && text.getOrNull(j + 1) == '\n'
-            if (text[j] == '\n' || (text[j] == '\r' && !crlf)) lineBreaks++
-            j++
-        }
-        return lineBreaks >= 2 || j == text.length
+        while (j < text.length && text[j].isWhitespace()) j++
+        return j == text.length || TextDocument.LINE_BREAK.findAll(text.substring(i, j)).count() >= 2
     }
 
     /**
@@ -199,7 +194,7 @@ private class HeaderScanner(private val text: String) {
     }
 
     private fun skipLine() {
-        while (i < text.length && text[i] != '\n' && text[i] != '\r') i++
+        i = TextDocument.LINE_BREAK.find(text, i)?.range?.first ?: text.length
     }
 
     /** Kotlin block comments nest; an unclosed one runs to the end of the file. */

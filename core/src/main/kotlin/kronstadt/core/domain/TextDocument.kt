@@ -8,8 +8,10 @@ package kronstadt.core.domain
  * Line terminators recognised: `\n`, `\r\n`, and a lone `\r` (as the LSP spec requires).
  */
 public class TextDocument(public val text: String) {
+    private val lineBreaks: List<IntRange> = LINE_BREAK.findAll(text).map { it.range }.toList()
+
     /** Offset of the first character of each line. Always contains at least one entry (line 0). */
-    private val lineStarts: IntArray = computeLineStarts(text)
+    private val lineStarts: IntArray = (listOf(0) + lineBreaks.map { it.last + 1 }).toIntArray()
 
     public val lineCount: Int get() = lineStarts.size
 
@@ -75,12 +77,7 @@ public class TextDocument(public val text: String) {
     }
 
     /** Offset just past the last content character of [line], i.e. where its terminator starts. */
-    private fun lineContentEnd(line: Int): Int {
-        if (line == lineCount - 1) return text.length
-        val nextStart = lineStarts[line + 1]
-        val crlf = nextStart >= 2 && text[nextStart - 2] == '\r' && text[nextStart - 1] == '\n'
-        return nextStart - if (crlf) 2 else 1
-    }
+    private fun lineContentEnd(line: Int): Int = if (line == lineCount - 1) text.length else lineBreaks[line].first
 
     override fun equals(other: Any?): Boolean = other is TextDocument && other.text == text
 
@@ -88,23 +85,11 @@ public class TextDocument(public val text: String) {
 
     override fun toString(): String = "TextDocument(${text.length} chars, $lineCount lines)"
 
-    private companion object {
-        fun computeLineStarts(text: String): IntArray {
-            val starts = ArrayList<Int>().apply { add(0) }
-            var i = 0
-            while (i < text.length) {
-                when (text[i]) {
-                    '\n' -> starts.add(i + 1)
-                    '\r' -> if (i + 1 < text.length && text[i + 1] == '\n') {
-                        starts.add(i + 2)
-                        i++
-                    } else {
-                        starts.add(i + 1)
-                    }
-                }
-                i++
-            }
-            return starts.toIntArray()
-        }
+    internal companion object {
+        /**
+         * One line terminator: `\r\n`, a lone `\r` or a lone `\n`. The `\r` and the `\n` of a `\r\n` are never one of
+         * their own, wherever a search starts, so it splits a snippet and finds a text's line breaks alike.
+         */
+        internal val LINE_BREAK: Regex = Regex("""\r\n|\r(?!\n)|(?<!\r)\n""")
     }
 }

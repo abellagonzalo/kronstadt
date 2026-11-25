@@ -5,15 +5,15 @@ import kronstadt.core.domain.TextDocument
 
 /**
  * The ranges (offsets) [snippet] occurs at within [range] of [document]'s text, overlapping occurrences included ("aa"
- * occurs twice in "aaa"). Each line break in [snippet] (`\n`, `\r\n` or a lone `\r`) matches one whole line break of
+ * occurs twice in "aaa"). Each line break in [snippet] (a [TextDocument.LINE_BREAK]) matches one whole line break of
  * the text, of any of those kinds, so an occurrence may be longer or shorter than [snippet]; everything else matches
  * exactly as written, whitespace included (ADR 0004). An occurrence never starts or ends inside a `\r\n`.
  */
-internal fun exactOccurrences(document: TextDocument, snippet: String, range: IntRange): List<IntRange> {
+internal fun occurrences(document: TextDocument, snippet: String, range: IntRange): List<IntRange> {
     if (snippet.isEmpty()) return emptyList()
     val text = document.text
-    // A `\r` before a `\n`, or a `\n` after a `\r`, is half of a `\r\n`, never a line break of its own.
-    val pattern = Regex(snippet.split(LINE_BREAK).joinToString("""(?:\r\n|\r(?!\n)|(?<!\r)\n)""") { Regex.escape(it) })
+    val lineBreak = TextDocument.LINE_BREAK
+    val pattern = Regex(snippet.split(lineBreak).joinToString("(?:${lineBreak.pattern})") { Regex.escape(it) })
     return generateSequence(pattern.find(text, range.first)) { pattern.find(text, it.range.first + 1) }
         .map { it.range }
         .takeWhile { it.first <= range.last }
@@ -21,11 +21,9 @@ internal fun exactOccurrences(document: TextDocument, snippet: String, range: In
         .toList()
 }
 
-private val LINE_BREAK = Regex("\r\n|\r|\n")
-
-/** The lines (1-based, trimmed) the occurrences starting at [offsets] are on, each once. */
-internal fun occurrenceLines(document: TextDocument, offsets: List<Int>): List<Occurrence> =
-    offsets.map { document.positionOf(it).line }.distinct().map { Occurrence(it + 1, document.line(it).trim()) }
+/** The lines (1-based, trimmed) [occurrences] start on, each once. */
+internal fun occurrenceLines(document: TextDocument, occurrences: List<IntRange>): List<Occurrence> =
+    occurrences.map { document.positionOf(it.first).line }.distinct().map { Occurrence(it + 1, document.line(it).trim()) }
 
 /**
  * Where [snippet], which doesn't occur exactly as written within [range] (offsets) of [document], occurs once if each

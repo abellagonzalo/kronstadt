@@ -34,6 +34,11 @@ private class Lexer(private val text: String) {
     private var line = 0
     private var i = 0
 
+    /** The length of the [TextDocument.LINE_BREAK] starting at each offset of [text], 0 where none does. */
+    private val lineBreakLengths = ByteArray(text.length).also { lengths ->
+        TextDocument.LINE_BREAK.findAll(text).forEach { lengths[it.range.first] = it.value.length.toByte() }
+    }
+
     fun run(): SourceLines {
         while (i < text.length) {
             if (lineBreak()) continue
@@ -49,12 +54,12 @@ private class Lexer(private val text: String) {
 
     private fun at(token: String) = text.startsWith(token, i)
 
-    private fun atLineBreak() = text[i] == '\n' || text[i] == '\r'
+    private fun atLineBreak(offset: Int = i) = offset < text.length && lineBreakLengths[offset] > 0
 
     /** Steps over a line break, if [i] is at one, and records what the next line starts inside. */
     private fun lineBreak(): Boolean {
         if (!atLineBreak()) return false
-        i += if (at("\r\n")) 2 else 1
+        i += lineBreakLengths[i]
         line++
         if (contexts.last() == QuotedString) contexts.removeLast()
         if (RawString in contexts) rawString += line else if (contexts.last() is BlockComment) blockComment += line
@@ -104,7 +109,7 @@ private class Lexer(private val text: String) {
 
     private fun quotedString() {
         when {
-            at("\\") -> i += if (i + 1 < text.length && text[i + 1] != '\n' && text[i + 1] != '\r') 2 else 1
+            at("\\") -> i += if (i + 1 < text.length && !atLineBreak(i + 1)) 2 else 1
             at("\"") -> { contexts.removeLast(); i++ }
             at("\${") -> { contexts += Code(); i += 2 }
             else -> i++

@@ -47,6 +47,12 @@ import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolKind
 
 /**
+ * How a snippet ('old', 'at') matches line endings, as the tools state it (ADR 0004): a "line break" in the snippet,
+ * a "line ending" in the file.
+ */
+private const val LINE_BREAK_RULE = "any line break matches any line ending"
+
+/**
  * MCP adapter: tool schemas plus thin handlers that parse arguments, call a use case, and turn its result
  * into text the agent can act on. No business logic lives here.
  */
@@ -182,8 +188,8 @@ internal class KronstadtTools(
                     )
                     stringProperty(
                         "at",
-                        "Optional snippet of the Symbol's source, exactly as written (any line break matches any line " +
-                            "ending) and occurring exactly once in it, " +
+                        "Optional snippet of the Symbol's source, exactly as written ($LINE_BREAK_RULE) and occurring " +
+                            "exactly once in it, " +
                             "e.g. 'service.place(cmd)'; 'name' is looked up inside it.",
                     )
                     stringProperty(
@@ -207,7 +213,7 @@ internal class KronstadtTools(
                 "('insert_before' goes above its KDoc and annotations). 'delete' removes the whole span and one " +
                 "blank line next to it. Code is re-indented to the target's column, so indentation needn't match. " +
                 "'edit_in' replaces 'old', which must occur exactly once in the Symbol's span (whitespace included, " +
-                "but any line break matches any line ending; no regex or fuzzy matching) and must not start inside a " +
+                "but $LINE_BREAK_RULE; no regex or fuzzy matching) and must not start inside a " +
                 "line's indentation, with 'new' as written (only its line breaks become the file's); it changes one line of a large Symbol cheaply. " +
                 "With a file and no symbol, 'edit_in' works on the whole file: the only way to change text outside " +
                 "any Symbol, such as the package line, file annotations or imports. " +
@@ -511,7 +517,7 @@ internal class KronstadtTools(
                     (if (failure.scope.wholeFile) "Read the file to copy it." else "Copy 'old' from kt_read_symbol output.") +
                     sharedName
             } else if (failure.lines.isEmpty()) {
-                "'old' doesn't occur in $missingIn, exactly as written (whitespace included; any line break matches any line ending). " +
+                "'old' doesn't occur in $missingIn, exactly as written (whitespace included; $LINE_BREAK_RULE). " +
                     (if (failure.scope.wholeFile) "Read the file to copy it." else "Use kt_read_symbol to see its source.") +
                     sharedName
             } else {

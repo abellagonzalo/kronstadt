@@ -379,10 +379,10 @@ public class Edit(
                 val old = operation.old
                 val start = document.offsetOf(Position(scope.first, 0))
                 val end = document.offsetOf(Position(scope.last, Int.MAX_VALUE))
-                val matches = exactOccurrences(document, old, start until end)
+                val matches = occurrences(document, old, start until end)
                 val match = matches.singleOrNull() ?: return NotExactlyOnce(
                     matches.size,
-                    occurrenceLines(document, matches.map { it.first }),
+                    occurrenceLines(document, matches),
                     if (matches.isEmpty()) indentationHint(document, old, start until end) else null,
                 )
                 val at = document.positionOf(match.first)
