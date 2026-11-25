@@ -137,6 +137,33 @@ class KtEditToolTest {
     }
 
     @Test
+    fun `a failure that ends on a list is followed by Nothing written on its own line, the rejected Edit's suffix with it`() = runTest {
+        val broken = "package a\n\nfun greet(): Int = Bravo.one\n"
+        diagnostics[broken] = listOf(
+            Diagnostic(TextRange(Position(2, 19), Position(2, 24)), Severity.ERROR, "Unresolved reference 'Bravo'.", "UNRESOLVED_REFERENCE"),
+        )
+        file.writeText("package a\n\nfun greet(): Int = 1\nfun regret(): Int = 2\n")
+
+        val (_, plainText) = ktEdit("""{"operations": [{"type": "edit_in", "file": "A.kt", "old": "re", "new": "re"}]}""")
+        file.writeText("package a\n\nfun greet(): Int = 1\n")
+        val (rejected, rejectedText) = ktEdit("""{"operations": [{"type": "edit_in", "file": "A.kt", "old": "= 1", "new": "= Bravo.one"}]}""")
+        assertEquals(true, rejected, rejectedText)
+        val (_, keptText) = ktEdit("""{"amend": "e1", "operations": [{"type": "edit_in", "file": "A.kt", "old": "e", "new": "e"}]}""")
+
+        assertEquals(
+            "Operation 0: 'old' occurs 3 times in A.kt; make it longer so it occurs exactly once:\n" +
+                "  L3: fun greet(): Int = 1\n  L4: fun regret(): Int = 2\nNothing written.",
+            plainText,
+        )
+        assertEquals(
+            "Operation 0: 'old' occurs 4 times in A.kt; make it longer so it occurs exactly once:\n" +
+                "  L1: package a\n  L3: fun greet(): Int = Bravo.one\n" +
+                "Nothing written; the rejected Edit e1 is still kept: amend it again with kt_edit amend: \"e1\" and only the fixing Operations.",
+            keptText,
+        )
+    }
+
+    @Test
     fun `the kt_edit description and schema explain amend`() {
         val tool = tools.tool("kt_edit")
 
@@ -531,7 +558,7 @@ class KtEditToolTest {
         assertEquals(true, failed)
         assertEquals(
             "Operation 2: 'greet' was removed or renamed by earlier Operations of this Edit in B.kt and C.kt; target what " +
-                "those Operations left. Close names:\n  greets — B.kt\n  greets — C.kt\n Nothing written.",
+                "those Operations left. Close names:\n  greets — B.kt\n  greets — C.kt\nNothing written.",
             text,
         )
         assertEquals(listOf(source, source), files.map { it.readText() })
