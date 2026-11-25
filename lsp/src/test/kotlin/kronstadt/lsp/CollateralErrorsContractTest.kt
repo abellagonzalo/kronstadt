@@ -35,7 +35,7 @@ import kotlin.time.Duration.Companion.minutes
  * #84, the shape #38 hit: an Edit changes a function's return type, Validation passes for the file it touched, and a
  * caller in another file no longer compiles. Does kt_edit, through real kotlin-lsp, report that caller's error as a
  * Collateral Error, and write the Edit anyway? Uses its own copy of the fixture, and so its own kotlin-lsp, because it
- * writes to fixture files, and adds a sealed interface with a `when` over it in another file (#133).
+ * writes to fixture files. Its copy also gets a sealed interface, and a `when` over it in another file (#133).
  */
 @Tag("contract")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)

@@ -67,7 +67,7 @@ class SealedSubtypeCollateralTest {
     }
 
     @Test
-    fun `adding a subtype nested in a sealed interface reports the when over it it made non-exhaustive`() = runTest {
+    fun `adding a subtype nested in a sealed interface reports the when over it that it made non-exhaustive`() = runTest {
         val base = "package a\n\nsealed interface Result {\n    object Ok : Result\n}\n"
         val current = "package a\n\nsealed interface Result {\n    object Ok : Result\n    object Err : Result\n}\n"
         fun resultSymbols(text: String, members: List<CodeSymbol>) =

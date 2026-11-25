@@ -86,6 +86,11 @@ public object DeclarationHead {
                 c == '/' && text.startsWith("//", i) -> i = text.indexOf('\n', i).let { if (it < 0) end else it } - 1
                 c == '/' && text.startsWith("/*", i) -> i = text.indexOf("*/", i + 2).let { if (it < 0) end else it + 1 }
                 c == '-' && text.startsWith("->", i) -> i++
+                // A function type, such as `(Int) -> Unit`, names no class to extend.
+                c == '(' && listed && depth == 0 && expectingName -> {
+                    expectingName = false
+                    depth++
+                }
                 c == '(' || c == '[' || c == '<' -> depth++
                 c == ')' || c == ']' || c == '>' -> depth = maxOf(0, depth - 1)
                 depth > 0 -> {}
@@ -97,7 +102,7 @@ public object DeclarationHead {
                     expectingName = false
                     i++
                 }
-                c == '@' -> i = qualifiedName(text, i + 1, end).first - 1
+                c == '@' -> i = skipArguments(text, qualifiedName(text, i + 1, end).first, end) - 1
                 expectingName && Character.isJavaIdentifierStart(c) -> {
                     val (after, lastSegment) = qualifiedName(text, i, end)
                     names += document.positionOf(lastSegment)
@@ -149,5 +154,21 @@ public object DeclarationHead {
         var i = open + 1
         while (i < end && text[i] != quote) i += if (text[i] == '\\') 2 else 1
         return minOf(i + 1, end)
+    }
+
+    /** Index just past the parenthesized arguments opening at [from], such as an annotation's; [from] if there are none. */
+    private fun skipArguments(text: String, from: Int, end: Int): Int {
+        if (text.getOrNull(from) != '(') return from
+        var depth = 0
+        var i = from
+        while (i < end) {
+            when (text[i]) {
+                '"', '\'' -> i = skipQuoted(text, i, end) - 1
+                '(' -> depth++
+                ')' -> if (--depth == 0) return i + 1
+            }
+            i++
+        }
+        return end
     }
 }

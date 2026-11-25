@@ -55,17 +55,17 @@ internal class CollateralCheck(
         }
 
     private suspend fun check(changed: List<ChangedFile>): CollateralErrors {
-        val headersChanged = changed.filterNot { it.created }.flatMap { file ->
+        val withChangedHeaders = changed.filterNot { it.created }.flatMap { file ->
             headersChanged(analysed(file.file, file.base), analysed(file.file, file.current))
-                .map { Used(file.file, file.base, it.symbol.namePosition(file.base)) }
+                .map { CheckedSymbol(file.file, file.base, it.symbol.namePosition(file.base)) }
         }
         val sealedExtended = sealedSupertypesOfNewSymbols(changed)
-        if (headersChanged.isEmpty() && sealedExtended.isEmpty()) return CollateralErrors()
+        if (withChangedHeaders.isEmpty() && sealedExtended.isEmpty()) return CollateralErrors()
         // Every changed file back at its base text: Usages and base diagnostics are of the code as it was before the Edit.
         changed.forEach { session.documentSymbols(it.file, it.base) }
         val changedFiles = changed.map { it.file }.toSet()
-        val using = (headersChanged + sealedExtended).distinct()
-            .flatMap { session.references(it.file, it.base, it.name) }
+        val using = (withChangedHeaders + sealedExtended).distinct()
+            .flatMap { session.references(it.file, it.base, it.namePosition) }
             .map { it.file }
             .distinct()
             .filter { it !in changedFiles && AnalysedFile.isKotlin(it) && files.resolve(it.toString()) == it }
@@ -89,15 +89,15 @@ internal class CollateralCheck(
         )
     }
 
-    /** A Symbol whose Usages before the Edit are checked: its name is at [name] in [base], [file]'s text before the Edit. */
-    private data class Used(val file: Path, val base: TextDocument, val name: Position)
+    /** A Symbol whose Usages before the Edit are checked, its name at [namePosition] in [base], [file]'s text then. */
+    private data class CheckedSymbol(val file: Path, val base: TextDocument, val namePosition: Position)
 
     /**
      * The sealed types that existed before the Edit and that a class-like Symbol it added (one whose path doesn't resolve
      * in its file's base text) names as a direct supertype: a `when` over one of them may no longer be exhaustive. A
      * supertype that doesn't resolve to project source is skipped.
      */
-    private suspend fun sealedSupertypesOfNewSymbols(changed: List<ChangedFile>): List<Used> {
+    private suspend fun sealedSupertypesOfNewSymbols(changed: List<ChangedFile>): List<CheckedSymbol> {
         val added = changed.flatMap { file ->
             val current = analysed(file.file, file.current)
             val base = if (file.created) null else analysed(file.file, file.base)
@@ -121,7 +121,7 @@ internal class CollateralCheck(
      * The class-like Symbol declared at [location] as it was before the Edit, if it was sealed then; [changed] is its file
      * if the Edit changed it. Null for one the Edit created.
      */
-    private suspend fun sealedBeforeEdit(location: SourceLocation, changed: ChangedFile?): Used? {
+    private suspend fun sealedBeforeEdit(location: SourceLocation, changed: ChangedFile?): CheckedSymbol? {
         if (changed?.created == true) return null
         val file = location.file
         val current = changed?.current ?: files.read(file) ?: return null
@@ -133,7 +133,7 @@ internal class CollateralCheck(
             (inBase.resolve(inCurrent.path(node)) as? AnalysedFile.Resolution.Found)?.node ?: return null
         }
         if (!DeclarationHead.isSealed(base, atBase.symbol)) return null
-        return Used(file, base, atBase.symbol.namePosition(base))
+        return CheckedSymbol(file, base, atBase.symbol.namePosition(base))
     }
 
     private companion object {

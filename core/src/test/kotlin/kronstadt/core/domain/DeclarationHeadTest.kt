@@ -48,6 +48,7 @@ class DeclarationHeadTest {
     fun `a declaration without supertypes has none, whatever its constructor's types`() {
         assertEquals(emptyList(), supertypes("class Foo(val x: Int) {\n    val y: Base = Base()\n}"))
         assertEquals(emptyList(), supertypes("class Foo @Inject constructor(val x: Int)"))
+        assertEquals(listOf("Bar"), supertypes("class Foo : (Int) -> Unit, Bar"))
     }
 
     @Test
