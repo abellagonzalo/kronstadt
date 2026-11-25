@@ -89,6 +89,18 @@ claude mcp add --scope user kronstadt -- /path/to/kronstadt/server/build/install
 
 Rebuilding with `./gradlew installDist` updates that binary in place. Restart Claude Code sessions to pick it up.
 
+### Which Java it runs on
+
+Claude Code starts Kronstadt in each project's directory, and a project may pin an older JDK (jenv, asdf, sdkman)
+through `JAVA_HOME` or `PATH`. So the launcher doesn't follow them: it runs on the JDK it was built with, whose path
+`installDist` records in it. To run it on another JDK 25+, set `KRONSTADT_JAVA_HOME` to that JDK's home, e.g. with
+`claude mcp add ... -e KRONSTADT_JAVA_HOME=/path/to/jdk-25 ...`. If the recorded JDK is gone (say a package manager
+upgraded it), the launcher falls back to `JAVA_HOME`, then `java` on the `PATH`; rerun `./gradlew installDist` to
+record the current one.
+
+If Claude Code shows `CONNECTION_CLOSED` as soon as Kronstadt starts, check its stderr (`claude --debug`, or run the
+launcher yourself from that project's directory) for `UnsupportedClassVersionError`: it ran on a JDK older than 25.
+
 To make agents use Kronstadt for every Kotlin change and report what goes wrong, add this to `~/.claude/CLAUDE.md`:
 
 ```markdown
