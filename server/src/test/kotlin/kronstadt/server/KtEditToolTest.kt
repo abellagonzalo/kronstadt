@@ -317,7 +317,7 @@ class KtEditToolTest {
         assertEquals(true, hinted)
         assertEquals(
             "Operation 0: 'old' doesn't occur in edit (the property) in A.kt exactly as written, but occurs once at line 4 if " +
-                "indentation is ignored: the file indents it by 8 spaces, 'old' by 2 spaces. Copy 'old' from kt_read_symbol " +
+                "indentation is ignored: the file indents line 5 by 8 spaces, 'old' by 2 spaces. Copy 'old' from kt_read_symbol " +
                 "output. A function shares its name: edit(Int). Nothing written.",
             hintedText,
         )

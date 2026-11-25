@@ -247,7 +247,7 @@ class GetDefinitionTest {
                 symbol = "welcome",
                 file = callerKt,
                 lines = emptyList(),
-                indentation = IndentationHint(4, IndentationHint.Indents(file = "    ", snippet = "  ")),
+                indentation = IndentationHint(4, IndentationHint.Indents(line = 4, file = "    ", snippet = "  ")),
             ),
             GetDefinition(files, intelligence)("welcome", "greet", at = at),
         )
