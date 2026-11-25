@@ -30,6 +30,7 @@ class KtFindUsagesToolTest {
 
     private val tools = ToolHarness(root, ImportsOnlyIntelligence(root))
 
+    /** Calls kt_find_usages with [arguments], JSON as an agent writes it; whether it failed, and its text. */
     private suspend fun findUsages(arguments: String): Pair<Boolean, String> = tools.call("kt_find_usages", arguments)
 
     @Test
@@ -83,7 +84,8 @@ class KtFindUsagesToolTest {
 
     @Test
     fun `a blank declaredIn is as if it were left out`() = runTest {
-        val absent = findUsages("""{"symbol": "stay"}""")
+        val absent = true to "'stay' can't be resolved without a file: so many declarations are named 'stay', dependencies' included, " +
+            "that $INDEX_STOPS and may not list them all; pass the file that declares it as declaredIn"
         assertEquals(absent, findUsages("""{"symbol": "stay", "declaredIn": ""}"""))
         assertEquals(absent, findUsages("""{"symbol": "stay", "declaredIn": "  "}"""))
     }
@@ -140,7 +142,7 @@ class KtFindUsagesToolTest {
 
 /**
  * Always ready. A.kt declares `greet`, `wave` and `stay` on lines 3 to 5; the index can't list every declaration of any
- * name, so nothing resolves project-wide. `greet` is imported by B.kt and C.kt, `wave` by B.kt alone, `stay` by none.
+ * name, so nothing resolves project-wide. A Symbol's references are told apart by the line it is declared on. `greet` is imported by B.kt and C.kt, `wave` by B.kt alone, `stay` by none.
  */
 private class ImportsOnlyIntelligence(private val root: Path) : UnstubbedCodeIntelligence() {
     override suspend fun <T> session(block: suspend (AnalysisSession) -> T): T = block(object : UnstubbedAnalysisSession() {
@@ -149,8 +151,8 @@ private class ImportsOnlyIntelligence(private val root: Path) : UnstubbedCodeInt
 
         override suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation> =
             when (position.line) {
-                2 -> listOf(importOn("B.kt", 2), importOn("C.kt", 2))
-                3 -> listOf(importOn("B.kt", 3))
+                2 -> listOf(importOn("B.kt", 2, "greet"), importOn("C.kt", 2, "greet"))
+                3 -> listOf(importOn("B.kt", 3, "wave"))
                 else -> emptyList()
             }
     })
@@ -170,6 +172,7 @@ private class ImportsOnlyIntelligence(private val root: Path) : UnstubbedCodeInt
         type = "(): Unit",
     )
 
-    /** The imported name on 0-based [line] of [file]: `import a.<name>`. */
-    private fun importOn(file: String, line: Int) = SourceLocation(root.resolve(file), TextRange(Position(line, 9), Position(line, 14)))
+    /** The imported [name] on 0-based [line] of [file]: `import a.<name>`. */
+    private fun importOn(file: String, line: Int, name: String) =
+        SourceLocation(root.resolve(file), TextRange(Position(line, 9), Position(line, 9 + name.length)))
 }
