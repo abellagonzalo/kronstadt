@@ -4,7 +4,7 @@ import kronstadt.core.domain.TextDocument
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-/** [occurrences]: a snippet matched exactly as written, except that any line break matches any line break. */
+/** [occurrences]: a snippet matched exactly as written, except that any line break matches any line ending. */
 class OccurrencesTest {
     private fun occurrences(text: String, snippet: String, range: IntRange = text.indices) =
         occurrences(TextDocument(text), snippet, range)
