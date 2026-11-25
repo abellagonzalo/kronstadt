@@ -42,12 +42,13 @@ class SeedOnExitContractTest {
         assertContains(found.text, "Shape", message = "kotlin-lsp should be ready: $found")
         leftovers += kronstadt.process.toHandle().descendants().toList()
 
+        kronstadt.awaitIndexComplete()
         kronstadt.endLikeClaudeCode()
 
         val slot = home.resolve("Library/Caches/kronstadt/seed")
         val deadline = TimeSource.Monotonic.markNow() + 60.seconds
         while (seedIndex(slot) == null && deadline.hasNotPassedNow()) Thread.sleep(200)
-        val seed = assertNotNull(seedIndex(slot), "no Index Seed in $slot; Kronstadt's stderr:\n${kronstadt.stderr()}")
+        val seed = assertNotNull(seedIndex(slot), "no Index Seed in $slot; ${kronstadt.handOffLog()}; Kronstadt's stderr:\n${kronstadt.stderr()}")
         assertContains(seed.resolveSibling("last-refresh.log").readText(), "kronstadt: refreshed the Index Seed")
     }
 }
