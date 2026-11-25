@@ -115,6 +115,30 @@ class ImportsTest {
     }
 
     @Test
+    fun `a byte order mark stays the file's first character, and a new block at the top goes right after it`() {
+        assertEquals("\uFEFFimport b.B\n\nfun f() = 1\n", adding("\uFEFFfun f() = 1\n", "b.B"))
+        assertEquals("\uFEFFimport b.A\nimport b.B\n\nfun f() = 1\n", adding("\uFEFF\nfun f() = 1\n", "b.B", "b.A"))
+        assertEquals("\uFEFFimport b.B\n", adding("\uFEFF", "b.B"))
+        // Spaced as without a mark: a last line with no line break after it gets no blank line before it.
+        assertEquals("import b.B\nfun f() = 1", adding("fun f() = 1", "b.B"))
+        assertEquals("\uFEFFimport b.B\nfun f() = 1", adding("\uFEFFfun f() = 1", "b.B"))
+    }
+
+    @Test
+    fun `after a byte order mark, a new block goes where it would without one`() {
+        assertEquals("\uFEFFpackage a\n\nimport b.B\n\nclass X\n", adding("\uFEFFpackage a\n\nclass X\n", "b.B"))
+        assertEquals(
+            "\uFEFF/* Licence */\n\nimport b.B\n\nfun f() = 1\n",
+            adding("\uFEFF/* Licence */\n\nfun f() = 1\n", "b.B"),
+        )
+        assertEquals(
+            "\uFEFFpackage a\n\nimport b.A\nimport b.B\n\nclass X\n",
+            adding("\uFEFFpackage a\n\nimport b.B\n\nclass X\n", "b.A"),
+        )
+        assertEquals("\uFEFFimport b.A\nimport b.B\n\nclass X\n", adding("\uFEFFimport b.B\n\nclass X\n", "b.A"))
+    }
+
+    @Test
     fun `each missing import goes right after the existing one sorting just before it, leaving the others in place`() {
         // IntelliJ's layout puts java and kotlin last, so the block as a whole isn't sorted.
         val source = """

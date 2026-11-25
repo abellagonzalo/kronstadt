@@ -850,4 +850,15 @@ class EditTest {
             files.content("src/C.kt"),
         )
     }
+
+    @Test
+    fun `in a file starting with a byte order mark, a create's imports go right after it`() = runTest {
+        val files = FakeFileStore(root, mapOf(path to source))
+
+        edit(createIntelligence(), files)(
+            Create("src/C.kt", "\uFEFFclass Wait(val d: Duration)\n", listOf("kotlin.time.Duration")),
+        )
+
+        assertEquals("\uFEFFimport kotlin.time.Duration\n\nclass Wait(val d: Duration)\n", files.content("src/C.kt"))
+    }
 }
