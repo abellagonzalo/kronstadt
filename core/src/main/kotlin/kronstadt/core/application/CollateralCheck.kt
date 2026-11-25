@@ -8,6 +8,7 @@ import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SymbolTree
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.Validation
+import kronstadt.core.domain.namePosition
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.FileStore
 import java.nio.file.Path
@@ -53,7 +54,7 @@ internal class CollateralCheck(
         changed.forEach { session.documentSymbols(it.file, it.base) }
         val changedFiles = changed.map { it.file }.toSet()
         val using = headersChanged
-            .flatMap { (file, node) -> session.references(file.file, file.base, node.symbol.selectionRange.start) }
+            .flatMap { (file, node) -> session.references(file.file, file.base, node.symbol.namePosition(file.base)) }
             .map { it.file }
             .distinct()
             .filter { it !in changedFiles && AnalysedFile.isKotlin(it) && files.resolve(it.toString()) == it }

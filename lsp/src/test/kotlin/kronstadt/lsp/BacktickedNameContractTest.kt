@@ -1,0 +1,172 @@
+@file:OptIn(ExperimentalPathApi::class) // copyToRecursively, deleteRecursively
+
+package kronstadt.lsp
+
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kronstadt.core.application.FindUsages
+import kronstadt.core.application.FindUsagesResult
+import kronstadt.core.application.RenameResult
+import kronstadt.core.application.RenameSymbol
+import kronstadt.core.application.RenamedFile
+import kronstadt.core.domain.FileChange
+import kronstadt.core.domain.Position
+import kronstadt.core.domain.Readiness
+import kronstadt.core.domain.Rename
+import kronstadt.core.domain.RenamePreparation
+import kronstadt.core.domain.TextDocument
+import kronstadt.core.domain.TextRange
+import kronstadt.workspace.LocalFileStore
+import org.junit.jupiter.api.AfterAll
+import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.MethodOrderer
+import org.junit.jupiter.api.Order
+import org.junit.jupiter.api.Tag
+import org.junit.jupiter.api.TestInstance
+import org.junit.jupiter.api.TestMethodOrder
+import java.nio.file.Files
+import java.nio.file.Path
+import kotlin.io.path.ExperimentalPathApi
+import kotlin.io.path.copyToRecursively
+import kotlin.io.path.deleteRecursively
+import kotlin.test.Test
+import kotlin.test.assertContains
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
+
+/**
+ * Seam 2, #169: a Symbol whose name is in backticks, the fixture's `` `backticked name` ``. Its `selectionRange` starts at
+ * the opening backtick (pinned in [KotlinLspContractTest]), where kotlin-lsp refuses to rename; Kronstadt points it
+ * inside the name instead. Uses its own copy of the fixture, with a file of Usages added, and so its own kotlin-lsp,
+ * because it renames the function.
+ */
+@Tag("contract")
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@TestMethodOrder(MethodOrderer.OrderAnnotation::class)
+class BacktickedNameContractTest {
+    private lateinit var project: Path
+    private lateinit var indexDir: Path
+    private lateinit var lsp: LspCodeIntelligence
+    private lateinit var files: LocalFileStore
+
+    @BeforeAll
+    fun start() {
+        val fixture = Path.of(requireNotNull(System.getProperty("kronstadt.fixture")) { "run via ./gradlew :lsp:contractTest" })
+        project = Files.createTempDirectory("kronstadt-fixture-backticked").toRealPath()
+        fixture.copyToRecursively(project, followLinks = false, overwrite = true)
+        Files.writeString(project.resolve(USAGES), USAGES_TEXT)
+        val command = (System.getenv("KRONSTADT_LANGUAGE_SERVER") ?: "kotlin-lsp --stdio").trim().split(Regex("\\s+"))
+        indexDir = Files.createTempDirectory("kronstadt-index").toRealPath().resolve("kotlin-server")
+        lsp = runBlocking { LspCodeIntelligence.start(command, project, indexDir) }
+        files = LocalFileStore(project)
+    }
+
+    @AfterAll
+    fun stop() {
+        if (::lsp.isInitialized) lsp.close()
+        if (::project.isInitialized) project.deleteRecursively()
+        if (::indexDir.isInitialized) indexDir.parent.deleteRecursively()
+    }
+
+    @Test
+    @Order(1)
+    fun `becomes ready`() = runBlocking {
+        withTimeout(5.minutes) {
+            while (lsp.awaitReady(Duration.ZERO) != Readiness.Ready) delay(20.milliseconds)
+        }
+    }
+
+    @Test
+    @Order(2)
+    fun `prepare-rename refuses the opening backtick and takes the name inside it, where references find the same Usages`() = runBlocking<Unit> {
+        val file = project.resolve(SPANS)
+        val document = TextDocument(Files.readString(file))
+        val line = document.text.lines().indexOfFirst { "fun `backticked name`" in it }
+        val backtick = Position(line, 4)
+        val inside = Position(line, 5)
+
+        lsp.session { session ->
+            assertEquals(RenamePreparation.Refused("Rename is not available at this position"), session.prepareRename(file, document, backtick))
+            assertEquals(
+                RenamePreparation.Renameable(TextRange(backtick, Position(line, 21)), "backticked name"),
+                session.prepareRename(file, document, inside),
+            )
+            val usages = session.references(file, document, inside)
+            assertEquals(2, usages.size, "$usages")
+            assertEquals(usages, session.references(file, document, backtick))
+        }
+    }
+
+    /** kotlin-lsp writes the new name as given: in backticks if it has them, bare if not. */
+    @Test
+    @Order(3)
+    fun `rename takes the new name as written, backticks and all`() = runBlocking<Unit> {
+        val file = project.resolve(SPANS)
+        val document = TextDocument(Files.readString(file))
+        val inside = document.positionOf(document.text.indexOf("`backticked name`") + 1)
+
+        lsp.session { session ->
+            suspend fun renamedTo(newName: String): String {
+                val answer = session.rename(file, document, inside, newName)
+                val edits = assertIs<Rename.Changes>(answer, "$answer").changes.filterIsInstance<FileChange.Edited>().single { it.file == file }.edits
+                val renamed = edits.sortedByDescending { it.range.start }.fold(document) { text, edit -> text.replace(edit.range, edit.newText) }
+                return renamed.line(inside.line).substringBefore("(")
+            }
+            assertEquals("fun `other name`", renamedTo("`other name`"))
+            assertEquals("fun `plain`", renamedTo("`plain`"))
+            assertEquals("fun plain", renamedTo("plain"))
+        }
+        // Nothing is applied.
+        assertEquals(document.text, Files.readString(file))
+    }
+
+    @Test
+    @Order(4)
+    fun `kt_find_usages finds a backticked function's Usages`() = runBlocking<Unit> {
+        assertEquals(
+            """
+        |2 usages in 1 file
+        |$USAGES
+        |  twice
+        |    L3: fun twice(): Int = `backticked name`() + `backticked name`()
+        """.trimMargin(),
+            assertIs<FindUsagesResult.Found>(FindUsages(files, lsp)("`backticked name`")).text,
+        )
+    }
+
+    @Test
+    @Order(5)
+    fun `kt_rename_symbol renames a backticked function to another backticked name, and its Usages follow`() = runBlocking<Unit> {
+        val renamed = RenameSymbol(files, lsp)("`backticked name`", "`other name`")
+
+        assertEquals(
+            RenameResult.Renamed("`other name`", listOf(RenamedFile(SPANS, usages = 0), RenamedFile(USAGES, usages = 2))),
+            renamed,
+        )
+        assertContains(Files.readString(project.resolve(SPANS)), "\nfun `other name`(): Int = 3\n")
+        assertEquals("package fixture\n\nfun twice(): Int = `other name`() + `other name`()\n", Files.readString(project.resolve(USAGES)))
+    }
+
+    @Test
+    @Order(6)
+    fun `kt_rename_symbol renames a backticked function to a plain name, and its Usages follow`() = runBlocking<Unit> {
+        val renamed = RenameSymbol(files, lsp)("`other name`", "plain")
+
+        assertEquals(
+            RenameResult.Renamed("plain", listOf(RenamedFile(SPANS, usages = 0), RenamedFile(USAGES, usages = 2))),
+            renamed,
+        )
+        assertContains(Files.readString(project.resolve(SPANS)), "\nfun plain(): Int = 3\n")
+        assertEquals("package fixture\n\nfun twice(): Int = plain() + plain()\n", Files.readString(project.resolve(USAGES)))
+    }
+
+    private companion object {
+        const val SPANS = "src/main/kotlin/fixture/Spans.kt"
+        const val USAGES = "src/main/kotlin/fixture/Backticked.kt"
+        const val USAGES_TEXT = "package fixture\n\nfun twice(): Int = `backticked name`() + `backticked name`()\n"
+    }
+}
