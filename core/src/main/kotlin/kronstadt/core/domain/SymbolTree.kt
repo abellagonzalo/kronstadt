@@ -11,7 +11,11 @@ public class SymbolTree(roots: List<CodeSymbol>) {
     }
 
     public sealed interface Resolution {
-        public data class Found(val node: Node) : Resolution
+        /**
+         * It names [node] alone. If a bare name chose it, a non-function, over same-named functions beside it (ADR 0002),
+         * [passedOver] are those functions; else it is empty.
+         */
+        public data class Found(val node: Node, val passedOver: List<Node> = emptyList()) : Resolution
         public data class Ambiguous(val candidates: List<Node>) : Resolution
         public data class NotFound(val suggestions: List<Node>) : Resolution
     }
@@ -31,9 +35,9 @@ public class SymbolTree(roots: List<CodeSymbol>) {
     }
 
     public fun resolve(path: SymbolPath): Resolution {
-        val matches = matching(path)
+        val (matches, passedOver) = match(path)
         return when (matches.size) {
-            1 -> Resolution.Found(matches.single())
+            1 -> Resolution.Found(matches.single(), passedOver)
             0 -> Resolution.NotFound(suggestionsFor(path))
             else -> Resolution.Ambiguous(matches)
         }
@@ -63,18 +67,21 @@ public class SymbolTree(roots: List<CodeSymbol>) {
         return SymbolPath(chain.map { segment(it, withSignature = true) }, anchored = true)
     }
 
-    private fun matching(path: SymbolPath): List<Node> {
+    private fun matching(path: SymbolPath): List<Node> = match(path).first
+
+    /** The Symbols [path] names, then the functions a bare name passed over for a non-function beside them. */
+    private fun match(path: SymbolPath): Pair<List<Node>, List<Node>> {
         val candidates = nodes.filter { node ->
             val chain = node.chain
             val segments = path.segments
             if (segments.size > chain.size || (path.anchored && segments.size != chain.size)) return@filter false
             segments.indices.all { i -> matches(segments[i], chain[chain.size - segments.size + i]) }
         }
-        if (path.segments.last().signature != null) return candidates
+        if (path.segments.last().signature != null) return candidates to emptyList()
         // A bare name prefers a non-function to a function beside it (`size` the property, `size(Int)` the function).
         val nonFunctionParents = candidates.filterNot { isFunction(it.symbol) }.map { it.ancestors.lastOrNull() }
-        return candidates.filterNot { node ->
-            isFunction(node.symbol) && nonFunctionParents.any { it === node.ancestors.lastOrNull() }
+        return candidates.partition { node ->
+            !(isFunction(node.symbol) && nonFunctionParents.any { it === node.ancestors.lastOrNull() })
         }
     }
 

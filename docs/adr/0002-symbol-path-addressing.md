@@ -12,6 +12,7 @@ Resolution always goes through `documentSymbol`, even when no file is given: `wo
 - Special forms: constructors are `Box/constructor(Int)`. Companions are `X/Companion/…`, or the companion's own name if it has one. Enum entries are `Color/BLUE`.
 - The receiver is part of an extension's name: `shout` does not match `String.shout` (the miss suggests it), so the two never compete.
 - The non-function preference settles a tie only between declarations in the same container. A property in one class and a function in another stay ambiguous, so Kronstadt still never picks between unrelated Symbols.
+- When the preference decides a bare name, `kt_read_symbol`'s header and an `edit_in` whose `old` doesn't occur name the kind it picked and the Symbol Paths of the functions it passed over, so an agent that meant a function can name it (#107).
 - The lsp adapter reads receivers from the start of kotlin-lsp's `detail` (`String.(): String`, `String.: Char`) and Signatures from its parameter parentheses. It is the only code that knows that format, which the contract test pins.
 - Signature and receiver matching therefore depend on the format of kotlin-lsp's `detail` string, which is another reason for the tested-version warning in ADR 0001.
 

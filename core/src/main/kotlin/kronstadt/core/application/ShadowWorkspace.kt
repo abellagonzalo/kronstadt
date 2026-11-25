@@ -5,6 +5,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.FileLayout
 import kronstadt.core.domain.Position
+import kronstadt.core.domain.PreferredOverFunctions
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.AnalysedFile
 import kronstadt.core.domain.SymbolCandidate
@@ -102,8 +103,16 @@ internal class ShadowWorkspace(
     }
 
     sealed interface Lookup {
-        /** The Symbol at [canonical] and its [span] in [document], the file's current text. */
-        data class Found(val document: TextDocument, val canonical: String, val span: SymbolSpan) : Lookup
+        /**
+         * The Symbol at [canonical] and its [span] in [document], the file's current text. [preferred] is set when a bare
+         * name chose it over same-named functions (ADR 0002).
+         */
+        data class Found(
+            val document: TextDocument,
+            val canonical: String,
+            val span: SymbolSpan,
+            val preferred: PreferredOverFunctions? = null,
+        ) : Lookup
         data class Failed(val failure: LookupFailure) : Lookup
 
         /**
@@ -131,7 +140,7 @@ internal class ShadowWorkspace(
             return Lookup.Failed(failure)
         }
         val span = resolver.span(found).getOrElse { return Lookup.Failed(it) }
-        return Lookup.Found(found.analysed.document, found.canonical, span)
+        return Lookup.Found(found.analysed.document, found.canonical, span, found.preferred)
     }
 
     /** Whether [parsed] resolves in [file] as read from disk, which differs from its current text only once edited. */

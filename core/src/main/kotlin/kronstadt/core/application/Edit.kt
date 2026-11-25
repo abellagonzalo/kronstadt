@@ -4,6 +4,7 @@ import kronstadt.core.domain.AnalysedFile
 import kronstadt.core.domain.FileLayout
 import kronstadt.core.domain.ImportDirective
 import kronstadt.core.domain.Position
+import kronstadt.core.domain.PreferredOverFunctions
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolCandidate
 import kronstadt.core.domain.TextDocument
@@ -285,7 +286,7 @@ public class Edit(
             is InsertBefore -> span.siblingBefore(reindented(operation.code))
             is InsertAfter -> span.siblingAfter(reindented(operation.code))
             is EditIn -> return applySplice(
-                shadow, file, Splice.inSpan(document, span.firstLine..span.lastLine, operation), operation, EditInScope(found.canonical, shown),
+                shadow, file, Splice.inSpan(document, span.firstLine..span.lastLine, operation), operation, EditInScope(found.canonical, shown, found.preferred),
             )
             is Delete -> span.deletion(document)
         }
@@ -470,8 +471,11 @@ public sealed interface EditResult {
     public data class NotReady(val readiness: Readiness.NotReady) : EditResult
 }
 
-/** Where an `edit_in` looks for its text: [symbol]'s span in [file], or the whole file when [symbol] is null. */
-public data class EditInScope(val symbol: String?, val file: String) {
+/**
+ * Where an `edit_in` looks for its text: [symbol]'s span in [file], or the whole file when [symbol] is null. [preferred]
+ * is set when [symbol], a bare name, chose a non-function over same-named functions (ADR 0002).
+ */
+public data class EditInScope(val symbol: String?, val file: String, val preferred: PreferredOverFunctions? = null) {
     /** Whether the `edit_in` works on the whole file rather than a Symbol's span. */
     val wholeFile: Boolean get() = symbol == null
 }
