@@ -1110,6 +1110,41 @@ private val symCheckPath = "src/test/kotlin/fixture/SymCheck.kt"
             project.resolve("src/main/kotlin/fixture/epsilon").deleteRecursively()
         }
     }
+
+    // #154: a replace that leaves fewer calls to an imported extension, one of them on the result of a helper it moved out
+    // to a file the same Edit creates. The import still has a call, so it isn't made unused.
+
+    @Test
+    @Order(32)
+    fun `kt_edit keeps an import its replace still uses, while another Operation creates the file of a helper it now calls`() = runBlocking<Unit> {
+        val fooPath = "src/main/kotlin/fixture/zeta/Foo.kt"
+        val barPath = "src/main/kotlin/fixture/zeta/Bar.kt"
+        val foo = "package fixture.zeta\n\nimport java.nio.file.Path\nimport kotlin.io.path.readText\n\n" +
+            "class Foo {\n" +
+            "    fun doSomething(a: Path, b: Path): String = a.readText() + logOf(b).readText()\n\n" +
+            "    private fun logOf(dir: Path): Path = dir.resolveSibling(\"x.log\")\n" +
+            "}\n"
+        val newFoo = "class Foo {\n    fun doSomething(a: Path): String = logOf(a).readText()\n}"
+        val bar = "package fixture.zeta\n\nimport java.nio.file.Path\n\nfun logOf(dir: Path): Path = dir.resolveSibling(\"x.log\")\n"
+        try {
+            // Created through kt_edit, so kotlin-lsp knows it right away (#92).
+            val created = Edit(files, lsp)(Create(fooPath, foo))
+            assertIs<EditResult.Written>(created, "$created")
+
+            val result = Edit(files, lsp)(listOf(Replace(fooPath, "Foo", newFoo), Create(barPath, bar)))
+
+            val written = assertIs<EditResult.Written>(result, "$result").files
+            assertEquals(listOf(fooPath, barPath), written.map { it.file })
+            assertEquals(emptyList(), written.flatMap { it.importsRemoved })
+            assertEquals(
+                "package fixture.zeta\n\nimport java.nio.file.Path\nimport kotlin.io.path.readText\n\n$newFoo\n",
+                Files.readString(project.resolve(fooPath)),
+            )
+            assertEquals(bar, Files.readString(project.resolve(barPath)))
+        } finally {
+            project.resolve("src/main/kotlin/fixture/zeta").deleteRecursively()
+        }
+    }
 }
 
 /** The [LookupFailure] a read reports; fails unless it reports one. */
