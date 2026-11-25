@@ -147,7 +147,7 @@ class EditInTest {
                     EditInScope("greet", path),
                     0,
                     emptyList(),
-                    IndentationHint(6, IndentationHint.Indents(file = "    ", snippet = "  ")),
+                    IndentationHint(6, IndentationHint.Indents(line = 6, file = "    ", snippet = "  ")),
                 ),
             ),
             result,
@@ -205,7 +205,7 @@ class EditInTest {
         val (once, _) = run(emptyMap(), EditIn(path, null, old = "fun other(): Int {\n  val n = 1", new = ""))
         val (twice, _) = run(emptyMap(), EditIn(path, null, old = "  val n = 1\n  return n", new = ""))
 
-        assertEquals(IndentationHint(10, IndentationHint.Indents(file = "    ", snippet = "  ")), hintOf(once))
+        assertEquals(IndentationHint(10, IndentationHint.Indents(line = 11, file = "    ", snippet = "  ")), hintOf(once))
         assertEquals(null, hintOf(twice))
     }
 
@@ -253,7 +253,7 @@ class EditInTest {
     fun `edit_in in a CRLF file still matches indentation exactly`() = runTest {
         val (result, files) = runCrlf(crlf, mapOf(crlf to listOf(function("greet", 2, 5))), EditIn(path, "greet", old = "val n = 1\n  return n", new = ""))
 
-        assertEquals(IndentationHint(4, IndentationHint.Indents(file = "    ", snippet = "  ")), hintOf(result))
+        assertEquals(IndentationHint(4, IndentationHint.Indents(line = 5, file = "    ", snippet = "  ")), hintOf(result))
         assertEquals(crlf, files.content(path))
     }
 

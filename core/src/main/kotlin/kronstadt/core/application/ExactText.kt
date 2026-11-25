@@ -54,7 +54,7 @@ internal fun indentationHint(document: TextDocument, snippet: String, range: Int
                 else -> fileText == text
             }
             if (!lineMatches) return null
-            if (text.isNotEmpty() && (j > 0 || indent.isNotEmpty())) indents += IndentationHint.Indents(FileLayout.indentOf(fileLine), indent)
+            if (text.isNotEmpty() && (j > 0 || indent.isNotEmpty())) indents += IndentationHint.Indents(start + j + 1, FileLayout.indentOf(fileLine), indent)
         }
         return indents
     }
@@ -63,19 +63,22 @@ internal fun indentationHint(document: TextDocument, snippet: String, range: Int
     val (start, indents) = matches.singleOrNull() ?: return null
     if (indents.all { it.file == it.snippet }) return null
     // Each line differs the same way when, past the indentation the two share at its end, every line has the same difference.
-    val differences = indents.map { (file, snippet) ->
+    val differences = indents.map { (_, file, snippet) ->
         val sharedEnd = file.reversed().commonPrefixWith(snippet.reversed()).length
-        IndentationHint.Indents(file.dropLast(sharedEnd), snippet.dropLast(sharedEnd))
+        file.dropLast(sharedEnd) to snippet.dropLast(sharedEnd)
     }
     return IndentationHint(start + 1, indents.first().takeIf { differences.distinct().size == 1 })
 }
 
 /**
  * A snippet that doesn't occur exactly as written occurs once if each line's leading whitespace is ignored, starting on
- * 1-based [line]. [indents] are how the file and the snippet indent it, when every line differs the same way; null when
- * the lines differ in different ways. Only a hint: nothing ever matches this way (ADR 0004).
+ * 1-based [line]. [indents] are how the file and the snippet indent a line, when every line differs the same way; null
+ * when the lines differ in different ways. Only a hint: nothing ever matches this way (ADR 0004).
  */
 public data class IndentationHint(val line: Int, val indents: Indents?) {
-    /** The leading whitespace the [file] and the [snippet] put on the first line they both indent. */
-    public data class Indents(val file: String, val snippet: String)
+    /**
+     * The leading whitespace the [file] and the [snippet] put on the first line they both indent, 1-based [line]. That
+     * is the hint's start line, or a later one when the snippet's first line starts mid-line without indentation.
+     */
+    public data class Indents(val line: Int, val file: String, val snippet: String)
 }

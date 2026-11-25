@@ -528,11 +528,15 @@ internal class KronstadtTools(
      */
     private fun where(scope: EditInScope, kind: String = "") = (scope.symbol?.let { "$it$kind in " } ?: "") + scope.file
 
-    /** Where a snippet, [named] as the agent passed it (`'old'`), occurs with indentation ignored, and how it differs: a sentence's end. */
+    /**
+     * Where a snippet, [named] as the agent passed it (`'old'`), occurs with indentation ignored, and how it differs: a
+     * sentence's end. The indents name their line when it isn't the one the snippet starts on.
+     */
     private fun indentationHint(hint: IndentationHint, named: String): String {
         val indents = hint.indents ?: return "occurs once at line ${hint.line} if indentation is ignored, where its lines are " +
             "indented differently from the file's."
-        return "occurs once at line ${hint.line} if indentation is ignored: the file indents it by ${indent(indents.file)}, " +
+        val indented = if (indents.line == hint.line) "it" else "line ${indents.line}"
+        return "occurs once at line ${hint.line} if indentation is ignored: the file indents $indented by ${indent(indents.file)}, " +
             "$named by ${indent(indents.snippet)}."
     }
 
