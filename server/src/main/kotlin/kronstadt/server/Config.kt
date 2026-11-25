@@ -12,10 +12,11 @@ internal data class Config(
     val languageServer: List<String>,
     val readinessTimeout: Duration,
     val validationTimeout: Duration = Validation.DEFAULT_TIMEOUT,
+    val collateralTimeout: Duration = validationTimeout,
 ) {
     companion object {
         const val USAGE = """Usage: kronstadt [--project-root <dir>] [--language-server "<command>"] [--readiness-timeout <seconds>]
-                 [--validation-timeout <seconds>]
+                 [--validation-timeout <seconds>] [--collateral-timeout <seconds>]
 
   --project-root       Project (or Git worktree) to serve. Default: current directory.
                        Only one Kronstadt at a time may serve a worktree; a second one fails
@@ -25,13 +26,17 @@ internal data class Config(
   --readiness-timeout  Seconds a tool waits for kotlin-lsp to finish importing and indexing before failing
                        with a retry error. Default: ${'$'}KRONSTADT_READINESS_TIMEOUT, else 90.
   --validation-timeout Seconds kt_edit waits for diagnostics before rejecting the edit with nothing written.
-                       Default: ${'$'}KRONSTADT_VALIDATION_TIMEOUT, else 15."""
+                       Default: ${'$'}KRONSTADT_VALIDATION_TIMEOUT, else 15.
+  --collateral-timeout Seconds kt_edit spends looking for Collateral Errors once validation passed; running out
+                       of it never fails the edit.
+                       Default: ${'$'}KRONSTADT_COLLATERAL_TIMEOUT, else the validation timeout."""
 
         fun parse(args: Array<String>, env: Map<String, String> = System.getenv()): Config {
             var root: String? = null
             var languageServer: String? = null
             var readinessTimeout: String? = null
             var validationTimeout: String? = null
+            var collateralTimeout: String? = null
             var i = 0
             while (i < args.size) {
                 when (args[i]) {
@@ -39,6 +44,7 @@ internal data class Config(
                     "--language-server" -> languageServer = args.getOrNull(++i) ?: usageError("--language-server needs a value")
                     "--readiness-timeout" -> readinessTimeout = args.getOrNull(++i) ?: usageError("--readiness-timeout needs a value")
                     "--validation-timeout" -> validationTimeout = args.getOrNull(++i) ?: usageError("--validation-timeout needs a value")
+                    "--collateral-timeout" -> collateralTimeout = args.getOrNull(++i) ?: usageError("--collateral-timeout needs a value")
                     "-h", "--help" -> usageError(null)
                     else -> usageError("unknown argument: ${args[i]}")
                 }
@@ -50,7 +56,9 @@ internal data class Config(
                 ?: Readiness.DEFAULT_TIMEOUT
             val validation = (validationTimeout ?: env["KRONSTADT_VALIDATION_TIMEOUT"])?.let { seconds("validation", it) }
                 ?: Validation.DEFAULT_TIMEOUT
-            return Config(Path.of(root ?: "").toAbsolutePath().normalize(), command, timeout, validation)
+            val collateral = (collateralTimeout ?: env["KRONSTADT_COLLATERAL_TIMEOUT"])?.let { seconds("collateral", it) }
+                ?: validation
+            return Config(Path.of(root ?: "").toAbsolutePath().normalize(), command, timeout, validation, collateral)
         }
 
         private fun seconds(which: String, value: String): Duration =
