@@ -18,4 +18,5 @@ if exist "%JAVA_EXE%" goto execute
 "%COMSPEC%" /c exit 1
 goto exitWithErrorLevel
 
+@rem Gradle's own lookup follows this label.
 :findJava

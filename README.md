@@ -49,7 +49,7 @@ Rules of thumb:
 Requires JDK 25.
 
 ```sh
-./gradlew build                # compile + fast tests
+./gradlew build                # compile + fast tests, incl. :server:launcherTest (the installed launcher's JDK choice)
 ./gradlew :lsp:contractTest    # slow contract tests against a real kotlin-lsp (Seam 2)
 ./gradlew :server:contractTest # the server against a real kotlin-lsp, e.g. ended the way Claude Code ends it
 ./gradlew installDist          # -> server/build/install/kronstadt/bin/kronstadt

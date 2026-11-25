@@ -20,6 +20,7 @@ import kotlin.test.assertTrue
 @Tag("launcher")
 class LauncherTest {
     private val install: Path = Path.of(System.getProperty("kronstadt.install"))
+    private val launcher: Path = install.resolve("bin/kronstadt")
     private val buildJavaHome: String = System.getProperty("kronstadt.buildJavaHome")
     private val tmp: Path = Files.createTempDirectory("kronstadt-launcher").toRealPath()
 
@@ -27,7 +28,7 @@ class LauncherTest {
     private val fakeJdk: Path = tmp.resolve("fake-jdk").also { home ->
         val java = home.resolve("bin").createDirectories().resolve("java")
         java.writeText("#!/bin/sh\necho \"fake java ran\" >&2\nexit 97\n")
-        Files.setPosixFilePermissions(java, PosixFilePermissions.fromString("rwxr-xr-x"))
+        makeExecutable(java)
     }
 
     @AfterTest
@@ -37,7 +38,7 @@ class LauncherTest {
 
     @Test
     fun `JAVA_HOME and PATH pointing at another JDK don't stop the server starting on the build JDK`() {
-        val run = launch(install.resolve("bin/kronstadt"), "JAVA_HOME" to fakeJdk.toString())
+        val run = launch(launcher, "JAVA_HOME" to fakeJdk.toString())
 
         assertEquals(2, run.exitCode, run.stderr)
         assertTrue(run.stderr.startsWith("unknown argument: --no-such-option\n\nUsage: kronstadt"), run.stderr)
@@ -45,16 +46,13 @@ class LauncherTest {
 
     @Test
     fun `KRONSTADT_JAVA_HOME wins over the build JDK`() {
-        val run = launch(install.resolve("bin/kronstadt"), "KRONSTADT_JAVA_HOME" to fakeJdk.toString())
-
-        assertEquals(97, run.exitCode, run.stderr)
-        assertEquals("fake java ran\n", run.stderr)
+        assertRanOnFakeJdk(launch(launcher, "KRONSTADT_JAVA_HOME" to fakeJdk.toString()))
     }
 
     @Test
-    fun `a KRONSTADT_JAVA_HOME without bin-java fails naming it`() {
+    fun `a KRONSTADT_JAVA_HOME with no java in it fails naming it`() {
         val missing = tmp.resolve("no-jdk")
-        val run = launch(install.resolve("bin/kronstadt"), "KRONSTADT_JAVA_HOME" to missing.toString())
+        val run = launch(launcher, "KRONSTADT_JAVA_HOME" to missing.toString())
 
         assertEquals(1, run.exitCode, run.stderr)
         assertEquals("\nERROR: KRONSTADT_JAVA_HOME is set to an invalid directory: $missing\n\n", run.stderr)
@@ -62,16 +60,15 @@ class LauncherTest {
 
     @Test
     fun `without the build JDK, the launcher falls back to JAVA_HOME`() {
-        val run = launch(launcherWithoutBuildJdk(), "JAVA_HOME" to fakeJdk.toString())
-
-        assertEquals(97, run.exitCode, run.stderr)
-        assertEquals("fake java ran\n", run.stderr)
+        assertRanOnFakeJdk(launch(launcherWithoutBuildJdk(), "JAVA_HOME" to fakeJdk.toString()))
     }
 
     @Test
     fun `without the build JDK or JAVA_HOME, the launcher falls back to PATH`() {
-        val run = launch(launcherWithoutBuildJdk())
+        assertRanOnFakeJdk(launch(launcherWithoutBuildJdk()))
+    }
 
+    private fun assertRanOnFakeJdk(run: Run) {
         assertEquals(97, run.exitCode, run.stderr)
         assertEquals("fake java ran\n", run.stderr)
     }
@@ -84,8 +81,12 @@ class LauncherTest {
         val script = launcher.readText()
         assertTrue(buildJavaHome in script, "the launcher doesn't record the build JDK $buildJavaHome")
         launcher.writeText(script.replace(buildJavaHome, tmp.resolve("removed-jdk").toString()))
-        Files.setPosixFilePermissions(launcher, PosixFilePermissions.fromString("rwxr-xr-x"))
+        makeExecutable(launcher)
         return launcher
+    }
+
+    private fun makeExecutable(file: Path) {
+        Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rwxr-xr-x"))
     }
 
     private class Run(val exitCode: Int, val stderr: String)

@@ -12,4 +12,5 @@ elif [ -x "$kronstadt_build_java_home/bin/java" ] ; then
     JAVACMD=$kronstadt_build_java_home/bin/java
 fi
 
+# Gradle's own lookup follows; server/build.gradle.kts closes this if after it.
 if [ -z "$JAVACMD" ] ; then
