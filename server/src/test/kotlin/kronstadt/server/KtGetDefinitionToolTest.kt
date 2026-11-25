@@ -26,7 +26,7 @@ class KtGetDefinitionToolTest {
     private val tools = ToolHarness(root, GreetIntelligence)
 
     /** Calls kt_get_definition on `greet` in A.kt for `n` at [at]; whether it failed, and its text. */
-    private suspend fun at(at: String): Pair<Boolean, String> =
+    private suspend fun getDefinitionAt(at: String): Pair<Boolean, String> =
         tools.call("kt_get_definition", """{"file": "A.kt", "symbol": "greet", "name": "n", "at": "$at"}""")
 
     @Test
@@ -34,7 +34,7 @@ class KtGetDefinitionToolTest {
         assertEquals(
             true to "'= 1 +\n    2' doesn't occur in greet in A.kt exactly as written, but occurs once at line 4 if indentation is " +
                 "ignored: the file indents line 5 by 8 spaces, 'at' by 4 spaces. Copy 'at' from kt_read_symbol output.",
-            at("= 1 +\\n    2"),
+            getDefinitionAt("= 1 +\\n    2"),
         )
     }
 
@@ -43,7 +43,7 @@ class KtGetDefinitionToolTest {
         assertEquals(
             true to "'  val n = 1 +\n      2' doesn't occur in greet in A.kt exactly as written, but occurs once at line 4 if " +
                 "indentation is ignored: the file indents it by 4 spaces, 'at' by 2 spaces. Copy 'at' from kt_read_symbol output.",
-            at("  val n = 1 +\\n      2"),
+            getDefinitionAt("  val n = 1 +\\n      2"),
         )
     }
 }

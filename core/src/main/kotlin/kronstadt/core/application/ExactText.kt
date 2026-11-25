@@ -77,8 +77,8 @@ internal fun indentationHint(document: TextDocument, snippet: String, range: Int
  */
 public data class IndentationHint(val line: Int, val indents: Indents?) {
     /**
-     * The leading whitespace the [file] and the [snippet] put on the first line they both indent, 1-based [line]: the
-     * hint's start line, or a later one when the snippet's first line starts mid-line without indentation.
+     * The leading whitespace the [file] and the [snippet] put on the first line they both indent, 1-based [line]. That
+     * is the hint's start line, or a later one when the snippet's first line starts mid-line without indentation.
      */
     public data class Indents(val line: Int, val file: String, val snippet: String)
 }
