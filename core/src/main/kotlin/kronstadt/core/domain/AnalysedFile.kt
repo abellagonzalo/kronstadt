@@ -24,8 +24,15 @@ public class AnalysedFile(
 
     /** How a Symbol Path resolves within this file. */
     public sealed interface Resolution {
-        /** It names [node] alone, whose canonical path is [path]. */
-        public data class Found(val node: SymbolTree.Node, val path: SymbolPath) : Resolution
+        /**
+         * It names [node] alone, whose canonical path is [path]. If a bare name chose it, a non-function, over same-named
+         * functions beside it (ADR 0002), [passedOver] are their canonical paths; else it is empty.
+         */
+        public data class Found(val node: SymbolTree.Node, val path: SymbolPath, val passedOver: List<SymbolPath> = emptyList()) : Resolution {
+            /** The non-function preference's choice, when it decided this resolution; null otherwise. */
+            val preferred: PreferredOverFunctions?
+                get() = passedOver.takeIf { it.isNotEmpty() }?.let { paths -> PreferredOverFunctions(node.symbol.kind, paths.map { it.toString() }) }
+        }
 
         /** It names each of [matches], shown as [candidates]. */
         public data class Ambiguous(val matches: List<SymbolTree.Node>, val candidates: List<SymbolCandidate>) : Resolution
@@ -35,7 +42,7 @@ public class AnalysedFile(
     }
 
     public fun resolve(path: SymbolPath): Resolution = when (val resolution = tree.resolve(path)) {
-        is SymbolTree.Resolution.Found -> Resolution.Found(resolution.node, path(resolution.node))
+        is SymbolTree.Resolution.Found -> Resolution.Found(resolution.node, path(resolution.node), resolution.passedOver.map(::path))
         is SymbolTree.Resolution.Ambiguous -> Resolution.Ambiguous(resolution.candidates, resolution.candidates.map(::candidate))
         is SymbolTree.Resolution.NotFound -> Resolution.NotFound(resolution.suggestions, resolution.suggestions.map(::candidate))
     }

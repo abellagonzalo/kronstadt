@@ -1,6 +1,7 @@
 package kronstadt.core.application
 
 import kronstadt.core.domain.AnalysedFile
+import kronstadt.core.domain.PreferredOverFunctions
 import kronstadt.core.domain.Suggestions
 import kronstadt.core.domain.SymbolCandidate
 import kronstadt.core.domain.SymbolLocation
@@ -31,8 +32,16 @@ internal class SymbolResolver(
     private val files: FileStore,
     private val intelligence: CodeIntelligence,
 ) {
-    /** A resolved Symbol: its [node] in [analysed], whose canonical path is [path]. */
-    data class Found(val analysed: AnalysedFile, val node: SymbolTree.Node, val path: SymbolPath) {
+    /**
+     * A resolved Symbol: its [node] in [analysed], whose canonical path is [path]. [preferred] is set when a bare name
+     * chose it, a non-function, over same-named functions beside it (ADR 0002).
+     */
+    data class Found(
+        val analysed: AnalysedFile,
+        val node: SymbolTree.Node,
+        val path: SymbolPath,
+        val preferred: PreferredOverFunctions? = null,
+    ) {
         val canonical: String get() = path.toString()
     }
 
@@ -57,7 +66,7 @@ internal class SymbolResolver(
     suspend fun resolveIn(source: DocumentSource, file: Path, parsed: ParsedLookup): Outcome<Found>? {
         val analysed = source.analysed(file) ?: return null
         return when (val resolution = analysed.resolve(parsed.path)) {
-            is AnalysedFile.Resolution.Found -> Outcome.Ok(Found(analysed, resolution.node, resolution.path))
+            is AnalysedFile.Resolution.Found -> Outcome.Ok(Found(analysed, resolution.node, resolution.path, resolution.preferred))
             is AnalysedFile.Resolution.Ambiguous ->
                 Outcome.Failed(LookupFailure.Ambiguous(parsed.symbol, analysed.shown, resolution.candidates))
             is AnalysedFile.Resolution.NotFound ->
@@ -94,7 +103,7 @@ internal class SymbolResolver(
         val matches = hits.filter { it.name == query }.map { it.file }.distinct().sorted().flatMap { file ->
             val candidate = analysed(file)?.takeIf { inPackage(it, symbol) } ?: return@flatMap emptyList()
             when (val resolution = candidate.resolve(symbol)) {
-                is AnalysedFile.Resolution.Found -> listOf(Found(candidate, resolution.node, resolution.path))
+                is AnalysedFile.Resolution.Found -> listOf(Found(candidate, resolution.node, resolution.path, resolution.preferred))
                 is AnalysedFile.Resolution.Ambiguous -> resolution.matches.map { Found(candidate, it, candidate.path(it)) }
                 is AnalysedFile.Resolution.NotFound -> emptyList()
             }

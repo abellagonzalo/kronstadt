@@ -3,6 +3,7 @@ package kronstadt.core.application
 import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Position
+import kronstadt.core.domain.PreferredOverFunctions
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.TextRange
 import java.nio.file.Path
@@ -152,6 +153,37 @@ class EditInTest {
             result,
         )
         assertEquals(source, files.content(path))
+    }
+
+    @Test
+    fun `edit_in missing in a property a bare name chose over same-named functions names its kind and the functions`() = runTest {
+        val tools = "class Tools {\n    val edit = 0\n    fun edit(n: Int): Int {\n        return n\n    }\n}\n"
+        val property = CodeSymbol("edit", SymbolKind.PROPERTY, range(1, 4, 1, 16), range(1, 8, 1, 12), type = ": Int")
+        val function = CodeSymbol(
+            "edit", SymbolKind.FUNCTION, range(2, 4, 4, 5), range(2, 8, 2, 12), parameterTypes = "Int", type = "(Int): Int",
+        )
+        val files = FakeFileStore(root, mapOf(path to tools))
+        val intelligence = FakeCodeIntelligence(
+            documentSymbols = listOf(CodeSymbol("Tools", SymbolKind.CLASS, range(0, 0, 5, 1), range(0, 6, 0, 11), listOf(property, function))),
+        )
+
+        val bare = Edit(files, intelligence)(listOf(EditIn(path, "edit", old = "return n", new = "return 0")))
+        val signed = Edit(files, intelligence)(listOf(EditIn(path, "edit(Int)", old = "val edit", new = "")))
+
+        assertEquals(
+            EditResult.OperationFailed(
+                0,
+                OperationFailure.NotExactlyOnce(
+                    "return n",
+                    EditInScope("edit", path, PreferredOverFunctions(SymbolKind.PROPERTY, listOf("edit(Int)"))),
+                    0,
+                    emptyList(),
+                ),
+            ),
+            bare,
+        )
+        assertEquals(EditResult.OperationFailed(0, OperationFailure.NotExactlyOnce("val edit", EditInScope("edit(Int)", path), 0, emptyList())), signed)
+        assertEquals(tools, files.content(path))
     }
 
     /** The indentation hint of [result], an Edit failed on an `edit_in` that occurs nowhere. */

@@ -40,6 +40,27 @@ class ReadSymbolTest {
         assertEquals("// greet in src/A.kt, L3-4\nfun greet(): String =\n    \"hi\"", result.text)
     }
 
+    @Test
+    fun `a property a bare name chose over same-named functions has a header naming its kind and the functions`() = runTest {
+        val source = "class Tools {\n    val edit = 0\n    fun edit(n: Int) = n\n    fun edit(s: String) = s\n}\n"
+        val property = symbol("edit", SymbolKind.PROPERTY, range(1, 4, 1, 16), 1, 8, type = ": Int")
+        val editInt = symbol("edit", SymbolKind.FUNCTION, range(2, 4, 2, 24), 2, 8, parameterTypes = "Int", type = "(Int): Int")
+        val editString = symbol("edit", SymbolKind.FUNCTION, range(3, 4, 3, 27), 3, 8, parameterTypes = "String", type = "(String): String")
+        val tools = symbol("Tools", SymbolKind.CLASS, range(0, 0, 4, 1), 0, 6, children = listOf(property, editInt, editString))
+        val oneFunction = symbol("Tools", SymbolKind.CLASS, range(0, 0, 4, 1), 0, 6, children = listOf(property, editInt))
+
+        val two = assertIs<ReadSymbolResult.Found>(readSymbol(source, tools)("src/A.kt", "edit"))
+        val one = assertIs<ReadSymbolResult.Found>(readSymbol(source, oneFunction)("src/A.kt", "edit"))
+        val signed = assertIs<ReadSymbolResult.Found>(readSymbol(source, tools)("src/A.kt", "edit(Int)"))
+
+        assertEquals(
+            "// edit in src/A.kt, L2-2 (the property; functions share its name: edit(Int), edit(String))\n    val edit = 0",
+            two.text,
+        )
+        assertEquals("// edit in src/A.kt, L2-2 (the property; a function shares its name: edit(Int))\n    val edit = 0", one.text)
+        assertEquals("// edit(Int) in src/A.kt, L3-3\n    fun edit(n: Int) = n", signed.text)
+    }
+
     // Nested declarations, as kotlin-lsp reports them: a class range starts at its KDoc and covers annotations.
     private val nested = """
         |package a
@@ -308,7 +329,7 @@ class ReadSymbolTest {
 
     @Test
     fun `a bare name prefers the property over a same-named function beside it, and parentheses select the function`() = runTest {
-        assertEquals("// Sized/size in src/A.kt, L2-2", assertIs<ReadSymbolResult.Found>(readSized("Sized/size")).text.lines().first())
+        assertEquals("// Sized/size in src/A.kt, L2-2 (the property; a function shares its name: size(Int))", assertIs<ReadSymbolResult.Found>(readSized("Sized/size")).text.lines().first())
         assertEquals("// size(Int) in src/A.kt, L4-4", assertIs<ReadSymbolResult.Found>(readSized("size(Int)")).text.lines().first())
         assertEquals("// size() in src/A.kt, L8-8", assertIs<ReadSymbolResult.Found>(readSized("size()")).text.lines().first())
         assertIs<LookupFailure.NotFound>(readSized("Sized/size()").lookupFailure())

@@ -286,6 +286,51 @@ class KtEditToolTest {
     }
 
     @Test
+    fun `an edit_in missing in a property a bare name chose over a same-named function names its kind and the function`() = runTest {
+        val source = "package a\n\nclass Tools {\n    val edit =\n        0\n    fun edit(n: Int): Int {\n        return n\n    }\n}\n"
+        file.writeText(source)
+        val property = CodeSymbol("edit", SymbolKind.PROPERTY, TextRange(Position(3, 4), Position(4, 9)), TextRange(Position(3, 8), Position(3, 12)), type = ": Int")
+        val function = CodeSymbol(
+            "edit",
+            SymbolKind.FUNCTION,
+            TextRange(Position(5, 4), Position(7, 5)),
+            TextRange(Position(5, 8), Position(5, 12)),
+            parameterTypes = "Int",
+            type = "(Int): Int",
+        )
+        symbols += CodeSymbol("Tools", SymbolKind.CLASS, TextRange(Position(2, 0), Position(8, 1)), TextRange(Position(2, 6), Position(2, 11)), listOf(property, function))
+
+        val (missing, missingText) =
+            ktEdit("""{"operations": [{"type": "edit_in", "file": "A.kt", "symbol": "edit", "old": "return n", "new": "return 0"}]}""")
+        val (hinted, hintedText) =
+            ktEdit("""{"operations": [{"type": "edit_in", "file": "A.kt", "symbol": "edit", "old": "val edit =\n  0", "new": ""}]}""")
+        val (signed, signedText) =
+            ktEdit("""{"operations": [{"type": "edit_in", "file": "A.kt", "symbol": "edit(Int)", "old": "val edit", "new": ""}]}""")
+
+        assertEquals(true, missing)
+        assertEquals(
+            "Operation 0: 'old' doesn't occur in edit (the property) in A.kt, exactly as written (whitespace included; any line " +
+                "break matches any line ending). Use kt_read_symbol to see its source. A function shares its name: edit(Int). " +
+                "Nothing written.",
+            missingText,
+        )
+        assertEquals(true, hinted)
+        assertEquals(
+            "Operation 0: 'old' doesn't occur in edit (the property) in A.kt exactly as written, but occurs once at line 4 if " +
+                "indentation is ignored: the file indents it by 8 spaces, 'old' by 2 spaces. Copy 'old' from kt_read_symbol " +
+                "output. A function shares its name: edit(Int). Nothing written.",
+            hintedText,
+        )
+        assertEquals(true, signed)
+        assertEquals(
+            "Operation 0: 'old' doesn't occur in edit(Int) in A.kt, exactly as written (whitespace included; any line break " +
+                "matches any line ending). Use kt_read_symbol to see its source. Nothing written.",
+            signedText,
+        )
+        assertEquals(source, file.readText())
+    }
+
+    @Test
     fun `an insert whose code has no non-blank line fails, naming its Operation's type, writing nothing`() = runTest {
         val before = file.readText()
 

@@ -488,16 +488,21 @@ internal class KronstadtTools(
             "'${failure.symbol}' exists only in what earlier Operations of this Edit wrote, and a Symbol Path without a " +
                 "file is looked up on disk; pass its file:\n" + candidates(failure.candidates, withFiles = true) + "\n"
         is OperationFailure.NotExactlyOnce -> {
-            val where = where(failure.scope)
             val hint = failure.indentation
+            // Missing from a Symbol a bare name chose over same-named functions: say so, as 'old' may be in one of them.
+            val preferred = failure.scope.preferred
+            val missingIn = where(failure.scope, preferred?.let { " (${it.picked})" } ?: "")
+            val sharedName = preferred?.let { " " + it.sharedName.replaceFirstChar(Char::uppercaseChar) + "." } ?: ""
             if (failure.lines.isEmpty() && hint != null) {
-                "'old' doesn't occur in $where exactly as written, but " + indentationHint(hint, "'old'") + " " +
-                    (if (failure.scope.wholeFile) "Read the file to copy it." else "Copy 'old' from kt_read_symbol output.")
+                "'old' doesn't occur in $missingIn exactly as written, but " + indentationHint(hint, "'old'") + " " +
+                    (if (failure.scope.wholeFile) "Read the file to copy it." else "Copy 'old' from kt_read_symbol output.") +
+                    sharedName
             } else if (failure.lines.isEmpty()) {
-                "'old' doesn't occur in $where, exactly as written (whitespace included; any line break matches any line ending). " +
-                    (if (failure.scope.wholeFile) "Read the file to copy it." else "Use kt_read_symbol to see its source.")
+                "'old' doesn't occur in $missingIn, exactly as written (whitespace included; any line break matches any line ending). " +
+                    (if (failure.scope.wholeFile) "Read the file to copy it." else "Use kt_read_symbol to see its source.") +
+                    sharedName
             } else {
-                "'old' occurs ${failure.count} times in $where; make it longer so it occurs exactly once:\n" +
+                "'old' occurs ${failure.count} times in ${where(failure.scope)}; make it longer so it occurs exactly once:\n" +
                     failure.lines.joinToString("\n") { "  L${it.line}: ${it.source}" } + "\n"
             }
         }
@@ -517,8 +522,11 @@ internal class KronstadtTools(
         OperationFailure.BlankCode -> "'$type' needs code with at least one non-blank line."
     }
 
-    /** An `edit_in`'s [scope] as the agent named it: the Symbol and its file, or just the file. */
-    private fun where(scope: EditInScope) = (scope.symbol?.let { "$it in " } ?: "") + scope.file
+    /**
+     * An `edit_in`'s [scope] as the agent named it: the Symbol and its file, or just the file. [kind], e.g. ` (the property)`,
+     * follows the Symbol.
+     */
+    private fun where(scope: EditInScope, kind: String = "") = (scope.symbol?.let { "$it$kind in " } ?: "") + scope.file
 
     /** Where a snippet, [named] as the agent passed it (`'old'`), occurs with indentation ignored, and how it differs: a sentence's end. */
     private fun indentationHint(hint: IndentationHint, named: String): String {

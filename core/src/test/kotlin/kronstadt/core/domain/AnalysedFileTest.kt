@@ -73,6 +73,43 @@ class AnalysedFileTest {
         assertEquals(listOf(SymbolCandidate("greet()", "src/A.kt"), SymbolCandidate("greet(Int)", "src/A.kt")), notFound.suggestions)
     }
 
+    /** `class Tools { val edit = 0; fun edit(n: Int) = n; fun edit(s: String) = s }`, one declaration per line. */
+    private val tools = run {
+        val document = TextDocument(
+            """
+        |class Tools {
+        |    val edit = 0
+        |    fun edit(n: Int) = n
+        |    fun edit(s: String) = s
+        |}
+        |""".trimMargin(),
+        )
+        val property = symbol("edit", SymbolKind.PROPERTY, range(1, 4, 1, 16), 1, 8, type = ": Int")
+        val editInt = symbol("edit", SymbolKind.FUNCTION, range(2, 4, 2, 24), 2, 8, parameterTypes = "Int", type = "(Int): Int")
+        val editString = symbol("edit", SymbolKind.FUNCTION, range(3, 4, 3, 27), 3, 8, parameterTypes = "String", type = "(String): String")
+        analysedFile(document, listOf(symbol("Tools", SymbolKind.CLASS, range(0, 0, 4, 1), 0, 6, children = listOf(property, editInt, editString))))
+    }
+
+    @Test
+    fun `a bare name preferring a property to same-named functions resolves to the property and lists the functions`() {
+        val found = assertIs<AnalysedFile.Resolution.Found>(tools.resolve(path("edit")))
+
+        assertEquals(SymbolKind.PROPERTY, found.node.symbol.kind)
+        assertEquals(listOf(path("edit(Int)"), path("edit(String)")), found.passedOver)
+        found.passedOver.forEach { function ->
+            val resolved = assertIs<AnalysedFile.Resolution.Found>(tools.resolve(function))
+            assertEquals(SymbolKind.FUNCTION, resolved.node.symbol.kind)
+            assertEquals(function, resolved.path)
+        }
+    }
+
+    @Test
+    fun `a path with a signature, or a name no function shares, passes nothing over`() {
+        assertEquals(emptyList(), assertIs<AnalysedFile.Resolution.Found>(tools.resolve(path("edit(Int)"))).passedOver)
+        assertEquals(emptyList(), assertIs<AnalysedFile.Resolution.Found>(tools.resolve(path("Tools"))).passedOver)
+        assertEquals(emptyList(), assertIs<AnalysedFile.Resolution.Found>(analysed.resolve(path("Greeter/greet(Int)"))).passedOver)
+    }
+
     @Test
     fun `the innermost Symbol Span holding some lines is the deepest Symbol's`() {
         assertEquals(4..4, analysed.innermostSpanHolding(4..4)?.let { it.firstLine..it.lastLine })

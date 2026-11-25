@@ -28,13 +28,17 @@ public class ReadSymbol(
         return intelligence.session { session ->
             val found = resolver.resolve(session, parsed).getOrElse { return@session ReadSymbolResult.LookupFailed(it) }
             val span = resolver.span(found).getOrElse { return@session ReadSymbolResult.LookupFailed(it) }
-            ReadSymbolResult.Found("// ${found.canonical} in ${found.analysed.shown}, L${span.firstLine + 1}-${span.lastLine + 1}\n${span.text}")
+            val note = found.preferred?.let { " (${it.picked}; ${it.sharedName})" } ?: ""
+            ReadSymbolResult.Found("// ${found.canonical} in ${found.analysed.shown}, L${span.firstLine + 1}-${span.lastLine + 1}$note\n${span.text}")
         }
     }
 }
 
 public sealed interface ReadSymbolResult {
-    /** Header (canonical path, file, 1-based line span) then the raw Symbol Span, no line-number gutter. */
+    /**
+     * Header (canonical path, file, 1-based line span, and, if a bare name chose a non-function over same-named functions,
+     * its kind and those functions) then the raw Symbol Span, no line-number gutter.
+     */
     public data class Found(val text: String) : ReadSymbolResult
     public data class LookupFailed(val failure: LookupFailure) : ReadSymbolResult
 
