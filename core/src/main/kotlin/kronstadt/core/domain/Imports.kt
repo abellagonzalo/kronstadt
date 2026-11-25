@@ -47,7 +47,7 @@ internal class ImportDirective(
 /** Whole [lines] (0-based; empty to insert before `lines.first`) to replace with [newLines]. */
 internal data class LineSplice(val lines: IntRange, val newLines: List<String>)
 
-private const val BYTE_ORDER_MARK = "﻿"
+private const val BYTE_ORDER_MARK = "\uFEFF"
 
 /**
  * The splice that adds those of [imports] this file doesn't have yet, or null if it has them all. Nothing already in
@@ -75,7 +75,7 @@ internal fun TextDocument.addingImports(imports: List<ImportDirective>): LineSpl
     if (at == 0 && text.startsWith(BYTE_ORDER_MARK)) {
         // The mark shares line 0 with what follows it, so the block goes on that line, between the two.
         val rest = line(0).drop(1)
-        val blankAfter = if (rest.isNotBlank()) listOf("") else emptyList()
+        val blankAfter = if (lineCount > 1 && rest.isNotBlank()) listOf("") else emptyList()
         val block = listOf(BYTE_ORDER_MARK + directives.first()) + directives.drop(1)
         return LineSplice(0..0, block + blankAfter + rest)
     }

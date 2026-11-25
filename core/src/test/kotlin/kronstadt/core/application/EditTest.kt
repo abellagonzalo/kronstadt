@@ -856,9 +856,9 @@ class EditTest {
         val files = FakeFileStore(root, mapOf(path to source))
 
         edit(createIntelligence(), files)(
-            Create("src/C.kt", "﻿class Wait(val d: Duration)\n", listOf("kotlin.time.Duration")),
+            Create("src/C.kt", "\uFEFFclass Wait(val d: Duration)\n", listOf("kotlin.time.Duration")),
         )
 
-        assertEquals("﻿import kotlin.time.Duration\n\nclass Wait(val d: Duration)\n", files.content("src/C.kt"))
+        assertEquals("\uFEFFimport kotlin.time.Duration\n\nclass Wait(val d: Duration)\n", files.content("src/C.kt"))
     }
 }
