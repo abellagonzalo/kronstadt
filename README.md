@@ -28,7 +28,7 @@ core/        pure Kotlin, no I/O
                Diagnostic, Validation (new-error diff)
   port/        CodeIntelligence, FileStore
   application/ ReadStructure, FindSymbol, ReadSymbol, Edit — one use case per MCP tool, returning sealed results;
-               ShadowWorkspace (documents one Edit opens), WriteLock
+               ShadowWorkspace (documents one Edit opens), WriteCalls (one write call at a time; owns the Rejected Edit)
 lsp/         CodeIntelligence over kotlin-lsp (lsp4j), incl. readiness tracking
 workspace/   FileStore over the local disk, confined to the project root;
              IndexDirectories (kotlin-lsp index per worktree and Index Seed slots, under ~/Library/Caches/kronstadt);

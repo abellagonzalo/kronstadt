@@ -38,7 +38,7 @@ import kronstadt.core.application.GetDefinition
 import kronstadt.core.application.ReadStructure
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.RenameSymbol
-import kronstadt.core.application.WriteLock
+import kronstadt.core.application.WriteCalls
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Validation
 import kronstadt.lsp.LspCodeIntelligence
@@ -101,7 +101,7 @@ class ParallelReadsContractTest {
         // Wired as in Main.kt, with kotlin-lsp already started.
         val files = LocalFileStore(project)
         val intelligence = DeferredCodeIntelligence(CompletableDeferred(Result.success(lsp)))
-        val writeLock = WriteLock()
+        val writeCalls = WriteCalls()
         val readinessTimeout = Readiness.DEFAULT_TIMEOUT
         server = Server(
             Implementation(name = "kronstadt", version = VERSION),
@@ -114,8 +114,8 @@ class ParallelReadsContractTest {
             ReadSymbol(files, intelligence, readinessTimeout),
             FindUsages(files, intelligence, readinessTimeout),
             GetDefinition(files, intelligence, readinessTimeout),
-            Edit(files, intelligence, readinessTimeout, Validation.DEFAULT_TIMEOUT, writeLock),
-            RenameSymbol(files, intelligence, readinessTimeout, Validation.DEFAULT_TIMEOUT, writeLock),
+            Edit(files, intelligence, readinessTimeout, Validation.DEFAULT_TIMEOUT, writeCalls),
+            RenameSymbol(files, intelligence, readinessTimeout, Validation.DEFAULT_TIMEOUT, writeCalls),
         ).registerOn(server)
 
         val toServer = Pipe.open()
