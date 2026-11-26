@@ -177,7 +177,7 @@ public class Edit(
             val read = shadow.baseHashes()
             bases.entries.firstOrNull { (file, hash) -> file in read && read[file] != hash }
                 ?.let { return@session Settled(EditResult.WriteBackFailed(WriteBackFailure.ChangedOnDisk(files.display(it.key))), Settlement.Drop) }
-            val removed = shadow.removeImportsMadeUnused(session, validationTimeout) { file, suspects -> suspects - listed[file].orEmpty() }
+            val removed = shadow.removeImportsMadeUnused(session, validationTimeout) { file, imports -> imports - listed[file].orEmpty() }
                 .mapKeys { files.display(it.key) }
             when (val validated = shadow.validate()) {
                 is ShadowWorkspace.Validated.Passed -> {

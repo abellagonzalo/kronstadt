@@ -3,6 +3,7 @@ package kronstadt.server
 import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Diagnostic
+import kronstadt.core.domain.ImportDirective
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Severity
@@ -305,7 +306,7 @@ private class EmptyIntelligence(
         override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> = symbolsByText[document.text] ?: symbols
         override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> = diagnostics[document.text].orEmpty()
         override suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation> = emptyList()
-        override suspend fun organizeImports(file: Path, document: TextDocument): TextDocument? = null
+        override suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration) = emptySet<ImportDirective>()
         override suspend fun writtenBack(file: Path, document: TextDocument) = Unit
     })
 

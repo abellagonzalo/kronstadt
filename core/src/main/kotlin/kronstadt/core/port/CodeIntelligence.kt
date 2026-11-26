@@ -3,6 +3,7 @@ package kronstadt.core.port
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Definition
 import kronstadt.core.domain.Diagnostic
+import kronstadt.core.domain.ImportDirective
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
@@ -81,11 +82,11 @@ public interface AnalysisSession {
     public suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String): Rename
 
     /**
-     * [document] (the content of [file]) as it would read once the code intelligence organized its imports, or null if it
-     * gives no answer; nothing is applied. Only which imports it leaves is meaningful: it drops those it finds unused, and
-     * the order and layout of the rest are its own.
+     * Those of [among], imports of [document] (the content of [file]), that are Unused Imports, judged against the texts
+     * this session has open; nothing is applied. An import it can't decide, e.g. without an answer within [budget], counts
+     * as used.
      */
-    public suspend fun organizeImports(file: Path, document: TextDocument): TextDocument?
+    public suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration): Set<ImportDirective>
 
     /** Write-back has happened: [document] is now [file]'s content on disk. */
     public suspend fun writtenBack(file: Path, document: TextDocument)

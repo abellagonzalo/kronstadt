@@ -77,7 +77,7 @@ public class RenameSymbol(
             is Applying.Failed -> return applying.result
         }
         val restored = restoreDroppedImports(shadow, applied.before, node.symbol.name, newName)
-        val removed = shadow.removeImportsMadeUnused(session, validationTimeout) { file, suspects -> suspects.intersect(restored[file].orEmpty()) }
+        val removed = shadow.removeImportsMadeUnused(session, validationTimeout) { file, imports -> imports.intersect(restored[file].orEmpty()) }
         return when (val validated = shadow.validate { it.replace(oldWord, newName) }) {
             is ShadowWorkspace.Validated.Passed -> shadow.writeBack()?.let { RenameResult.WriteBackFailed(it) }
                 ?: renamed(shadow, target, node, newName, applied, validated.files, removed)

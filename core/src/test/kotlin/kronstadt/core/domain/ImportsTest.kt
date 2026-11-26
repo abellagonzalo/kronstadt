@@ -264,12 +264,6 @@ class ImportsTest {
         )
     }
 
-    /** The imports of [text] that [organized], its text after organize-imports, found unused, sorted. */
-    private fun dropped(text: String, organized: String) = TextDocument(text).importsOrganizedIn(TextDocument(organized)).dropped.map { it.text }.sorted()
-
-    /** The imports of [text] that [organized] leaves undecided, covered by a new star import, sorted. */
-    private fun undecided(text: String, organized: String) = TextDocument(text).importsOrganizedIn(TextDocument(organized)).undecided.map { it.text }.sorted()
-
     /** [text] without the [drop] imports, and those it removed. */
     private fun removing(text: String, vararg drop: String): Pair<String, List<String>> {
         val document = TextDocument(text)
@@ -278,24 +272,12 @@ class ImportsTest {
     }
 
     @Test
-    fun `the imports organize-imports drops are unused, except those a new star import of their package takes over, which are undecided`() {
-        val text = "package a\n\nimport b.Bravo\nimport c.Charlie\nimport c.Delta\nimport c.Echo as E\nimport d.`Fox`\n\nfun f() = 1\n"
-        val starred = "package a\n\nimport c.*\nimport c.Echo as E\n\nfun f() = 1\n"
+    fun `a file's imports are read from its header in order, under any spelling`() {
+        val text = "package a\n\nimport d.Delta\nimport b.`Bravo`;\nimport c.* \nimport e.Echo  as  E\n\nfun f() = 1\n"
 
-        assertEquals(listOf("b.Bravo", "d.`Fox`"), dropped(text, starred))
-        assertEquals(listOf("c.Charlie", "c.Delta"), undecided(text, starred))
-        assertEquals(listOf("c.Echo as E"), dropped(text, "package a\n\nimport b.Bravo\nimport c.Charlie\nimport c.Delta\nimport d.Fox\n\nfun f() = 1\n"))
-        assertEquals(emptyList<String>(), dropped(text, text))
-        assertEquals(emptyList<String>(), undecided(text, text))
-    }
-
-    @Test
-    fun `an explicit import a star import the file already had covers is dropped, not undecided`() {
-        val text = "package a\n\nimport c.*\nimport c.Charlie\n\nfun f() = Charlie\n"
-        val organized = "package a\n\nimport c.*\n\nfun f() = Charlie\n"
-
-        assertEquals(listOf("c.Charlie"), dropped(text, organized))
-        assertEquals(emptyList<String>(), undecided(text, organized))
+        assertEquals(listOf("d.Delta", "b.`Bravo`", "c.*", "e.Echo as E"), TextDocument(text).imports.map { it.text })
+        assertEquals(imports("d.Delta", "b.Bravo", "c.*", "e.Echo as E"), TextDocument(text).imports)
+        assertEquals(emptyList(), TextDocument("package a\n\nfun f() = 1\n").imports)
     }
 
     @Test
@@ -332,13 +314,5 @@ class ImportsTest {
             "package a; import b.Bravo\nimport c.Charlie; import d.Delta\n\nfun f() = 1\n" to listOf("e.Echo"),
             removing(text, "b.Bravo", "c.Charlie", "e.Echo"),
         )
-    }
-
-    @Test
-    fun `a star import organize-imports replaces with explicit imports from its package stays`() {
-        val text = "package a\n\nimport b.*\nimport c.*\n\nfun f() = Bravo\n"
-
-        assertEquals(listOf("c.*"), dropped(text, "package a\n\nimport b.Bravo\n\nfun f() = Bravo\n"))
-        assertEquals(emptyList<String>(), undecided(text, "package a\n\nimport b.Bravo\n\nfun f() = Bravo\n"))
     }
 }
