@@ -1,5 +1,5 @@
 # Seam 2: the lsp adapter and the server against a real kotlin-lsp. Slow, so separate from Build.
-# The kotlin-lsp Homebrew cask should match the tested version in the README (ADR 0001).
+# KOTLIN_LSP_VERSION is the tested version in the README (ADR 0001); bump both together.
 name: Contract tests
 
 on:
@@ -17,8 +17,11 @@ permissions:
 
 jobs:
   contract-tests:
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      KOTLIN_LSP_VERSION: 271.2085.0
+      KOTLIN_LSP_SHA256: e398e799027f41749ea33faa57470307d13d40f910961858c7e30adbd778ae08
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -28,8 +31,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Install kotlin-lsp
         run: |
-          brew install --cask kotlin-lsp
-          brew list --cask --versions kotlin-lsp
+          archive="kotlin-server-$KOTLIN_LSP_VERSION.tar.gz"
+          curl -fsSLo "$RUNNER_TEMP/$archive" \
+            "https://download.jetbrains.com/language-server/kotlin-server/$KOTLIN_LSP_VERSION/$archive"
+          echo "$KOTLIN_LSP_SHA256  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/bin"
+          ln -s "$RUNNER_TEMP/kotlin-server-$KOTLIN_LSP_VERSION/kotlin-lsp.sh" "$RUNNER_TEMP/bin/kotlin-lsp"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - run: ./gradlew :lsp:contractTest :server:contractTest
       - if: failure()
         uses: actions/upload-artifact@v4

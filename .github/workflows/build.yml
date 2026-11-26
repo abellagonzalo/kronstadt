@@ -1,5 +1,4 @@
 # Compiles every module and runs the fast tests, incl. :server:launcherTest.
-# macOS because the workspace module calls clonefile(2).
 name: Build
 
 on:
@@ -17,7 +16,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
