@@ -1,5 +1,7 @@
 package kronstadt.core.application
 
+import kronstadt.core.domain.SymbolSpan
+
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.CodeSymbol
@@ -141,7 +143,7 @@ class ReadSymbolWithoutFileTest {
     @Test
     fun `a Symbol Path without a file resolves project-wide`() = runTest {
         val result = assertIs<ReadSymbolResult.Found>(read("OrderController/create"))
-        assertEquals("// create in $controllerKt, L4-4\n    fun create(): Int = 1", result.text)
+        assertEquals(ReadSymbolResult.Found("create", controllerKt, SymbolSpan(3, 3, "    fun create(): Int = 1")), result)
     }
 
     @Test
@@ -153,8 +155,8 @@ class ReadSymbolWithoutFileTest {
 
     @Test
     fun `a dotted package prefix narrows the candidates, even below a file comment`() = runTest {
-        assertEquals("// Config in $alphaKt, L3-3", assertIs<ReadSymbolResult.Found>(read("com.example.a/Config")).text.lines().first())
-        assertEquals("// Config in $betaKt, L4-4", assertIs<ReadSymbolResult.Found>(read("com.example.b/Config")).text.lines().first())
+        assertEquals("Config in $alphaKt, L3-3", assertIs<ReadSymbolResult.Found>(read("com.example.a/Config")).location)
+        assertEquals("Config in $betaKt, L4-4", assertIs<ReadSymbolResult.Found>(read("com.example.b/Config")).location)
         assertIs<ReadSymbolResult.Found>(read("com.example.web/OrderController/create"))
     }
 
@@ -173,7 +175,7 @@ class ReadSymbolWithoutFileTest {
 
     @Test
     fun `the package comes from the header, not from a comment above it`() = runTest {
-        assertEquals("// Widget in $widgetKt, L6-6", assertIs<ReadSymbolResult.Found>(read("com.example.g/Widget")).text.lines().first())
+        assertEquals("Widget in $widgetKt, L6-6", assertIs<ReadSymbolResult.Found>(read("com.example.g/Widget")).location)
         assertIs<LookupFailure.NotFound>(read("x.y/Widget").lookupFailure())
     }
 
@@ -221,18 +223,18 @@ class ReadSymbolWithoutFileTest {
     @Test
     fun `the index only names candidate files, whose own trees decide`() = runTest {
         // Listed twice by the index, yet one Symbol.
-        assertEquals("// Box in $boxKt, L3-10", assertIs<ReadSymbolResult.Found>(read("Box")).text.lines().first())
+        assertEquals("Box in $boxKt, L3-10", assertIs<ReadSymbolResult.Found>(read("Box")).location)
         // Listed by the index, but local declarations aren't addressable.
         assertIs<LookupFailure.NotFound>(read("pack/local").lookupFailure())
         assertIs<LookupFailure.NotFound>(read("local").lookupFailure())
         // Indexed without its receiver, which the tree has.
-        assertEquals("// String.shout in $boxKt, L12-12", assertIs<ReadSymbolResult.Found>(read("String.shout")).text.lines().first())
+        assertEquals("String.shout in $boxKt, L12-12", assertIs<ReadSymbolResult.Found>(read("String.shout")).location)
         assertEquals(listOf(SymbolCandidate("String.shout", boxKt)), assertIs<LookupFailure.NotFound>(read("shout").lookupFailure()).suggestions)
     }
 
     @Test
     fun `a constructor is found through its class's name`() = runTest {
-        assertEquals("// constructor() in $boxKt, L4-4", assertIs<ReadSymbolResult.Found>(read("Box/constructor()")).text.lines().first())
+        assertEquals("constructor() in $boxKt, L4-4", assertIs<ReadSymbolResult.Found>(read("Box/constructor()")).location)
         assertEquals(
             listOf(SymbolCandidate("constructor(Int)", boxKt), SymbolCandidate("constructor()", boxKt)),
             assertIs<LookupFailure.Ambiguous>(read("com.example/Box/constructor").lookupFailure()).candidates,
@@ -250,7 +252,7 @@ class ReadSymbolWithoutFileTest {
 
     @Test
     fun `an unnamed companion is found through its class's name`() = runTest {
-        assertEquals("// Companion in $registryKt, L4-6", assertIs<ReadSymbolResult.Found>(read("Registry/Companion")).text.lines().first())
+        assertEquals("Companion in $registryKt, L4-6", assertIs<ReadSymbolResult.Found>(read("Registry/Companion")).location)
         assertIs<ReadSymbolResult.Found>(read("Registry/Companion/empty"))
     }
 
@@ -292,6 +294,6 @@ class ReadSymbolWithoutFileTest {
         )
 
         val result = assertIs<ReadSymbolResult.Found>(read("create", capped))
-        assertEquals("// create in $controllerKt, L4-4", result.text.lines().first())
+        assertEquals("create in $controllerKt, L4-4", result.location)
     }
 }

@@ -22,7 +22,7 @@ import java.nio.file.Path
 import kotlin.time.Duration
 
 /**
- * Use case behind `kt_rename_symbol`: renames one Symbol and every Usage of it, across files and modules, through
+ * Use case behind renaming a Symbol: renames one Symbol and every Usage of it, across files and modules, through
  * the code intelligence. Its changes are applied in a Shadow Workspace, validated once and written back as a whole,
  * like an Edit's (ADR 0003); a rename can't be part of an Edit.
  */
@@ -139,7 +139,7 @@ public class RenameSymbol(
 
     /**
      * kotlin-lsp's rename also drops imports that were already unused. They go back, and only those the rename made unused
-     * go again, as kt_edit decides it (ADR 0004). Returns those put back in each file of [before].
+     * go again, as an Edit decides it (ADR 0004). Returns those put back in each file of [before].
      */
     private suspend fun restoreDroppedImports(
         shadow: ShadowWorkspace,

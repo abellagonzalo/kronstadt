@@ -92,8 +92,11 @@ class GetDefinitionTest {
     private val size = symbol("size", SymbolKind.PROPERTY, range(9, 4, 10, 26), 10, 17, type = ": Int")
     private val list = symbol("List", SymbolKind.INTERFACE, range(8, 0, 11, 1), 8, 17, children = listOf(size))
     private val stdlib = LibrarySource(TextDocument(stdlibSource), listOf(listOf, list))
+    private val stdlibJar = "kotlin-stdlib-2.4.21-sources.jar"
+    private val collectionsKt = "commonMain/kotlin/collections/Collections.kt"
+
     private fun inStdlib(symbol: CodeSymbol) =
-        Definition.InLibrary("kotlin-stdlib-2.4.21-sources.jar", "commonMain/kotlin/collections/Collections.kt", symbol.selectionRange, stdlib)
+        Definition.InLibrary(stdlibJar, collectionsKt, symbol.selectionRange, stdlib)
 
     private val legacyJava = "src/main/java/com/example/Legacy.java"
     private val legacySource = "package com.example;\n\npublic class Legacy {\n    public static String hello() { return \"hi\"; }\n}\n"
@@ -131,22 +134,23 @@ class GetDefinitionTest {
     private fun inSource(file: String, symbol: CodeSymbol) = Definition.InSource(SourceLocation(root.resolve(file), symbol.selectionRange))
 
     @Test
-    fun `a project target shows its header, KDoc and signature without the body, and how to read the rest`() = runTest {
+    fun `a project target carries its listing, file, and KDoc and signature without the body`() = runTest {
         val (files, intelligence) = project(mapOf(inCaller(4, 19) to listOf(inSource(greeterKt, greet))))
 
         val result = GetDefinition(files, intelligence)("welcome", "greet")
 
+        val found = assertIs<FoundDefinition.InSource>(assertIs<GetDefinitionResult.Found>(result).definitions.single())
+        assertEquals(Triple("greet", 5, 11), Triple(found.listing.path.toString(), found.listing.firstLine, found.listing.lastLine))
+        assertEquals(greeterKt, found.file)
         assertEquals(
             """
-            |// greet in src/main/kotlin/com/example/Greeter.kt, L5-11
             |    /**
             |     * Greets [name].
             |     */
             |    @Deprecated("use greetAll")
             |    fun greet(name: String): String
-            |// Body omitted. Full source: kt_read_symbol(symbol="greet", file="src/main/kotlin/com/example/Greeter.kt")
             """.trimMargin(),
-            assertIs<GetDefinitionResult.Found>(result).text,
+            found.head,
         )
         intelligence.assertOneSessionClosedEverything()
     }
@@ -188,9 +192,8 @@ class GetDefinitionTest {
         val result = GetDefinition(files, intelligence)("welcome", "greeter", at = "greeter.greet(")
 
         assertEquals(
-            "// greeter is local to welcome in src/main/kotlin/com/example/Caller.kt, not addressable; declared at L4\n" +
-                "val greeter = Greeter(\"Hi\")",
-            assertIs<GetDefinitionResult.Found>(result).text,
+            GetDefinitionResult.Found(listOf(FoundDefinition.Local("greeter", "welcome", callerKt, 4, "val greeter = Greeter(\"Hi\")"))),
+            result,
         )
         intelligence.assertOneSessionClosedEverything()
     }
@@ -202,9 +205,8 @@ class GetDefinitionTest {
         val result = GetDefinition(files, intelligence)("welcome", "guest", at = "greet(guest)")
 
         assertEquals(
-            "// guest is local to welcome in src/main/kotlin/com/example/Caller.kt, not addressable; declared at L3\n" +
-                "fun welcome(guest: String): String {",
-            assertIs<GetDefinitionResult.Found>(result).text,
+            GetDefinitionResult.Found(listOf(FoundDefinition.Local("guest", "welcome", callerKt, 3, "fun welcome(guest: String): String {"))),
+            result,
         )
     }
 
@@ -239,15 +241,10 @@ class GetDefinitionTest {
 
         val result = GetDefinition(files, intelligence)("names", "listOf")
 
+        val head = "/**\n * Returns a new read-only list of given elements.\n */\npublic fun <T> listOf(vararg elements: T): List<T>"
         assertEquals(
-            """
-            |// kotlin.collections.listOf in kotlin-stdlib-2.4.21-sources.jar!/commonMain/kotlin/collections/Collections.kt (library: read-only, not addressable)
-            |/**
-            | * Returns a new read-only list of given elements.
-            | */
-            |public fun <T> listOf(vararg elements: T): List<T>
-            """.trimMargin(),
-            assertIs<GetDefinitionResult.Found>(result).text,
+            GetDefinitionResult.Found(listOf(FoundDefinition.InLibrary("kotlin.collections.listOf", stdlibJar, collectionsKt, head))),
+            result,
         )
         intelligence.assertOneSessionClosedEverything()
     }
@@ -258,13 +255,10 @@ class GetDefinitionTest {
 
         val result = GetDefinition(files, intelligence)("names", "size")
 
+        val head = "    /** The number of elements. */\n    override val size: Int"
         assertEquals(
-            """
-            |// kotlin.collections.List.size in kotlin-stdlib-2.4.21-sources.jar!/commonMain/kotlin/collections/Collections.kt (library: read-only, not addressable)
-            |    /** The number of elements. */
-            |    override val size: Int
-            """.trimMargin(),
-            assertIs<GetDefinitionResult.Found>(result).text,
+            GetDefinitionResult.Found(listOf(FoundDefinition.InLibrary("kotlin.collections.List.size", stdlibJar, collectionsKt, head))),
+            result,
         )
     }
 
@@ -275,22 +269,18 @@ class GetDefinitionTest {
 
         val result = GetDefinition(files, intelligence)("names", "name")
 
-        assertEquals(
-            "// name in java.io.File, in JDK java.base (library: read-only, not addressable; no sources, so no KDoc or declaration)",
-            assertIs<GetDefinitionResult.Found>(result).text,
-        )
+        assertEquals(GetDefinitionResult.Found(listOf(FoundDefinition.LibraryWithoutSources("name", "java.io.File", "JDK java.base"))), result)
     }
 
     @Test
-    fun `several definitions are each printed as their own block, in the order the code intelligence gives them`() = runTest {
+    fun `several definitions come in the order the code intelligence gives them`() = runTest {
         val (files, intelligence) = project(mapOf(inLists(2, 19) to listOf(inStdlib(listOf), inSource(greeterKt, greet))))
 
-        val text = assertIs<GetDefinitionResult.Found>(GetDefinition(files, intelligence)("names", "listOf")).text
+        val definitions = assertIs<GetDefinitionResult.Found>(GetDefinition(files, intelligence)("names", "listOf")).definitions
 
-        val blocks = text.split("\n\n")
-        assertEquals(2, blocks.size, text)
-        assertEquals("// kotlin.collections.listOf in", blocks[0].substringBefore(" kotlin-stdlib"))
-        assertEquals("// greet in src/main/kotlin/com/example/Greeter.kt, L5-11", blocks[1].lines().first())
+        assertEquals(2, definitions.size, definitions.toString())
+        assertEquals("kotlin.collections.listOf", assertIs<FoundDefinition.InLibrary>(definitions[0]).qualifiedName)
+        assertEquals("greet", assertIs<FoundDefinition.InSource>(definitions[1]).listing.path.toString())
     }
 
     @Test
@@ -343,10 +333,13 @@ class GetDefinitionTest {
         val result = GetDefinition(files, intelligence)("welcome", "greet")
 
         assertEquals(
-            "// hello in src/main/java/com/example/Legacy.java, L4 (not Kotlin: read-only, not addressable)\n" +
-                "public static String hello() { return \"hi\"; }\n\n" +
-                "// greet in /elsewhere/Gen.kt, L10 (outside the project: read-only, not addressable)",
-            assertIs<GetDefinitionResult.Found>(result).text,
+            GetDefinitionResult.Found(
+                listOf(
+                    FoundDefinition.NotKotlin("hello", legacyJava, 4, "public static String hello() { return \"hi\"; }"),
+                    FoundDefinition.OutsideProject("greet", "/elsewhere/Gen.kt", 10),
+                ),
+            ),
+            result,
         )
         intelligence.assertOneSessionClosedEverything()
     }

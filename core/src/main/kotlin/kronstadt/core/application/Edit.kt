@@ -93,7 +93,7 @@ public data class Create(
 }
 
 /**
- * Use case behind `kt_edit`: applies an Edit's Operations, in order, in a Shadow Workspace, validates them and writes
+ * Use case behind an Edit: applies an Edit's Operations, in order, in a Shadow Workspace, validates them and writes
  * them back as a whole (ADR 0003).
  */
 public class Edit(

@@ -1,12 +1,14 @@
 package kronstadt.core.application
 
+import kronstadt.core.domain.PreferredOverFunctions
 import kronstadt.core.domain.Readiness
+import kronstadt.core.domain.SymbolSpan
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.core.port.FileStore
 import kotlin.time.Duration
 
 /**
- * Use case behind `kt_read_symbol`: exactly the Symbol Span that a replace or delete would act on.
+ * Use case behind reading a Symbol: exactly the Symbol Span that a replace or delete would act on.
  *
  * With a file it is syntax-only, answering from the file's `documentSymbol` tree without waiting for the project
  * index. Without one it resolves project-wide, which waits up to [readinessTimeout] for the index.
@@ -28,18 +30,22 @@ public class ReadSymbol(
         return intelligence.session { session ->
             val found = resolver.resolve(session, parsed).getOrElse { return@session ReadSymbolResult.LookupFailed(it) }
             val span = resolver.span(found).getOrElse { return@session ReadSymbolResult.LookupFailed(it) }
-            val note = found.preferred?.let { " (${it.picked}; ${it.sharedName})" } ?: ""
-            ReadSymbolResult.Found("// ${found.canonical} in ${found.analysed.shown}, L${span.firstLine + 1}-${span.lastLine + 1}$note\n${span.text}")
+            ReadSymbolResult.Found(found.canonical, found.analysed.shown, span, found.preferred)
         }
     }
 }
 
 public sealed interface ReadSymbolResult {
     /**
-     * Header (canonical path, file, 1-based line span, and, if a bare name chose a non-function over same-named functions,
-     * its kind and those functions) then the raw Symbol Span, no line-number gutter.
+     * The Symbol at canonical Symbol Path [symbol] in [file] (as shown), its Symbol Span, and, if a bare name chose a
+     * non-function over same-named functions, which ones it was [preferred] over.
      */
-    public data class Found(val text: String) : ReadSymbolResult
+    public data class Found(
+        val symbol: String,
+        val file: String,
+        val span: SymbolSpan,
+        val preferred: PreferredOverFunctions? = null,
+    ) : ReadSymbolResult
     public data class LookupFailed(val failure: LookupFailure) : ReadSymbolResult
 
     /** Resolving without a file needs the index, which was still incomplete after waiting. */

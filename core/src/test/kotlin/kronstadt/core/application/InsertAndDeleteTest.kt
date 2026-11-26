@@ -1,5 +1,7 @@
 package kronstadt.core.application
 
+import kronstadt.core.domain.SymbolSpan
+
 import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Position
@@ -135,7 +137,7 @@ class InsertAndDeleteTest {
         assertEquals(expected, files.content(path))
         assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 4, 6)), emptyList(), 0, emptyList(), 0))), result)
         assertEquals(
-            ReadSymbolResult.Found("// greet in src/A.kt, L4-6\n    /** Says hi. */\n    @Deprecated(\"old\")\n    fun greet(): Int = 1"),
+            ReadSymbolResult.Found("greet", "src/A.kt", SymbolSpan(3, 5, "    /** Says hi. */\n    @Deprecated(\"old\")\n    fun greet(): Int = 1")),
             ReadSymbol(files, FakeCodeIntelligence(symbolsByText = texts))(path, "Greeter/greet"),
         )
     }
@@ -166,7 +168,7 @@ class InsertAndDeleteTest {
         assertEquals(expected, files.content(path))
         assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("other", 7, 8)), emptyList(), 0, emptyList(), 0))), result)
         assertEquals(
-            ReadSymbolResult.Found("// other in src/A.kt, L7-8\n    /** Says it again. */\n    fun other(): Int = 1"),
+            ReadSymbolResult.Found("other", "src/A.kt", SymbolSpan(6, 7, "    /** Says it again. */\n    fun other(): Int = 1")),
             ReadSymbol(files, FakeCodeIntelligence(symbolsByText = texts))(path, "Greeter/other"),
         )
     }

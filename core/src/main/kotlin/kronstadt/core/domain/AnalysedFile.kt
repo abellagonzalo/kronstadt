@@ -64,7 +64,7 @@ public class AnalysedFile(
     public fun span(node: SymbolTree.Node): SymbolSpan.Computation = SymbolSpan.of(document, node.symbol)
 
     /**
-     * The 0-based lines a listing shows for [node]: its Symbol Span's, as `kt_read_symbol` reports them, or its
+     * The 0-based lines a listing shows for [node]: its Symbol Span's, as reading the Symbol reports them, or its
      * declaration's when it has no whole-line span (it shares a line with other code).
      */
     public fun listedLines(node: SymbolTree.Node): IntRange = SymbolSpan.lines(document, node.symbol).let { (first, last) -> first..last }

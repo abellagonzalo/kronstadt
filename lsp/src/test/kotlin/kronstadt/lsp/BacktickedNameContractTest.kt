@@ -3,6 +3,9 @@ package kronstadt.lsp
 import kotlinx.coroutines.runBlocking
 import kronstadt.core.application.FindUsages
 import kronstadt.core.application.FindUsagesResult
+import kronstadt.core.application.UsageLine
+import kronstadt.core.application.UsagesInFile
+import kronstadt.core.application.UsagesInSymbol
 import kronstadt.core.application.RenameResult
 import kronstadt.core.application.RenameSymbol
 import kronstadt.core.application.RenamedFile
@@ -94,13 +97,11 @@ class BacktickedNameContractTest {
     @Order(4)
     fun `kt_find_usages finds a backticked function's Usages`() = runBlocking<Unit> {
         assertEquals(
-            """
-        |2 usages in 1 file
-        |$USAGES
-        |  twice
-        |    L3: fun twice(): Int = `backticked name`() + `backticked name`()
-        """.trimMargin(),
-            assertIs<FindUsagesResult.Found>(FindUsages(files, lsp)("`backticked name`")).text,
+            FindUsagesResult.Found(
+                2, 1, 0,
+                listOf(UsagesInFile(USAGES, listOf(UsagesInSymbol("twice", listOf(UsageLine(3, "fun twice(): Int = `backticked name`() + `backticked name`()")))))),
+            ),
+            FindUsages(files, lsp)("`backticked name`"),
         )
     }
 

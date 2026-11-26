@@ -6,6 +6,7 @@ import kronstadt.core.application.EditResult
 import kronstadt.core.application.EditedFile
 import kronstadt.core.application.FindSymbolResult
 import kronstadt.core.application.FindUsagesResult
+import kronstadt.core.application.FoundDefinition
 import kronstadt.core.application.GetDefinitionResult
 import kronstadt.core.application.IndentationHint
 import kronstadt.core.application.LookupFailure
@@ -17,6 +18,7 @@ import kronstadt.core.application.RenameResult
 import kronstadt.core.application.SourceLine
 import kronstadt.core.application.ValidationFailure
 import kronstadt.core.application.WriteBackFailure
+import kronstadt.core.domain.PreferredOverFunctions
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolCandidate
 import kronstadt.core.domain.SymbolKind
@@ -63,7 +65,7 @@ internal enum class ToolAdvice(val tool: String, val declaringFile: DeclaringFil
  */
 internal object Replies {
     fun readStructure(result: ReadStructureResult): Reply = when (result) {
-        is ReadStructureResult.Structure -> Reply.result(result.text)
+        is ReadStructureResult.Structure -> Reply.result(StructureRenderer.render(result.file))
         is ReadStructureResult.NoDeclarations -> Reply.result("No declarations found in ${result.path}.")
         is ReadStructureResult.LookupFailed -> Reply.error(lookupFailure(result.failure, ToolAdvice.READ_STRUCTURE))
     }
@@ -100,13 +102,17 @@ internal object Replies {
     }
 
     fun readSymbol(result: ReadSymbolResult): Reply = when (result) {
-        is ReadSymbolResult.Found -> Reply.result(result.text)
+        is ReadSymbolResult.Found -> {
+            val span = result.span
+            val note = result.preferred?.let { " (${picked(it)}; ${sharedName(it)})" } ?: ""
+            Reply.result("// ${result.symbol} in ${result.file}, L${span.firstLine + 1}-${span.lastLine + 1}$note\n${span.text}")
+        }
         is ReadSymbolResult.LookupFailed -> Reply.error(lookupFailure(result.failure, ToolAdvice.READ_SYMBOL))
         is ReadSymbolResult.NotReady -> notReady(result.readiness)
     }
 
     fun findUsages(result: FindUsagesResult): Reply = when (result) {
-        is FindUsagesResult.Found -> Reply.result(result.text)
+        is FindUsagesResult.Found -> Reply.result(usages(result))
         is FindUsagesResult.NoUsages -> Reply.result(
             "No usages of ${result.symbol}" +
                 (if (result.imports > 0) " other than ${counted(result.imports, "import")}" else "") +
@@ -128,7 +134,7 @@ internal object Replies {
 
     /** kt_get_definition's Reply; [atGiven] says whether the agent passed an `at` Snippet. */
     fun getDefinition(result: GetDefinitionResult, atGiven: Boolean): Reply = when (result) {
-        is GetDefinitionResult.Found -> Reply.result(result.text)
+        is GetDefinitionResult.Found -> Reply.result(result.definitions.joinToString("\n\n", transform = ::definition))
         is GetDefinitionResult.Unresolved -> Reply.result(
             "'${result.name}' on L${result.line} of ${result.symbol} resolves to no declaration (a keyword, a literal " +
                 "or an unresolved reference)." + (result.diagnostic?.let { " Compiler: $it" } ?: ""),
@@ -165,6 +171,63 @@ internal object Replies {
         is GetDefinitionResult.LookupFailed -> Reply.error(lookupFailure(result.failure, ToolAdvice.GET_DEFINITION))
         is GetDefinitionResult.NotReady -> notReady(result.readiness)
     }
+
+    /** A summary line, then each file listed, the Symbol Paths in it that hold Usages, and one line per Usage. */
+    private fun usages(result: FindUsagesResult.Found): String = buildString {
+        append(counted(result.usageCount, "usage")).append(" in ").append(counted(result.fileCount, "file"))
+        if (result.importCount > 0) append(" (+").append(counted(result.importCount, "import")).append(')')
+        result.files.forEach { inFile ->
+            append('\n').append(inFile.file)
+            inFile.inSymbols.forEach { inSymbol ->
+                append("\n  ").append(inSymbol.symbol ?: FILE_LEVEL)
+                inSymbol.lines.forEach { usage -> append("\n    L${usage.line}: ").append(cutLine(usage.source)) }
+            }
+        }
+        if (result.leftOut.isNotEmpty()) {
+            append("\n… ").append(counted(result.leftOutUsageCount, "more usage"))
+            append(" in ").append(counted(result.leftOut.size, "file")).append(": ")
+            append(result.leftOut.joinToString(", "))
+        }
+    }
+
+    /** A Usage's source line, cut to [MAX_USAGE_LINE] characters with a trailing ellipsis. */
+    private fun cutLine(source: String) = if (source.length <= MAX_USAGE_LINE) source else source.take(MAX_USAGE_LINE - 1) + "…"
+
+    /** One definition as its own block: a header line naming it and where it is, then what of it can be shown. */
+    private fun definition(found: FoundDefinition): String = when (found) {
+        is FoundDefinition.InSource -> {
+            val listing = found.listing
+            "// ${listing.path} in ${found.file}, L${listing.firstLine}-${listing.lastLine}\n${found.head}\n" +
+                "// Body omitted. Full source: ${ToolAdvice.READ_SYMBOL.tool}(symbol=\"${listing.path}\", file=\"${found.file}\")"
+        }
+        is FoundDefinition.Local ->
+            "// ${found.name} is local to ${found.enclosing ?: FILE_LEVEL} in ${found.file}, not addressable; declared at L${found.line}\n" +
+                found.source
+        is FoundDefinition.InLibrary ->
+            "// ${found.qualifiedName} in ${found.origin}!/${found.entry} (library: read-only, not addressable)\n${found.head}"
+        is FoundDefinition.LibraryWithoutSources ->
+            "// ${found.member?.let { "$it in " } ?: ""}${found.className}, in ${found.origin} " +
+                "(library: read-only, not addressable; no sources, so no KDoc or declaration)"
+        is FoundDefinition.NotKotlin ->
+            "// ${found.name} in ${found.file}, L${found.line} (not Kotlin: read-only, not addressable)" + (found.source?.let { "\n$it" } ?: "")
+        is FoundDefinition.OutsideProject ->
+            "// ${found.name} in ${found.file}, L${found.line} (outside the project: read-only, not addressable)"
+        is FoundDefinition.FileNotFound -> "// ${found.name} in ${found.file}, L${found.line} (file not found)"
+    }
+
+    /** The kind of Symbol a bare Symbol Path chose over same-named functions, as messages name it, e.g. `the property`. */
+    private fun picked(preferred: PreferredOverFunctions): String = "the " + when (preferred.kind) {
+        SymbolKind.PROPERTY, SymbolKind.VARIABLE -> "property"
+        SymbolKind.ENUM_ENTRY -> "enum entry"
+        SymbolKind.TYPE_PARAMETER -> "type parameter"
+        SymbolKind.OTHER -> "Symbol"
+        else -> preferred.kind.keyword
+    }
+
+    /** The functions it was chosen over, as a lowercase clause: `a function shares its name: edit(Int)`. */
+    private fun sharedName(preferred: PreferredOverFunctions): String =
+        (if (preferred.functions.size == 1) "a function shares its name: " else "functions share its name: ") +
+            preferred.functions.joinToString(", ")
 
     /**
      * kt_edit's Reply. [types] are the Operations' types as the agent named them, for the messages of their failures;
@@ -424,8 +487,8 @@ internal object Replies {
             val hint = miss.indentation
             // Missing from a Symbol a bare name chose over same-named functions: say so, as 'old' may be in one of them.
             val preferred = failure.scope.preferred
-            val missingIn = where(failure.scope, preferred?.let { " (${it.picked})" } ?: "")
-            val sharedName = preferred?.let { " " + it.sharedName.replaceFirstChar(Char::uppercaseChar) + "." } ?: ""
+            val missingIn = where(failure.scope, preferred?.let { " (${picked(it)})" } ?: "")
+            val sharedName = preferred?.let { " " + sharedName(it).replaceFirstChar(Char::uppercaseChar) + "." } ?: ""
             if (miss.lines.isEmpty() && hint != null) {
                 "'old' doesn't occur in $missingIn exactly as written, but " + indentationHint(hint, "'old'") + " " +
                     (if (failure.scope.wholeFile) "Read the file to copy it." else "Copy 'old' from kt_read_symbol output.") +
@@ -524,6 +587,12 @@ internal object Replies {
 
 /** [n] of [noun], pluralised by an `s` unless there is exactly one: `1 file`, `3 files`, `0 files`. */
 private fun counted(n: Int, noun: String): String = if (n == 1) "1 $noun" else "$n ${noun}s"
+
+/** Where a Usage or local declaration outside any Symbol is, in place of a Symbol Path. */
+private const val FILE_LEVEL = "(file level)"
+
+/** The characters a Usage's source line is cut to. */
+private const val MAX_USAGE_LINE = 120
 
 /** Why a search may be incomplete, as the tools tell the agent. */
 internal const val INDEX_STOPS = "the project index stops at a maximum number of results"

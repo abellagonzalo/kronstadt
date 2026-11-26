@@ -48,7 +48,7 @@ public data class SymbolSpan(val firstLine: Int, val lastLine: Int, val text: St
 
     public companion object {
         /**
-         * The 0-based first and last lines a listing shows for [symbol]: its Symbol Span's, as `kt_read_symbol` reports
+         * The 0-based first and last lines a listing shows for [symbol]: its Symbol Span's, as reading the Symbol reports
          * them, or its declaration's when it has no whole-line span (it shares a line with other code).
          */
         public fun lines(document: TextDocument, symbol: CodeSymbol): Pair<Int, Int> =

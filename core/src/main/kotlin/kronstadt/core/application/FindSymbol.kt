@@ -11,7 +11,7 @@ import java.nio.file.Path
 import kotlin.time.Duration
 
 /**
- * Use case behind `kt_find_symbol`: locate declarations by name without knowing their file.
+ * Use case behind finding Symbols: locate declarations by name without knowing their file.
  *
  * The index only finds names: each hit is looked up in its file's `documentSymbol` tree, which gives its canonical
  * Symbol Path and drops what isn't an addressable Symbol (locals, accessors). Hits outside the project's Kotlin
