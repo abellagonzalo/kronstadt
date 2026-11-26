@@ -37,15 +37,20 @@ public class ImportDirective internal constructor(
 
     override fun toString(): String = text
 
-    public companion object {
+    internal companion object {
         /** [raw] as a directive, with or without the `import` keyword and a trailing `;`. */
-        public fun parse(raw: String): Result<ImportDirective> = FileHeader.directive(raw)?.let { Result.success(it) }
+        fun parse(raw: String): Result<ImportDirective> = FileHeader.directive(raw)?.let { Result.success(it) }
             ?: Result.failure(IllegalArgumentException("not an import directive: '$raw'"))
     }
 }
 
 /** Whole [lines] (0-based; empty to insert before `lines.first`) to replace with [newLines]. */
-public data class LineSplice(val lines: IntRange, val newLines: List<String>)
+public data class LineSplice(
+    /** The 0-based lines replaced. */
+    val lines: IntRange,
+    /** The lines put in their place, without line breaks. */
+    val newLines: List<String>,
+)
 
 private const val BYTE_ORDER_MARK = "\uFEFF"
 

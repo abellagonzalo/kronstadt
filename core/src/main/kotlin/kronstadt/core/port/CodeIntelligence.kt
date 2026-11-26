@@ -84,7 +84,7 @@ public interface AnalysisSession {
     /**
      * Those of [among], imports of [document] (the content of [file]), that are Unused Imports, judged against the texts
      * this session has open; nothing is applied. An import it can't decide, e.g. without an answer within [budget], counts
-     * as used. [budget] bounds only the extra checks some code intelligences need beyond their first answer.
+     * as used.
      */
     public suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration): Set<ImportDirective>
 

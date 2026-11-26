@@ -37,7 +37,7 @@ internal fun TextDocument.importsOrganizedIn(organized: TextDocument): Organized
  * answer for it, shows unused (ADR 0004): those it dropped, and those it left undecided that removing adds no error
  * (see [removableAmong]). [budget] bounds only that last check; when it runs out, the undecided ones count as used.
  */
-internal suspend fun AnalysisSession.unusedImportsOrganized(
+internal suspend fun AnalysisSession.unusedPerOrganizeImports(
     file: Path,
     document: TextDocument,
     organized: OrganizedImports,

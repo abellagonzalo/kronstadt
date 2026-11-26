@@ -82,6 +82,7 @@ import java.util.concurrent.TimeUnit
 import java.util.zip.ZipFile
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 /**
  * [CodeIntelligence] backed by a kotlin-lsp child process (ADR 0001), bound to a single project root.
@@ -181,12 +182,14 @@ public class LspCodeIntelligence private constructor(
         /**
          * kotlin-lsp has no unused-import diagnostic, so its organize-imports answer decides (see [organizeImports]), except for
          * an explicit import a star import new in that answer covers, which is settled by removing it (see
-         * [unusedImportsOrganized]). Without an answer every import counts as used. [budget] doesn't bound organize-imports.
+         * [unusedPerOrganizeImports]). Without an answer every import counts as used. [budget] doesn't bound organize-imports,
+         * but the time it took counts against what is left for removing.
          */
         override suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration): Set<ImportDirective> {
             if (among.isEmpty()) return emptySet()
+            val asked = TimeSource.Monotonic.markNow()
             val organized = organizeImports(file, document) ?: return emptySet()
-            return unusedImportsOrganized(file, document, document.importsOrganizedIn(organized), among, budget)
+            return unusedPerOrganizeImports(file, document, document.importsOrganizedIn(organized), among, budget - asked.elapsedNow())
         }
 
         /**

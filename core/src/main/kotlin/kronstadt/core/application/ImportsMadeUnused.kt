@@ -35,15 +35,13 @@ internal suspend fun ShadowWorkspace.removeImportsMadeUnused(
         edited.forEach { if (it !== asked) session.documentSymbols(it.file, of(it)) }
 
     // Only an import the base had can have been used before.
-    val withImports = edited.filter { it.baseImports.isNotEmpty() }
-    if (withImports.isEmpty()) return emptyMap()
-    bringAll(withImports.first()) { it.current }
-    val suspected = withImports.mapNotNull { texts ->
-        val among = eligible(texts.file, texts.baseImports)
-        if (among.isEmpty()) return@mapNotNull null
-        // Most changes stop here, with no second round-trip.
+    val asked = edited.mapNotNull { texts -> eligible(texts.file, texts.baseImports).takeIf { it.isNotEmpty() }?.let { texts to it } }
+    if (asked.isEmpty()) return emptyMap()
+    bringAll(asked.first().first) { it.current }
+    val suspected = asked.mapNotNull { (texts, among) ->
         session.unusedImports(texts.file, texts.current, among, remaining()).takeIf { it.isNotEmpty() }?.let { Suspected(texts, it) }
     }
+    // Most changes stop here, with no second round-trip.
     if (suspected.isEmpty()) return emptyMap()
     bringAll(suspected.first().texts) { it.base }
     return suspected.mapNotNull { (texts, suspects) ->
