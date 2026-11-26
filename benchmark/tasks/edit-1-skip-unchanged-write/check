@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Compiles every module, then runs this task's hidden test and the existing com.squareup.kotlinpoet.FileWritingTest.
+here=$(dirname "$0")
+exec "$here/../compile-and-test.sh" "$here/BenchmarkTaskTest.kt" com.squareup.kotlinpoet.FileWritingTest

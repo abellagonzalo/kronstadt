@@ -1,0 +1,1 @@
+Rename the property `ClassName.canonicalName` to `fqName`, and update every reference to it in every module, main and test sources alike. Rename nothing else: other declarations named `canonicalName`, such as `MemberName.canonicalName` or Java's `Class.canonicalName`, stay as they are. The project must still compile.

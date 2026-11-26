@@ -1,0 +1,13 @@
+diff --git a/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/CodeBlock.kt b/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/CodeBlock.kt
+index 366612d3..f0127119 100644
+--- a/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/CodeBlock.kt
++++ b/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/CodeBlock.kt
+@@ -647,7 +647,7 @@ public fun Collection<CodeBlock>.joinToCode(
+   prefix: CharSequence = "",
+   suffix: CharSequence = "",
+ ): CodeBlock {
+-  val blocks = toTypedArray()
++  val blocks = filter { it.isNotEmpty() }.toTypedArray()
+   val placeholders = Array(blocks.size) { "%L" }
+   return CodeBlock.of(placeholders.joinToString(separator, prefix, suffix), *blocks)
+ }

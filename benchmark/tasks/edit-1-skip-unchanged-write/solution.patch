@@ -1,0 +1,28 @@
+diff --git a/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/FileSpec.kt b/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/FileSpec.kt
+index e8bc9276..92747195 100644
+--- a/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/FileSpec.kt
++++ b/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/FileSpec.kt
+@@ -31,8 +31,10 @@ import javax.tools.StandardLocation
+ import kotlin.DeprecationLevel.HIDDEN
+ import kotlin.io.path.createDirectories
+ import kotlin.io.path.isDirectory
++import kotlin.io.path.isRegularFile
+ import kotlin.io.path.notExists
+-import kotlin.io.path.outputStream
++import kotlin.io.path.readText
++import kotlin.io.path.writeText
+ import kotlin.reflect.KClass
+ 
+ /**
+@@ -110,8 +112,10 @@ private constructor(builder: Builder, private val tagMap: TagMap = builder.build
+       "path $directory exists but is not a directory."
+     }
+     val outputPath = directory.resolve(relativePath)
++    val content = buildString { writeTo(this) }
++    if (outputPath.isRegularFile() && outputPath.readText() == content) return outputPath
+     outputPath.parent.createDirectories()
+-    outputPath.outputStream().bufferedWriter().use(::writeTo)
++    outputPath.writeText(content)
+     return outputPath
+   }
+ 

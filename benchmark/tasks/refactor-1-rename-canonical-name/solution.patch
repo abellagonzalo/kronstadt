@@ -1,0 +1,170 @@
+diff --git a/interop/kotlin-metadata/src/main/kotlin/com/squareup/kotlinpoet/metadata/classinspectors/ClassInspectorUtil.kt b/interop/kotlin-metadata/src/main/kotlin/com/squareup/kotlinpoet/metadata/classinspectors/ClassInspectorUtil.kt
+index d79ab04d..6c18fe36 100644
+--- a/interop/kotlin-metadata/src/main/kotlin/com/squareup/kotlinpoet/metadata/classinspectors/ClassInspectorUtil.kt
++++ b/interop/kotlin-metadata/src/main/kotlin/com/squareup/kotlinpoet/metadata/classinspectors/ClassInspectorUtil.kt
+@@ -86,7 +86,7 @@ internal object ClassInspectorUtil {
+     return annotations.filterNot {
+       val typeName = it.typeName
+       return@filterNot typeName is ClassName &&
+-        typeName.canonicalName in KOTLIN_NULLABILITY_ANNOTATIONS
++        typeName.fqName in KOTLIN_NULLABILITY_ANNOTATIONS
+     }
+   }
+ 
+diff --git a/interop/kotlin-metadata/src/main/kotlin/com/squareup/kotlinpoet/metadata/classinspectors/ElementsClassInspector.kt b/interop/kotlin-metadata/src/main/kotlin/com/squareup/kotlinpoet/metadata/classinspectors/ElementsClassInspector.kt
+index 4f32ac8e..adc561a6 100644
+--- a/interop/kotlin-metadata/src/main/kotlin/com/squareup/kotlinpoet/metadata/classinspectors/ElementsClassInspector.kt
++++ b/interop/kotlin-metadata/src/main/kotlin/com/squareup/kotlinpoet/metadata/classinspectors/ElementsClassInspector.kt
+@@ -97,7 +97,7 @@ private constructor(
+     ConcurrentHashMap<Pair<TypeElement, String>, Optional<ExecutableElement>>()
+   private val variableElementCache =
+     ConcurrentHashMap<Pair<TypeElement, String>, Optional<VariableElement>>()
+-  private val jvmNameType = elements.getTypeElement(JVM_NAME.canonicalName)
++  private val jvmNameType = elements.getTypeElement(JVM_NAME.fqName)
+   private val jvmNameName =
+     ElementFilter.methodsIn(jvmNameType.enclosedElements).first {
+       it.simpleName.toString() == "name"
+@@ -105,7 +105,7 @@ private constructor(
+ 
+   private fun lookupTypeElement(className: ClassName): TypeElement? {
+     return typeElementCache
+-      .getOrPut(className) { elements.getTypeElement(className.canonicalName).toOptional() }
++      .getOrPut(className) { elements.getTypeElement(className.fqName).toOptional() }
+       .nullableValue
+   }
+ 
+diff --git a/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/ClassName.kt b/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/ClassName.kt
+index 919d82b3..32333dcf 100644
+--- a/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/ClassName.kt
++++ b/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/ClassName.kt
+@@ -82,7 +82,7 @@ public class ClassName internal constructor(
+   private val comparableAnnotations = annotations.joinToString()
+ 
+   /** Fully qualified name using `.` as a separator, like `kotlin.collections.Map.Entry`. */
+-  public val canonicalName: String = if (names[0].isEmpty())
++  public val fqName: String = if (names[0].isEmpty())
+     names.subList(1, names.size).joinToString(".") else
+     names.joinToString(".")
+ 
+@@ -135,7 +135,7 @@ public class ClassName internal constructor(
+     }
+     // concat top level class name and nested names
+     return buildString {
+-      append(topLevelClassName().canonicalName)
++      append(topLevelClassName().fqName)
+       for (name in simpleNames.subList(1, simpleNames.size)) {
+         append('$').append(name)
+       }
+diff --git a/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/CodeWriter.kt b/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/CodeWriter.kt
+index 87bc3c68..9ab8bf79 100644
+--- a/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/CodeWriter.kt
++++ b/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/CodeWriter.kt
+@@ -310,7 +310,7 @@ internal class CodeWriter(
+           if (typeName is ClassName && partIterator.hasNext()) {
+             if (!codeBlock.formatParts[partIterator.nextIndex()].startsWith("%")) {
+               val candidate = typeName
+-              if (candidate.canonicalName in memberImportNames) {
++              if (candidate.fqName in memberImportNames) {
+                 check(deferredTypeName == null) { "pending type for static import?!" }
+                 deferredTypeName = candidate
+                 defer = true
+@@ -372,7 +372,7 @@ internal class CodeWriter(
+           var doBreak = false
+           if (deferredTypeName != null) {
+             if (part.startsWith(".")) {
+-              if (emitStaticImportMember(deferredTypeName.canonicalName, part)) {
++              if (emitStaticImportMember(deferredTypeName.fqName, part)) {
+                 // Okay, static import hit and all was emitted, so clean-up and jump to next part.
+                 deferredTypeName = null
+                 doBreak = true
+@@ -443,7 +443,7 @@ internal class CodeWriter(
+     var nameResolved = false
+     var c: ClassName? = className
+     while (c != null) {
+-      val alias = imports[c.canonicalName]?.alias
++      val alias = imports[c.fqName]?.alias
+       val simpleName = alias ?: c.simpleName
+       val resolved = resolve(simpleName)
+       nameResolved = resolved != null
+@@ -464,11 +464,11 @@ internal class CodeWriter(
+ 
+     // If the name resolved but wasn't a match, we're stuck with the fully qualified name.
+     if (nameResolved) {
+-      return className.canonicalName
++      return className.fqName
+     }
+ 
+     // If the class is in the same package and there's no import alias for that class, we're done.
+-    if (packageName == className.packageName && imports[className.canonicalName]?.alias == null) {
++    if (packageName == className.packageName && imports[className.fqName]?.alias == null) {
+       referencedNames.add(className.topLevelClassName().simpleName)
+       return className.simpleNames.joinToString(".")
+     }
+@@ -478,7 +478,7 @@ internal class CodeWriter(
+       importableType(className)
+     }
+ 
+-    return className.canonicalName
++    return className.fqName
+   }
+ 
+   fun lookupName(memberName: MemberName): String {
+@@ -528,7 +528,7 @@ internal class CodeWriter(
+ 
+   private fun importableType(className: ClassName) {
+     val topLevelClassName = className.topLevelClassName()
+-    val alias = imports[className.canonicalName]?.alias
++    val alias = imports[className.fqName]?.alias
+     val simpleName = alias ?: topLevelClassName.simpleName
+     // Check for name clashes with members.
+     if (simpleName !in importableMembers) {
+@@ -744,7 +744,7 @@ internal class CodeWriter(
+           .suggestedTypeImports()
+           .generateImports(
+             generatedImports,
+-            computeCanonicalName = ClassName::canonicalName,
++            computeCanonicalName = ClassName::fqName,
+             capitalizeAliases = true,
+             referencedNames = importsCollector.referencedNames,
+           )
+diff --git a/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/FileSpec.kt b/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/FileSpec.kt
+index e8bc9276..ae9e92c5 100644
+--- a/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/FileSpec.kt
++++ b/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/FileSpec.kt
+@@ -388,7 +388,7 @@ private constructor(builder: Builder, private val tagMap: TagMap = builder.build
+     public fun addImport(className: ClassName, names: Iterable<String>): Builder = apply {
+       require("*" !in names) { "Wildcard imports are not allowed" }
+       for (name in names) {
+-        memberImports += Import(className.canonicalName + "." + name)
++        memberImports += Import(className.fqName + "." + name)
+       }
+     }
+ 
+@@ -424,12 +424,12 @@ private constructor(builder: Builder, private val tagMap: TagMap = builder.build
+       addAliasedImport(`class`.asClassName(), `as`)
+ 
+     public fun addAliasedImport(className: ClassName, `as`: String): Builder = apply {
+-      memberImports += Import(className.canonicalName, `as`)
++      memberImports += Import(className.fqName, `as`)
+     }
+ 
+     public fun addAliasedImport(className: ClassName, memberName: String, `as`: String): Builder =
+       apply {
+-        memberImports += Import("${className.canonicalName}.$memberName", `as`)
++        memberImports += Import("${className.fqName}.$memberName", `as`)
+       }
+ 
+     public fun addAliasedImport(memberName: MemberName, `as`: String): Builder = apply {
+diff --git a/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/MemberName.kt b/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/MemberName.kt
+index ef9a434d..b1592b17 100644
+--- a/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/MemberName.kt
++++ b/kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/MemberName.kt
+@@ -117,7 +117,7 @@ internal constructor(
+   /** Fully qualified name using `.` as a separator, like `kotlin.String.isBlank`. */
+   public val canonicalName: String = buildString {
+     if (enclosingClassName != null) {
+-      append(enclosingClassName.canonicalName)
++      append(enclosingClassName.fqName)
+       append('.')
+     } else if (packageName.isNotBlank()) {
+       append(packageName)
