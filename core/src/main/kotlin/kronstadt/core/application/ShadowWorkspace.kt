@@ -122,7 +122,8 @@ internal class ShadowWorkspace(
 
     /**
      * The Symbol [parsed] names in the Edit's current view of the project: in the text earlier Operations left, and in
-     * files an earlier [create] made. A Symbol on disk that an earlier Operation removed or renamed is said to be.
+     * files an earlier [create] made. A Symbol on disk that an earlier Operation removed or renamed fails as
+     * [OperationFailure.RemovedEarlier].
      */
     suspend fun locate(parsed: ParsedLookup): Located {
         val path = parsed.file ?: return locateWithoutFile(parsed)
@@ -141,7 +142,7 @@ internal class ShadowWorkspace(
     }
 
     /**
-     * [parsed], which has no file. The project lookup sees only the disk, so its candidates in files this Edit has edited
+     * Where [parsed], which has no file, is. The project lookup sees only the disk, so its candidates in files this Edit has edited
      * give way to those in their current text ([findInEdited]). One candidate left is the target if the disk has it too,
      * else it needs its file; several are ambiguous. None leaves the disk lookup's answer: a Symbol it found in an edited
      * file, or in several that all were, is then said to be removed earlier.
