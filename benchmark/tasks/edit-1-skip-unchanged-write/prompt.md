@@ -1,0 +1,1 @@
+Change `FileSpec.writeTo(directory: Path)` so that it doesn't rewrite a file whose current content is already exactly what it would write: leave such a file untouched (not even its modification time changes) and still return its path. A missing or different file is written as before. Change only that function and the imports it needs; don't add tests.

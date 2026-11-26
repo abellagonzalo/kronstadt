@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# The direct implementers: the seven specs and TypeName delegate to their `tagMap`; TagMap implements it itself.
+exec "$(dirname "$0")/../reply-names.sh" \
+  AnnotationSpec FileSpec FunSpec ParameterSpec PropertySpec TypeAliasSpec TypeSpec TypeName TagMap deleg

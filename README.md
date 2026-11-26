@@ -36,6 +36,7 @@ workspace/   FileStore over the local disk, confined to the project root;
              DetachedSeedRefresh (that refresh, in a process that outlives Kronstadt: ADR 0005)
 server/      MCP stdio server: tool schemas -> use cases; composition root (Main.kt)
 evaluation/  dev-only, never shipped: judges v1 on Claude Code transcripts (see Evaluation below)
+benchmark/   dev-only, never shipped: tokens and time with Kronstadt vs without, on demand (see Benchmark below)
 ```
 
 Rules of thumb:
@@ -188,6 +189,77 @@ prints each sample session, then the totals, and exits 0 only if the sample is c
 - Informational: Bash `grep`/`rg`, `cat` and `sed -n` on Kotlin; hook denials (a failed `Edit`/`MultiEdit`/`Write`
   whose message names `kt_edit`) by what the same agent did next; Validation rejections per `kt_edit` that reached
   Validation; readiness timeouts.
+
+## Benchmark (dev-only)
+
+`benchmark/` measures what Kronstadt saves a coding agent in **tokens** and **wall-clock time**. It runs Claude Code
+on fixed tasks in two arms and compares them. It runs on demand only: it isn't part of `check`, any PR gate or CI, and
+it keeps no history across runs.
+
+- **Benchmark:** one on-demand run of the whole comparison.
+- **Arm:** with Kronstadt, or without it. *With Kronstadt* gets the MCP server built from this checkout
+  (`installDist`) and the Kotlin instructions for CLAUDE.md recommended above, minus their part on opening issues.
+  The `PreToolUse` edit hook isn't shipped (#35), so neither arm has it. *Without Kronstadt* is plain Claude Code.
+  Both arms get the same prompt, model and permissions.
+- **Benchmark Task:** one fixed task together with its success check, in `benchmark/tasks/<id>/`:
+  - `prompt.md`: the exact prompt, the same for both arms. It never mentions Kronstadt.
+  - `check`: run in the run worktree after the session, with the agent's final reply on stdin. It exits 0 on
+    success.
+    - Edit and refactor tasks compile every module and run a hidden test, which is copied in only after the session.
+      Refactor tasks also run every existing test.
+    - Navigation tasks look for the expected facts in the reply.
+  - `kind`: `navigation`, `local-edit` or `refactor`.
+  - `solution.patch` or `solution.md`: a reference solution, used only by `--verify-tasks`.
+- **Run worktree:** the git worktree one session runs in. Each session gets a new one at the target's pinned
+  commit, deleted afterwards. It isn't a Temporary Clone, which is an index clone.
+
+The target is [kotlinpoet](https://github.com/square/kotlinpoet) 2.4.0, which has 6 tasks, 2 of each kind.
+JetBrains Exposed was the first choice, but its Gradle 8.14 doesn't run on JDK 25, so kotlin-lsp can't import it.
+The clone and the run worktrees live in `~/Library/Caches/kronstadt-benchmark/`, where no CLAUDE.md sits above them.
+
+```sh
+export CLAUDE_CODE_OAUTH_TOKEN=...                        # or ANTHROPIC_API_KEY: each session's config dir is clean, with no login
+./gradlew :benchmark:run                                  # the low level
+./gradlew :benchmark:run --args="--level medium --model claude-opus-5-5 --timeout-minutes 20 --max-turns 60"
+./gradlew :benchmark:run --args="--verify-tasks"          # no claude: each check fails unchanged and passes on its solution
+./gradlew :benchmark:run --args="--check-seed"            # no claude: warm, freeze and restore the Index Seed once
+```
+
+| Level | Tasks | Runs per task and arm | Sessions |
+|---|---|---|---|
+| `low` (default) | 3, one per kind | 1 | 6. A smoke test, not statistically meaningful. |
+| `medium` | 6 | 3 | 36 |
+| `high` | 6 | 5 | 60 |
+
+Each session costs what a Claude Code session on that task costs with the chosen model (default
+`claude-sonnet-5-5`), so the cost grows with the session count. The report shows the actual cost.
+
+**Don't run the benchmark while other heavy work is running**, such as builds, contract tests or other agents.
+Concurrent kotlin-lsp and Gradle work distorts the timings (#158).
+
+How it runs:
+- Each session is headless `claude -p` with streamed JSON output, the pinned model, permissions bypassed inside the
+  run worktree, and a clean `CLAUDE_CONFIG_DIR`. So the user's own CLAUDE.md, skills and MCP servers don't leak in.
+- Each session is capped at 15 minutes and 50 turns. A session that hits a cap counts as failed, and its partial
+  usage is still recorded.
+- Sessions run one at a time and alternate the arms (with, without, with, ...), so slow drift on the machine hits
+  both arms equally.
+- The Index Seed is warmed once before any timing. That cold start is reported on its own line.
+- The seed is frozen for the whole Benchmark, so that sessions are repeatable. Kronstadt can't be told from outside
+  not to refresh the seed (ADR 0005). So after warming, a copy-on-write copy is saved. After each session with
+  Kronstadt, the harness waits for `last-refresh.log` to show the refresh finished. Before each session with
+  Kronstadt, it restores the saved copy, which discards that refresh.
+
+What it reports:
+- **Success rate** per task and arm.
+- **Tokens:** input, output, cache reads and cache writes, separately. The headline is **total tokens**, all four
+  kinds added up, next to the **cost in USD that Claude Code reports**, which weights the kinds correctly.
+- **Wall-clock time:** from launching `claude` to its exit, including Kronstadt's wait to become ready from the seed.
+- Failed runs count towards the success rate only, and are left out of the token, cost and time figures.
+- For each task and arm: the median and min–max range of the successful runs. Then the difference between the
+  arms in percent, per task and overall.
+- The report is printed as markdown and saved as `build/benchmark/<timestamp>/report.md`, next to `results.json`,
+  each session's raw stream (`<session>.jsonl`) and the check logs.
 
 ## Known limitations
 

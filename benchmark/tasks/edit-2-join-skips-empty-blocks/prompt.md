@@ -1,0 +1,1 @@
+Change `Collection<CodeBlock>.joinToCode(separator, prefix, suffix)` so that empty code blocks are left out of the result, with no separator for them; the prefix and suffix are still added. For example, joining `a`, an empty block and `b` gives `a, b`. Change only that function; don't add tests.

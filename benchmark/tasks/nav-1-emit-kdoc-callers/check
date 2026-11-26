@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# The callers: FunSpec.emit (kdocWithTags(), kdoc.ensureEndsWithNewLine()), PropertySpec.emit and TypeAliasSpec.emit
+# (kdoc.ensureEndsWithNewLine()), TypeSpec.emit (kdocWithConstructorDocs(), twice).
+exec "$(dirname "$0")/../reply-names.sh" \
+  FunSpec PropertySpec TypeAliasSpec TypeSpec kdocWithTags kdocWithConstructorDocs ensureEndsWithNewLine

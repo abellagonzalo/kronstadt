@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Runs every module's tests, so the refactor must keep them passing, plus this task's hidden test.
+here=$(dirname "$0")
+exec "$here/../compile-and-test.sh" "$here/BenchmarkTaskTest.kt" --all-tests
