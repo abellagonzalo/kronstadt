@@ -365,10 +365,10 @@ internal class KronstadtTools(
             is EditResult.Written -> text(
                 (result.files.map { written(it) } + collateral(result.collateral)).filter { it.isNotEmpty() }.joinToString("\n"),
             )
-            is EditResult.ValidationFailed -> error(describe(result.failure, "Edit", result.id))
+            is EditResult.ValidationFailed -> error(describe(result.failure, "Edit", result.rejectedEdit))
             is EditResult.WriteBackFailed -> error(describe(result.failure))
             is EditResult.NotReady ->
-                result.kept?.let { error("${notReadyText(result.readiness)}. The rejected Edit $it is still kept: retry with kt_edit amend: \"$it\".") }
+                result.rejectedEdit?.let { error("${notReadyText(result.readiness)}. The rejected Edit $it is still kept: retry with kt_edit amend: \"$it\".") }
                     ?: notReady(result.readiness)
             is EditResult.OperationFailed ->
                 if (result.inRejected) {
@@ -379,13 +379,13 @@ internal class KronstadtTools(
                         ),
                     )
                 } else {
-                    val kept = result.kept?.let {
+                    val kept = result.rejectedEdit?.let {
                         "; the rejected Edit $it is still kept: amend it again with kt_edit amend: \"$it\" and only the fixing Operations"
                     }.orEmpty()
                     error(nothingWritten("Operation ${result.index}: ${failure(result.failure, parsed[result.index].first)}", "$kept."))
                 }
             is EditResult.NoRejectedEdit -> error(
-                result.kept?.let {
+                result.rejectedEdit?.let {
                     "no rejected Edit ${result.id} to amend; the rejected Edit $it is still kept: amend it with kt_edit amend: \"$it\", " +
                         "or resend the whole batch"
                 } ?: "no rejected Edit ${result.id} to amend; resend the whole batch",

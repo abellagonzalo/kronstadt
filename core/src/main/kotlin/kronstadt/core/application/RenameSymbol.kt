@@ -32,18 +32,18 @@ public class RenameSymbol(
     private val readinessTimeout: Duration = Readiness.DEFAULT_TIMEOUT,
     /** One budget for all of Validation's diagnostics, across every changed file. */
     private val validationTimeout: Duration = Validation.DEFAULT_TIMEOUT,
-    private val writeLock: WriteLock = WriteLock(),
+    private val writeCalls: WriteCalls = WriteCalls(),
 ) {
     private val resolver = SymbolResolver(files, intelligence)
 
     /** Renames the Symbol at [symbol] to [newName]; [symbol] is resolved in [file], or project-wide without one. */
     public suspend operator fun invoke(symbol: String, newName: String, file: String? = null): RenameResult {
-        // Taking the lock drops the last Rejected Edit, whatever the outcome, so even a malformed call takes it.
-        return writeLock.withLock {
-            val parsed = SymbolResolver.parse(file, symbol).getOrElse { return@withLock RenameResult.LookupFailed(it) }
-            if (!IDENTIFIER.matches(newName)) return@withLock RenameResult.InvalidName(newName)
+        // A rename drops the last Rejected Edit, whatever the outcome, so even a malformed call goes through write calls.
+        return writeCalls.rename {
+            val parsed = SymbolResolver.parse(file, symbol).getOrElse { return@rename RenameResult.LookupFailed(it) }
+            if (!IDENTIFIER.matches(newName)) return@rename RenameResult.InvalidName(newName)
             val readiness = intelligence.awaitReady(readinessTimeout)
-            if (readiness is Readiness.NotReady) return@withLock RenameResult.NotReady(readiness)
+            if (readiness is Readiness.NotReady) return@rename RenameResult.NotReady(readiness)
             intelligence.session { session -> rename(session, parsed, newName) }
         }
     }

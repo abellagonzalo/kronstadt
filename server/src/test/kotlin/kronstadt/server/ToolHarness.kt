@@ -18,6 +18,7 @@ import kronstadt.core.application.GetDefinition
 import kronstadt.core.application.ReadStructure
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.RenameSymbol
+import kronstadt.core.application.WriteCalls
 import kronstadt.core.domain.Readiness
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.workspace.LocalFileStore
@@ -40,14 +41,16 @@ internal class ToolHarness(
         ServerOptions(capabilities = ServerCapabilities(tools = ServerCapabilities.Tools(listChanged = false))),
     ).also { server ->
         val files = LocalFileStore(root)
+        // Shared, as in Main.kt: a rename drops the Rejected Edit an Edit kept.
+        val writeCalls = WriteCalls()
         KronstadtTools(
             ReadStructure(files, intelligence),
             FindSymbol(files, intelligence, readinessTimeout),
             ReadSymbol(files, intelligence, readinessTimeout),
             FindUsages(files, intelligence, readinessTimeout),
             GetDefinition(files, intelligence, readinessTimeout),
-            Edit(files, intelligence, readinessTimeout),
-            RenameSymbol(files, intelligence, readinessTimeout),
+            Edit(files, intelligence, readinessTimeout, writeCalls = writeCalls),
+            RenameSymbol(files, intelligence, readinessTimeout, writeCalls = writeCalls),
         ).registerOn(server)
     }
 

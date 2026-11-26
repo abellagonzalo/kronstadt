@@ -100,6 +100,24 @@ class KtEditToolTest {
     }
 
     @Test
+    fun `a kt_rename_symbol call drops the rejected Edit, so a later amend of it is refused`() = runTest {
+        val broken = "package a\n\nfun greet(): Int = Bravo.one\n"
+        diagnostics[broken] = listOf(
+            Diagnostic(TextRange(Position(2, 19), Position(2, 24)), Severity.ERROR, "Unresolved reference 'Bravo'.", "UNRESOLVED_REFERENCE"),
+        )
+        val (rejected, rejectedText) = ktEdit("""{"operations": [{"type": "edit_in", "file": "A.kt", "old": "= 1", "new": "= Bravo.one"}]}""")
+        assertEquals(true, rejected, rejectedText)
+
+        val (renameFailed, _) = tools.call("kt_rename_symbol", """{"symbol": "greet", "newName": "1st", "file": "A.kt"}""")
+        val (stale, staleText) = ktEdit("""{"amend": "e1", "operations": [{"type": "edit_in", "file": "A.kt", "old": "= Bravo", "new": "= Bravo", "imports": ["b.Bravo"]}]}""")
+
+        assertEquals(true, renameFailed)
+        assertEquals(true, stale)
+        assertEquals("no rejected Edit e1 to amend; resend the whole batch", staleText)
+        assertEquals("package a\n\nfun greet(): Int = 1\n", file.readText())
+    }
+
+    @Test
     fun `an amend that fails through no fault of the rejected Edit says it is still kept, and a corrected amend writes the combined Edit`() = runTest {
         file.writeText("package a\n\nfun greet(): Int {\n    return 1\n}\n")
         val broken = "package a\n\nfun greet(): Int {\n    return Bravo.one\n}\n"

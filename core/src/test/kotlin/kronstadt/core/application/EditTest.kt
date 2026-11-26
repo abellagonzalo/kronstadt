@@ -335,11 +335,11 @@ class EditTest {
             symbolsByText = mapOf(source to listOf(greeter(greet, other)), hello to listOf(greeter(helloGreet, other))),
             diagnosticsDelay = 1.seconds,
         )
-        val lock = WriteLock()
+        val lock = WriteCalls()
         val replace = "fun greet(): String =\n    \"hello\""
 
         listOf(path, "src/B.kt").map { file ->
-            async { Edit(files, intelligence, writeLock = lock)(Replace(file, "Greeter/greet", replace)) }
+            async { Edit(files, intelligence, writeCalls = lock)(Replace(file, "Greeter/greet", replace)) }
         }.awaitAll()
 
         assertEquals(

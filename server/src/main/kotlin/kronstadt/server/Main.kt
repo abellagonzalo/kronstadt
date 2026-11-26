@@ -23,7 +23,7 @@ import kronstadt.core.application.GetDefinition
 import kronstadt.core.application.ReadStructure
 import kronstadt.core.application.ReadSymbol
 import kronstadt.core.application.RenameSymbol
-import kronstadt.core.application.WriteLock
+import kronstadt.core.application.WriteCalls
 import kronstadt.lsp.IndexState
 import kronstadt.lsp.LspCodeIntelligence
 import kronstadt.workspace.DetachedSeedRefresh
@@ -126,16 +126,16 @@ private suspend fun serve(config: Config, protocolOut: PrintStream) = coroutineS
         instructions = serverInstructions(files.root),
     )
     val intelligence = DeferredCodeIntelligence(languageServer)
-    // One per instance: write tools run one at a time (ADR 0003).
-    val writeLock = WriteLock()
+    // One per instance: write tools run one at a time (ADR 0003) and share the Rejected Edit.
+    val writeCalls = WriteCalls()
     KronstadtTools(
         ReadStructure(files, intelligence),
         FindSymbol(files, intelligence, config.readinessTimeout),
         ReadSymbol(files, intelligence, config.readinessTimeout),
         FindUsages(files, intelligence, config.readinessTimeout),
         GetDefinition(files, intelligence, config.readinessTimeout),
-        Edit(files, intelligence, config.readinessTimeout, config.validationTimeout, writeLock, collateralTimeout = config.collateralTimeout),
-        RenameSymbol(files, intelligence, config.readinessTimeout, config.validationTimeout, writeLock),
+        Edit(files, intelligence, config.readinessTimeout, config.validationTimeout, writeCalls, collateralTimeout = config.collateralTimeout),
+        RenameSymbol(files, intelligence, config.readinessTimeout, config.validationTimeout, writeCalls),
     ).registerOn(server)
 
     val transport = StdioServerTransport(System.`in`.asSource().buffered(), protocolOut.asSink().buffered())
