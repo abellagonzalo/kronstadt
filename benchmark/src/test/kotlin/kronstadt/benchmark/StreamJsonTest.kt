@@ -20,7 +20,7 @@ class StreamJsonTest {
 
         val output = StreamJson.parse(sequenceOf(init, assistant("m1", 10, 20, 300, 40), "", result))
 
-        assertEquals(SessionResult(subtype = "success", isError = false, reply = "Done.", costUsd = 0.25, turns = 4), output.result)
+        assertEquals(SessionResult(subtype = "success", isError = false, reply = "Done.", costUsd = 0.25), output.result)
         assertEquals(Tokens(input = 11, output = 22, cacheRead = 303, cacheWrite = 44), output.tokens)
         assertEquals(380, Tokens(10, 20, 300, 50).total)
     }
@@ -38,7 +38,7 @@ class StreamJsonTest {
         val result = """{"type":"result","subtype":"error_max_turns","is_error":false,"num_turns":51,"total_cost_usd":1.5,""" +
             """"usage":{"input_tokens":1,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":4}}"""
 
-        assertEquals(SessionResult("error_max_turns", isError = false, reply = null, costUsd = 1.5, turns = 51), StreamJson.parse(sequenceOf(result)).result)
+        assertEquals(SessionResult("error_max_turns", isError = false, reply = null, costUsd = 1.5), StreamJson.parse(sequenceOf(result)).result)
     }
 
     @Test

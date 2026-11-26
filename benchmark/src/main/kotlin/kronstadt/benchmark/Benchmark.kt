@@ -12,6 +12,16 @@ internal interface RunWorktrees {
     fun remove(worktree: Path)
 }
 
+/** Runs [action] in a new run worktree named [name], and removes it afterwards, whatever happens. */
+internal fun <T> RunWorktrees.use(name: String, action: (Path) -> T): T {
+    val worktree = create(name)
+    try {
+        return action(worktree)
+    } finally {
+        remove(worktree)
+    }
+}
+
 /** The target project's Index Seed, frozen for the whole Benchmark so that runs with Kronstadt are repeatable. */
 internal interface IndexSeed {
     /** Indexes [worktree] cold through Kronstadt, saves the seed that leaves, and returns how long indexing took. */
@@ -49,7 +59,7 @@ internal class Benchmark(
     private val progress: (String) -> Unit,
 ) {
     /** Warms the Index Seed in a run worktree of its own, before any timing, and returns the cold-start time. */
-    fun warmSeed(): Duration = inWorktree("warm-seed") { seed.warm(it) }
+    fun warmSeed(): Duration = worktrees.use("warm-seed") { seed.warm(it) }
 
     /** Runs [sessions] one at a time, in order, never in parallel: concurrent kotlin-lsp and Gradle work distorts timings. */
     fun run(sessions: List<PlannedSession>): List<RunResult> = sessions.mapIndexed { index, session ->
@@ -60,11 +70,15 @@ internal class Benchmark(
     private fun run(session: PlannedSession): RunResult {
         val withKronstadt = session.arm == Arm.WITH_KRONSTADT
         if (withKronstadt) seed.restore()
-        return inWorktree(session.name) { worktree ->
+        return worktrees.use(session.name) { worktree ->
             val started = clock()
-            val agentRun = agent.run(session, worktree)
-            // The session's refresh would replace the frozen seed: let it finish, so the next restore discards it.
-            if (withKronstadt) seed.awaitRefresh(started)
+            val agentRun = try {
+                agent.run(session, worktree)
+            } finally {
+                // The session's refresh would replace the frozen seed: let it finish, even if the session broke, so the
+                // next restore discards it rather than racing it.
+                if (withKronstadt) seed.awaitRefresh(started)
+            }
             val output = agentRun.output
             RunResult(session, outcome(session, worktree, agentRun), output.tokens, output.result?.costUsd, agentRun.wallClock)
         }
@@ -80,15 +94,6 @@ internal class Benchmark(
             result.isError || result.subtype != "success" -> Outcome.Failed("claude ended with ${result.subtype}")
             !checks.passes(session, worktree, result.reply.orEmpty()) -> Outcome.Failed("check failed")
             else -> Outcome.Succeeded
-        }
-    }
-
-    private fun <T> inWorktree(name: String, action: (Path) -> T): T {
-        val worktree = worktrees.create(name)
-        try {
-            return action(worktree)
-        } finally {
-            worktrees.remove(worktree)
         }
     }
 

@@ -5,7 +5,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.doubleOrNull
-import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 
 /** Tokens a session used, by kind. */
@@ -22,7 +21,7 @@ internal data class Tokens(val input: Long, val output: Long, val cacheRead: Lon
 }
 
 /** The `result` event that ends a `claude -p` session. [reply] is the agent's final reply, null if it gave none. */
-internal data class SessionResult(val subtype: String, val isError: Boolean, val reply: String?, val costUsd: Double?, val turns: Int?)
+internal data class SessionResult(val subtype: String, val isError: Boolean, val reply: String?, val costUsd: Double?)
 
 /** What a session printed: its result, if it got that far, and the tokens it used. */
 internal data class SessionOutput(val result: SessionResult?, val tokens: Tokens)
@@ -62,7 +61,6 @@ internal object StreamJson {
             isError = (final["is_error"] as? JsonPrimitive)?.booleanOrNull ?: false,
             reply = final.string("result"),
             costUsd = (final["total_cost_usd"] as? JsonPrimitive)?.doubleOrNull,
-            turns = (final["num_turns"] as? JsonPrimitive)?.intOrNull,
         )
         return SessionOutput(sessionResult, tokens)
     }

@@ -59,6 +59,11 @@ internal class FrozenSeed(
         return coldStart
     }
 
+    /**
+     * Deletes the seed and clones the frozen copy in its place. Unlike Kronstadt's own refresh, this is no atomic swap
+     * and retires nothing (ADR 0005): it is safe only because no Kronstadt runs meanwhile, since sessions run one at a
+     * time and each one's refresh is awaited before the next restore.
+     */
     override fun restore() {
         check(frozen.exists()) { "no frozen Index Seed at $frozen: warm it first" }
         slot.deleteRecursively()
@@ -74,14 +79,15 @@ internal class FrozenSeed(
 
     /**
      * Has Kronstadt serve [worktree] until a tool that needs the index answers, the way a session with Kronstadt starts,
-     * logging Kronstadt's stderr to [stderr], and returns how long that took.
+     * logging Kronstadt's stderr to [stderr], and returns how long that took from launching Kronstadt.
      */
-    fun serve(worktree: Path, stderr: Path): Duration =
+    fun serve(worktree: Path, stderr: Path): Duration {
+        val launched = TimeSource.Monotonic.markNow()
         McpClient.start(kronstadt, worktree, readinessTimeout, stderr).use { client ->
-            val mark = TimeSource.Monotonic.markNow()
             client.callTool("kt_find_symbol", buildJsonObject { put("query", warmQuery) })
-            mark.elapsedNow()
+            return launched.elapsedNow()
         }
+    }
 
     /**
      * Waits until the refresh that a Kronstadt ending after [since] started has logged its outcome, and returns that
@@ -103,7 +109,10 @@ internal class FrozenSeed(
         }
     }
 
-    /** The outcome logged by a refresh started after [since]: [REFRESHED], the reason it skipped, [IN_PROGRESS], or null if none started. */
+    /**
+     * The outcome logged by a refresh started after [since]: [REFRESHED], the reason it skipped, [IN_PROGRESS], or null
+     * if none started. Matches the lines `DetachedSeedRefresh.main` prints: keep the two in step.
+     */
     private fun outcomeSince(since: Instant): String? {
         if (!refreshLog.exists() || refreshLog.getLastModifiedTime().toInstant() < since) return null
         val last = refreshLog.readLines().lastOrNull { it.isNotBlank() } ?: return IN_PROGRESS

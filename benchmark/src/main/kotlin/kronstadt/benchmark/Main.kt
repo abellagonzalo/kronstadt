@@ -95,17 +95,10 @@ public fun main(args: Array<String>) {
  */
 private fun checkSeed(seed: FrozenSeed, worktrees: RunWorktrees, out: Path): Boolean {
     println("Warming the Index Seed...")
-    val coldStart = worktrees.create("warm-seed").let { worktree ->
-        try {
-            seed.warm(worktree)
-        } finally {
-            worktrees.remove(worktree)
-        }
-    }
+    val coldStart = worktrees.use("warm-seed") { seed.warm(it) }
     println("Cold start: ${coldStart.inWholeSeconds} s; seed saved")
     seed.restore()
-    val worktree = worktrees.create("check-seed")
-    try {
+    return worktrees.use("check-seed") { worktree ->
         val log = out.resolve("check-seed.kronstadt.log")
         val started = Instant.now()
         val ready = seed.serve(worktree, log)
@@ -116,9 +109,7 @@ private fun checkSeed(seed: FrozenSeed, worktrees: RunWorktrees, out: Path): Boo
         val restored = seed.isFrozen()
         println("Started from the seed: $seeded, ready in ${ready.inWholeSeconds} s (log: $log)")
         println("Its refresh replaced the seed: $refreshedOver; the restore put the frozen seed back: $restored")
-        return seeded && restored
-    } finally {
-        worktrees.remove(worktree)
+        seeded && restored
     }
 }
 

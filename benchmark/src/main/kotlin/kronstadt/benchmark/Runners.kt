@@ -92,12 +92,7 @@ internal class TaskVerification(
 
     private fun check(task: BenchmarkTask, state: String, prepare: (Path) -> String): Boolean {
         val name = "verify-${task.id}-$state"
-        val worktree = worktrees.create(name)
-        try {
-            return checks.passes(task, worktree, prepare(worktree), out.resolve("$name.check.log"))
-        } finally {
-            worktrees.remove(worktree)
-        }
+        return worktrees.use(name) { worktree -> checks.passes(task, worktree, prepare(worktree), out.resolve("$name.check.log")) }
     }
 
     private fun verdict(passed: Boolean) = if (passed) "passes" else "fails"

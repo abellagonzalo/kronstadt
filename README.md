@@ -241,7 +241,8 @@ How it runs:
 - Each session is headless `claude -p` with streamed JSON output, the pinned model, permissions bypassed inside the
   run worktree, and a clean `CLAUDE_CONFIG_DIR`. So the user's own CLAUDE.md, skills and MCP servers don't leak in.
 - Each session is capped at 15 minutes and 50 turns. A session that hits a cap counts as failed, and its partial
-  usage is still recorded.
+  usage is still recorded. One that hits the turn cap reports its cost. One killed at the timeout never gets to
+  report a cost, so only the tokens of the messages it got are recorded.
 - Sessions run one at a time and alternate the arms (with, without, with, ...), so slow drift on the machine hits
   both arms equally.
 - The Index Seed is warmed once before any timing. That cold start is reported on its own line.

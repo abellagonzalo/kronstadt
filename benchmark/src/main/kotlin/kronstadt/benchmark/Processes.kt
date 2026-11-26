@@ -5,6 +5,7 @@ import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
@@ -46,15 +47,21 @@ internal object Processes {
         return ProcessRun(null, wallClock)
     }
 
-    /** Runs [command] in [dir] and returns its stdout, trimmed; throws with its stderr if it fails. */
-    fun output(vararg command: String, dir: Path? = null): String {
+    /** Runs [command] in [dir] and returns its stdout, trimmed; throws with its stderr if it fails or outlasts [timeout]. */
+    fun output(vararg command: String, dir: Path? = null, timeout: Duration = 15.minutes): String {
         val process = ProcessBuilder(*command).apply { if (dir != null) directory(dir.toFile()) }.start()
         var stderr = ""
-        val stderrReader = thread { stderr = process.errorStream.bufferedReader().readText() }
-        val stdout = process.inputStream.bufferedReader().readText()
-        val exit = process.waitFor()
-        stderrReader.join()
-        check(exit == 0) { "${command.joinToString(" ")} failed (exit $exit): ${stderr.trim()}" }
+        var stdout = ""
+        val readers = listOf(
+            thread { stderr = process.errorStream.bufferedReader().readText() },
+            thread { stdout = process.inputStream.bufferedReader().readText() },
+        )
+        if (!process.waitFor(timeout.inWholeMilliseconds, TimeUnit.MILLISECONDS)) {
+            kill(process.toHandle())
+            error("${command.joinToString(" ")} didn't finish within $timeout")
+        }
+        readers.forEach { it.join() }
+        check(process.exitValue() == 0) { "${command.joinToString(" ")} failed (exit ${process.exitValue()}): ${stderr.trim()}" }
         return stdout.trim()
     }
 

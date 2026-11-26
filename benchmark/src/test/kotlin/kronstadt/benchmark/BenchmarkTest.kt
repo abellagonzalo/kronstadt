@@ -41,7 +41,7 @@ class BenchmarkTest {
         tokens: Tokens = Tokens(1, 2, 3, 4),
         cost: Double? = 0.5,
     ) = AgentRun(
-        SessionOutput(subtype?.let { SessionResult(it, isError, reply, cost, turns = 3) }, tokens),
+        SessionOutput(subtype?.let { SessionResult(it, isError, reply, cost) }, tokens),
         wallClock = 42.seconds,
         timedOut = timedOut,
     )
