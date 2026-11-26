@@ -14,7 +14,7 @@ public object Snippet {
      * occurs instead.
      */
     internal fun find(document: TextDocument, snippet: String, range: IntRange): Found {
-        val matches = occurrences(document, snippet, range)
+        val matches = matches(document, snippet, range)
         matches.singleOrNull()?.let { return Match(it) }
         val hint = if (matches.isEmpty()) indentationHint(document, snippet, range) else null
         return Miss(snippet, matches.size, SourceLine.startingAt(document, matches), hint)
@@ -38,12 +38,12 @@ public object Snippet {
     ) : Found
 
     /**
-     * The ranges (offsets) [snippet] occurs at within [range] of [document]'s text, overlapping occurrences included ("aa"
-     * occurs twice in "aaa"). Each line break in [snippet] (a [TextDocument.LINE_BREAK]) matches one whole line break of
-     * the text, of any of those kinds, so an occurrence may be longer or shorter than [snippet]; everything else matches
-     * exactly as written, whitespace included (ADR 0004). An occurrence never starts or ends inside a `\r\n`.
+     * The ranges (offsets) [snippet] matches at within [range] of [document]'s text, overlapping matches included ("aa"
+     * matches twice in "aaa"). Each line break in [snippet] (a [TextDocument.LINE_BREAK]) matches one whole line break of
+     * the text, of any of those kinds, so a match may be longer or shorter than [snippet]; everything else matches
+     * exactly as written, whitespace included (ADR 0004). A match never starts or ends inside a `\r\n`.
      */
-    private fun occurrences(document: TextDocument, snippet: String, range: IntRange): List<IntRange> {
+    private fun matches(document: TextDocument, snippet: String, range: IntRange): List<IntRange> {
         if (snippet.isEmpty()) return emptyList()
         val text = document.text
         val lineBreak = TextDocument.LINE_BREAK

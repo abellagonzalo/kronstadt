@@ -291,7 +291,7 @@ public class Edit(
             is InsertBefore -> span.siblingBefore(reindented(operation.code))
             is InsertAfter -> span.siblingAfter(reindented(operation.code))
             is EditIn -> return applySplice(
-                shadow, file, Splice.inSpan(document, span.firstLine..span.lastLine, operation), operation, EditInScope(found.canonical, shown, found.preferred),
+                shadow, file, Splice.inSpan(document, span.firstLine..span.lastLine, operation), EditInScope(found.canonical, shown, found.preferred),
             )
             is Delete -> span.deletion(document)
         }
@@ -311,11 +311,11 @@ public class Edit(
         val document = analysed.document
         // Lines outside the document (before the first, after the last) lie in no Symbol Span.
         val splice = Splice.inFile(document, operation) { held -> analysed.innermostSpanHolding(held)?.let { it.firstLine..it.lastLine } }
-        return applySplice(shadow, file, splice, operation, EditInScope(null, files.display(file)))
+        return applySplice(shadow, file, splice, EditInScope(null, files.display(file)))
     }
 
-    /** Makes [splice]'s change to [file], or fails [operation], whose `old` was looked for in [scope]. */
-    private fun applySplice(shadow: ShadowWorkspace, file: Path, splice: Splice, operation: EditIn, scope: EditInScope): Applied {
+    /** Makes [splice]'s change to [file], or fails the `edit_in` whose `old` was looked for in [scope]. */
+    private fun applySplice(shadow: ShadowWorkspace, file: Path, splice: Splice, scope: EditInScope): Applied {
         when (splice) {
             is Splice.Done -> shadow.replaceLines(file, splice.lines, splice.newLines)
             is Splice.NotExactlyOnce -> return Applied.Failed(OperationFailure.NotExactlyOnce(scope, splice.miss))
