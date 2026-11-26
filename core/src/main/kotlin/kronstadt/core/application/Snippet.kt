@@ -5,7 +5,7 @@ import kronstadt.core.domain.TextDocument
 
 /**
  * A Snippet (GLOSSARY.md): text an agent copies from a file to point at a place in it, `edit_in`'s `old` or
- * `kt_get_definition`'s `at`. It must occur exactly once in its scope, exactly as written except that any line break
+ * getting a definition's `at`. It must occur exactly once in its scope, exactly as written except that any line break
  * matches any line ending (ADR 0004). This is the only place that matches one.
  */
 public object Snippet {

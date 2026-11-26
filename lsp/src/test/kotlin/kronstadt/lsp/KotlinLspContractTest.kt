@@ -21,6 +21,7 @@ import kronstadt.core.application.FindSymbol
 import kronstadt.core.application.FindSymbolResult
 import kronstadt.core.application.FindUsages
 import kronstadt.core.application.FindUsagesResult
+import kronstadt.core.application.FoundDefinition
 import kronstadt.core.application.FoundSymbol
 import kronstadt.core.application.GetDefinition
 import kronstadt.core.application.GetDefinitionResult
@@ -41,6 +42,7 @@ import kronstadt.core.application.ValidationFailure
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.FileChange
 import kronstadt.core.domain.Position
+import kronstadt.core.domain.PreferredOverFunctions
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
 import kronstadt.core.domain.RenamePreparation
@@ -291,21 +293,21 @@ class KotlinLspContractTest {
         assertEquals(SymbolKind.PROPERTY, kind("topLevelVal"))
         assertEquals(SymbolKind.VARIABLE, kind("topLevelVar"))
 
-        val structure = assertIs<ReadStructureResult.Structure>(ReadStructure(files, lsp)(path)).text
+        val structure = assertIs<ReadStructureResult.Structure>(ReadStructure(files, lsp)(path))
+        assertEquals(path, structure.file.shown)
         assertEquals(
-            """
-            // $path
-            class Mutability  // L3-15
-              constructor  (Int, Int, Int)  // L4-4
-              val ctorVal  : Int  // L4-4
-              var ctorVar  : Int  // L4-4
-              val bodyVal  : Int  // L5-5
-              var bodyVar  : Int  // L7-7
-              fun withLocals  (): Int  // L9-14
-            val topLevelVal  : Int  // L17-17
-            var topLevelVar  : Int  // L19-19
-            """.trimIndent(),
-            structure,
+            listOf(
+                "CLASS Mutability L3-15",
+                "  CONSTRUCTOR constructor (Int, Int, Int) L4-4",
+                "  PROPERTY ctorVal : Int L4-4",
+                "  VARIABLE ctorVar : Int L4-4",
+                "  PROPERTY bodyVal : Int L5-5",
+                "  VARIABLE bodyVar : Int L7-7",
+                "  FUNCTION withLocals (): Int L9-14",
+                "PROPERTY topLevelVal : Int L17-17",
+                "VARIABLE topLevelVar : Int L19-19",
+            ),
+            structure.rows,
         )
     }
 
@@ -338,28 +340,27 @@ class KotlinLspContractTest {
         listOf("Nested", "Single", "Companion").forEach { assertEquals(listOf(initializer), constructors(reported("Initialized", it)), it) }
         assertEquals(listOf("Checked" to "(String?, String?)", initializer), constructors(reported("Checked")))
 
-        val structure = assertIs<ReadStructureResult.Structure>(ReadStructure(files, lsp)(path)).text
+        val structure = assertIs<ReadStructureResult.Structure>(ReadStructure(files, lsp)(path))
         assertEquals(
-            """
-        // $path
-        class Initialized  // L3-35
-          constructor(Int)  // L4-4
-          val seed  : Int  // L4-4
-          var total  : Int  // L5-5
-          constructor()  // L11-11
-          class Nested  // L17-22
-          object Single  // L24-28
-          object Companion  // L30-34
-        class Checked  // L37-45
-          constructor(String?, String?)  // L38-41
-          val first  : String?  // L39-39
-          val second  : String?  // L40-40
-        """.trimIndent(),
-            structure,
+            listOf(
+                "CLASS Initialized L3-35",
+                "  CONSTRUCTOR constructor(Int) (Int) L4-4",
+                "  PROPERTY seed : Int L4-4",
+                "  VARIABLE total : Int L5-5",
+                "  CONSTRUCTOR constructor() () L11-11",
+                "  CLASS Nested L17-22",
+                "  OBJECT Single L24-28",
+                "  OBJECT Companion L30-34",
+                "CLASS Checked L37-45",
+                "  CONSTRUCTOR constructor(String?, String?) (String?, String?) L38-41",
+                "  PROPERTY first : String? L39-39",
+                "  PROPERTY second : String? L40-40",
+            ),
+            structure.rows,
         )
 
         val read = ReadSymbol(files, lsp)
-        assertEquals("// constructor() in $path, L11-11", assertIs<ReadSymbolResult.Found>(read(path, "Initialized/constructor()")).text.lines().first())
+        assertEquals("constructor() in $path, L11-11", assertIs<ReadSymbolResult.Found>(read(path, "Initialized/constructor()")).location)
         // The primary constructor shares its first line with the class head, a span problem of its own (#68).
         assertIs<LookupFailure.SharedLine>(read(path, "Checked/constructor").lookupFailure())
     }
@@ -373,17 +374,17 @@ class KotlinLspContractTest {
         val shapes = "src/main/kotlin/fixture/Shapes.kt"
 
         assertEquals(
-            "// parse(String, Int) in $shapes, L23-23\n    fun parse(text: String, radix: Int): Int = text.toInt(radix) * scale",
-            assertIs<ReadSymbolResult.Found>(read(shapes, "Calculator/parse(String,Int)")).text,
+            ReadSymbolResult.Found("parse(String, Int)", shapes, SymbolSpan(22, 22, "    fun parse(text: String, radix: Int): Int = text.toInt(radix) * scale")),
+            read(shapes, "Calculator/parse(String,Int)"),
         )
-        val calculator = assertIs<ReadSymbolResult.Found>(read(shapes, "Calculator")).text.lines()
-        assertEquals("// Calculator in $shapes, L5-33", calculator.first())
-        assertEquals("/** Overloads, a property and a function sharing a name, accessors, constructors and local functions. */", calculator[1])
+        val calculator = assertIs<ReadSymbolResult.Found>(read(shapes, "Calculator"))
+        assertEquals("Calculator in $shapes, L5-33", calculator.location)
+        assertEquals("/** Overloads, a property and a function sharing a name, accessors, constructors and local functions. */", calculator.span.text.lines().first())
         assertEquals(
             listOf("PLUS/apply", "TIMES/apply", "Operation/apply"),
             assertIs<LookupFailure.Ambiguous>(read(shapes, "apply").lookupFailure()).candidates.map { it.path },
         )
-        assertEquals("// TIMES in $shapes, L57-59", assertIs<ReadSymbolResult.Found>(read(shapes, "TIMES")).text.lines().first())
+        assertEquals("TIMES in $shapes, L57-59", assertIs<ReadSymbolResult.Found>(read(shapes, "TIMES")).location)
     }
 
     // The special forms live at the end of Spans.kt rather than in a fixture file of their own: with one more file,
@@ -394,34 +395,37 @@ class KotlinLspContractTest {
         val read = ReadSymbol(files, lsp)
         val spansKt = "src/main/kotlin/fixture/Spans.kt"
         val shapes = "src/main/kotlin/fixture/Shapes.kt"
-        suspend fun header(file: String, path: String) = assertIs<ReadSymbolResult.Found>(read(file, path), path).text.lines().first()
+        suspend fun found(file: String, path: String) = assertIs<ReadSymbolResult.Found>(read(file, path), path)
+        suspend fun header(file: String, path: String) = found(file, path).location
 
         // Extension receivers, read from detail (`String.(): String`, `String.: Char`).
-        assertEquals("// String.shout in $shapes, L64-65", header(shapes, "String.shout"))
-        assertEquals("// String.decorate in $spansKt, L37-37", header(spansKt, "Formatter/String.decorate"))
-        assertEquals("// Int.decorate in $spansKt, L39-39", header(spansKt, "Int.decorate"))
-        assertEquals("// List<T>.second in $spansKt, L91-91", header(spansKt, "List<T>.second"))
-        assertEquals("// String.firstChar in $spansKt, L93-94", header(spansKt, "String.firstChar"))
+        assertEquals("String.shout in $shapes, L64-65", header(shapes, "String.shout"))
+        assertEquals("String.decorate in $spansKt, L37-37", header(spansKt, "Formatter/String.decorate"))
+        assertEquals("Int.decorate in $spansKt, L39-39", header(spansKt, "Int.decorate"))
+        assertEquals("List<T>.second in $spansKt, L91-91", header(spansKt, "List<T>.second"))
+        assertEquals("String.firstChar in $spansKt, L93-94", header(spansKt, "String.firstChar"))
         assertEquals(listOf("String.shout"), assertIs<LookupFailure.NotFound>(read(shapes, "shout").lookupFailure()).suggestions.map { it.path })
 
         // A bare name prefers the property; parentheses select the function.
-        assertEquals("// size in $spansKt, L46-46 (the property; a function shares its name: size(Int))", header(spansKt, "Sized/size"))
-        assertEquals("// size(Int) in $spansKt, L48-48", header(spansKt, "size(Int)"))
-        assertEquals("// total in $shapes, L17-17 (the property; a function shares its name: total())", header(shapes, "Calculator/total"))
-        assertEquals("// total() in $shapes, L19-19", header(shapes, "total()"))
+        val size = found(spansKt, "Sized/size")
+        assertEquals("size in $spansKt, L46-46" to PreferredOverFunctions(SymbolKind.PROPERTY, listOf("size(Int)")), size.location to size.preferred)
+        assertEquals("size(Int) in $spansKt, L48-48", header(spansKt, "size(Int)"))
+        val total = found(shapes, "Calculator/total")
+        assertEquals("total in $shapes, L17-17" to PreferredOverFunctions(SymbolKind.PROPERTY, listOf("total()")), total.location to total.preferred)
+        assertEquals("total() in $shapes, L19-19", header(shapes, "total()"))
 
         // Constructors and primary-constructor val parameters.
-        assertEquals("// Box/constructor(Int) in $spansKt, L55-55", header(spansKt, "Box/constructor(Int)"))
+        assertEquals("Box/constructor(Int) in $spansKt, L55-55", header(spansKt, "Box/constructor(Int)"))
         assertIs<LookupFailure.SharedLine>(read(spansKt, "Box/width").lookupFailure())
         assertIs<LookupFailure.NotFound>(read(spansKt, "Box/height").lookupFailure())
 
         // Companions, enum entries with bodies, typealiases.
-        assertEquals("// create in $spansKt, L61-61", header(spansKt, "Widget/Companion/create"))
-        assertEquals("// create in $shapes, L48-48", header(shapes, "Outer/Factory/create"))
-        assertEquals("// PALE in $spansKt, L67-67", header(spansKt, "Tint/PALE"))
-        assertEquals("// hex() in $spansKt, L69-69", header(spansKt, "Tint/DEEP/hex()"))
-        assertEquals("// Names in $spansKt, L73-73", header(spansKt, "Names"))
-        assertEquals("// Area in $shapes, L3-3", header(shapes, "Area"))
+        assertEquals("create in $spansKt, L61-61", header(spansKt, "Widget/Companion/create"))
+        assertEquals("create in $shapes, L48-48", header(shapes, "Outer/Factory/create"))
+        assertEquals("PALE in $spansKt, L67-67", header(spansKt, "Tint/PALE"))
+        assertEquals("hex() in $spansKt, L69-69", header(spansKt, "Tint/DEEP/hex()"))
+        assertEquals("Names in $spansKt, L73-73", header(spansKt, "Names"))
+        assertEquals("Area in $shapes, L3-3", header(shapes, "Area"))
 
         // Not addressable: accessors, local declarations, lambdas.
         listOf("counter/get", "Hidden/counter/set", "firstChar/get", "outer/local", "LocalClass", "lambda").forEach { path ->
@@ -438,21 +442,21 @@ class KotlinLspContractTest {
         val spansKt = "src/main/kotlin/fixture/Spans.kt"
         val alpha = "src/main/kotlin/fixture/alpha/Shape.kt"
         val beta = "src/main/kotlin/fixture/beta/Shape.kt"
-        suspend fun header(path: String) = assertIs<ReadSymbolResult.Found>(read(null, path), path).text.lines().first()
+        suspend fun header(path: String) = assertIs<ReadSymbolResult.Found>(read(null, path), path).location
 
-        assertEquals("// parse(String, Int) in $shapes, L23-23", header("Calculator/parse(String,Int)"))
+        assertEquals("parse(String, Int) in $shapes, L23-23", header("Calculator/parse(String,Int)"))
         // Same-named classes in two packages: ambiguous, until a package prefix narrows them.
         assertEquals(
             listOf(SymbolCandidate("Shape", alpha), SymbolCandidate("Shape", beta)),
             assertIs<LookupFailure.Ambiguous>(read(null, "Shape").lookupFailure()).candidates,
         )
-        assertEquals("// Shape in $alpha, L3-3", header("fixture.alpha/Shape"))
-        assertEquals("// Shape in $beta, L3-3", header("fixture.beta/Shape"))
+        assertEquals("Shape in $alpha, L3-3", header("fixture.alpha/Shape"))
+        assertEquals("Shape in $beta, L3-3", header("fixture.beta/Shape"))
         // The index drops receivers and names constructors after their class; the trees decide.
-        assertEquals("// String.shout in $shapes, L64-65", header("String.shout"))
-        assertEquals("// Box/constructor(Int) in $spansKt, L55-55", header("Box/constructor(Int)"))
-        assertEquals("// create in $spansKt, L61-61", header("Widget/Companion/create"))
-        assertEquals("Companion", header("Widget/Companion").substringAfter("// ").substringBefore(" in "))
+        assertEquals("String.shout in $shapes, L64-65", header("String.shout"))
+        assertEquals("Box/constructor(Int) in $spansKt, L55-55", header("Box/constructor(Int)"))
+        assertEquals("create in $spansKt, L61-61", header("Widget/Companion/create"))
+        assertEquals("Companion", assertIs<ReadSymbolResult.Found>(read(null, "Widget/Companion")).symbol)
         // The index matches substrings, not typos, so a miss looks up a prefix of the name too.
         assertEquals(emptyList(), lsp.workspaceSymbols("Calculatr").symbols)
         // A miss suggests close names with their files; local declarations stay unaddressable.
@@ -616,49 +620,45 @@ class KotlinLspContractTest {
     @Order(18)
     fun `kt_find_usages lists Usages by containing Symbol, main before test, imports only counted`() = runBlocking<Unit> {
         val find = FindUsages(files, lsp)
-        suspend fun usages(path: String) = assertIs<FindUsagesResult.Found>(find(path), path).text
+        val shapes = "src/main/kotlin/fixture/Shapes.kt"
+        val check = "src/test/kotlin/fixture/ShapesCheck.kt"
+        val checkLine = 8 to "return Calculator(\"c\").parse(\"2\") == 2 && circle.radius == 1.0 && Operation.PLUS.apply(1, 2) == 3"
 
         // Main before test; the delegating constructor call `this(name)` refers to the class too.
         assertEquals(
-            """
-            |2 usages in 2 files
-            |src/main/kotlin/fixture/Shapes.kt
-            |  constructor(String, Int)
-            |    L7: constructor(name: String, scale: Int) : this(name) {
-            |src/test/kotlin/fixture/ShapesCheck.kt
-            |  checkShapes
-            |    L8: return Calculator("c").parse("2") == 2 && circle.radius == 1.0 && Operation.PLUS.apply(1, 2) == 3
-            """.trimMargin(),
-            usages("Calculator"),
+            FindUsagesResult.Found(
+                2, 2, 0,
+                listOf(
+                    inFile(shapes, inSymbol("constructor(String, Int)", 7 to "constructor(name: String, scale: Int) : this(name) {")),
+                    inFile(check, inSymbol("checkShapes", checkLine)),
+                ),
+            ),
+            find("Calculator"),
         )
         // Grouped by each overload's canonical path; the declaration itself and the accessors' `field` aren't Usages.
         assertEquals(
-            """
-            |4 usages in 1 file
-            |src/main/kotlin/fixture/Shapes.kt
-            |  constructor(String, Int)
-            |    L8: this.scale = scale
-            |  total()
-            |    L19: fun total(): Int = total * scale
-            |  parse(String)
-            |    L21: fun parse(text: String): Int = text.toInt() * scale
-            |  parse(String, Int)
-            |    L23: fun parse(text: String, radix: Int): Int = text.toInt(radix) * scale
-            """.trimMargin(),
-            usages("Calculator/scale"),
+            FindUsagesResult.Found(
+                4, 1, 0,
+                listOf(
+                    inFile(
+                        shapes,
+                        inSymbol("constructor(String, Int)", 8 to "this.scale = scale"),
+                        inSymbol("total()", 19 to "fun total(): Int = total * scale"),
+                        inSymbol("parse(String)", 21 to "fun parse(text: String): Int = text.toInt() * scale"),
+                        inSymbol("parse(String, Int)", 23 to "fun parse(text: String, radix: Int): Int = text.toInt(radix) * scale"),
+                    ),
+                ),
+            ),
+            find("Calculator/scale"),
         )
         // Two references on one line: counted twice, shown once.
-        assertEquals("2 usages in 1 file\nsrc/main/kotlin/fixture/Shapes.kt\n  create\n    L48: fun create(): Outer = Outer()", usages("Outer"))
+        assertEquals(FindUsagesResult.Found(2, 1, 0, listOf(inFile(shapes, inSymbol("create", 48 to "fun create(): Outer = Outer()")))), find("Outer"))
         assertEquals(
-            "1 usage in 1 file (+1 import)\nsrc/test/kotlin/fixture/ShapesCheck.kt\n  checkShapes\n    L7: val circle = Shape(1.0)",
-            usages("fixture.beta/Shape"),
+            FindUsagesResult.Found(1, 1, 1, listOf(inFile(check, inSymbol("checkShapes", 7 to "val circle = Shape(1.0)")))),
+            find("fixture.beta/Shape"),
         )
         // The call is a Usage; the overrides in PLUS and TIMES aren't.
-        assertEquals(
-            "1 usage in 1 file\nsrc/test/kotlin/fixture/ShapesCheck.kt\n  checkShapes\n" +
-                "    L8: return Calculator(\"c\").parse(\"2\") == 2 && circle.radius == 1.0 && Operation.PLUS.apply(1, 2) == 3",
-            usages("Operation/apply"),
-        )
+        assertEquals(FindUsagesResult.Found(1, 1, 0, listOf(inFile(check, inSymbol("checkShapes", checkLine)))), find("Operation/apply"))
         assertEquals(FindUsagesResult.NoUsages("describe", searchedFiles = 1), find("Outer/Nested/describe", file = "src/main/kotlin/fixture/Shapes.kt"))
     }
 
@@ -669,59 +669,53 @@ class KotlinLspContractTest {
     fun `kt_get_definition shows project, local, sources-jar and JDK targets`() = runBlocking<Unit> {
         val get = GetDefinition(files, lsp)
         val definitions = "src/main/kotlin/fixture/Definitions.kt"
+        val spansKt = "src/main/kotlin/fixture/Spans.kt"
         suspend fun found(name: String, at: String? = null) =
-            assertIs<GetDefinitionResult.Found>(get("Definitions/uses", name, at), name).text
+            assertIs<GetDefinitionResult.Found>(get("Definitions/uses", name, at), name).definitions.single()
+        suspend fun inSource(name: String) = assertIs<FoundDefinition.InSource>(found(name), name)
+            .let { listOf(it.listing.path.toString(), "${it.file}, L${it.listing.firstLine}-${it.listing.lastLine}", it.head) }
 
         // Project targets resolve through the target file's tree: definition points at the name.
         assertEquals(
-            """
-            |// Documented in src/main/kotlin/fixture/Spans.kt, L3-20
+            listOf(
+                "Documented",
+                "$spansKt, L3-20",
+                """
             |/**
             | * KDoc above an annotated class.
             | */
             |@Suppress("unused")
             |@Deprecated("probe")
             |internal class Documented
-            |// Body omitted. Full source: kt_read_symbol(symbol="Documented", file="src/main/kotlin/fixture/Spans.kt")
             """.trimMargin(),
-            found("Documented"),
+            ),
+            inSource("Documented"),
         )
+        assertEquals(listOf("blocky", "$spansKt, L14-15", "    /* A block comment above. */\n    fun blocky(): Int"), inSource("blocky"))
         assertEquals(
-            "// blocky in src/main/kotlin/fixture/Spans.kt, L14-15\n    /* A block comment above. */\n    fun blocky(): Int\n" +
-                "// Body omitted. Full source: kt_read_symbol(symbol=\"blocky\", file=\"src/main/kotlin/fixture/Spans.kt\")",
-            found("blocky"),
-        )
-        assertEquals(
-            "// String.shout in src/main/kotlin/fixture/Shapes.kt, L64-65\n/** Extensions. */\nfun String.shout(): String\n" +
-                "// Body omitted. Full source: kt_read_symbol(symbol=\"String.shout\", file=\"src/main/kotlin/fixture/Shapes.kt\")",
-            found("shout"),
+            listOf("String.shout", "src/main/kotlin/fixture/Shapes.kt, L64-65", "/** Extensions. */\nfun String.shout(): String"),
+            inSource("shout"),
         )
         // Locals and parameters: the definition is in the same file, at a name no Symbol has.
         assertEquals(
-            "// documented is local to uses in $definitions, not addressable; declared at L8\nval documented = Documented()",
+            FoundDefinition.Local("documented", "uses", definitions, 8, "val documented = Documented()"),
             found("documented", at = "documented.blocky"),
         )
-        assertEquals(
-            "// radius is local to uses in $definitions, not addressable; declared at L7\nfun uses(radius: Int): String {",
-            found("radius", at = "\$radius"),
-        )
+        assertEquals(FoundDefinition.Local("radius", "uses", definitions, 7, "fun uses(radius: Int): String {"), found("radius", at = "\$radius"))
         // Kotlin libraries: a sources-jar entry, with a documentSymbol tree for its jar: URI.
-        val listOf = found("listOf")
-        assertEquals("// kotlin.collections.listOf in kotlin-stdlib-", listOf.substringBefore("2.4.21"))
+        val listOf = assertIs<FoundDefinition.InLibrary>(found("listOf"))
         assertEquals(
-            "-sources.jar!/commonMain/kotlin/collections/Collections.kt (library: read-only, not addressable)",
-            listOf.lines().first().substringAfter("2.4.21"),
+            Triple("kotlin.collections.listOf", "kotlin-stdlib-2.4.21-sources.jar", "commonMain/kotlin/collections/Collections.kt"),
+            Triple(listOf.qualifiedName, listOf.origin, listOf.entry),
         )
-        assertTrue("Returns a new read-only list of given elements." in listOf, listOf)
-        assertTrue(listOf.endsWith("fun <T> listOf(vararg elements: T): List<T>"), listOf)
-        val toInt = found("toInt")
-        assertTrue(toInt.startsWith("// kotlin.text.toInt in kotlin-stdlib-"), toInt)
-        assertTrue(toInt.endsWith("fun String.toInt(): Int"), toInt)
+        assertTrue("Returns a new read-only list of given elements." in listOf.head, listOf.head)
+        assertTrue(listOf.head.endsWith("fun <T> listOf(vararg elements: T): List<T>"), listOf.head)
+        val toInt = assertIs<FoundDefinition.InLibrary>(found("toInt"))
+        assertEquals("kotlin.text.toInt", toInt.qualifiedName)
+        assertTrue(toInt.origin.startsWith("kotlin-stdlib-"), toInt.origin)
+        assertTrue(toInt.head.endsWith("fun String.toInt(): Int"), toInt.head)
         // The JDK: a class file in a jrt: URI, no sources.
-        assertEquals(
-            "// name in java.io.File, in JDK java.base (library: read-only, not addressable; no sources, so no KDoc or declaration)",
-            found("name"),
-        )
+        assertEquals(FoundDefinition.LibraryWithoutSources("name", "java.io.File", "JDK java.base"), found("name"))
         // A keyword has no definition.
         assertEquals(GetDefinitionResult.Unresolved("return", "uses", 11, diagnostic = null), get("Definitions/uses", "return"))
     }

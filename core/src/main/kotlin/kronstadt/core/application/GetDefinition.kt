@@ -5,6 +5,7 @@ import kronstadt.core.domain.Definition
 import kronstadt.core.domain.DeclarationHead
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
+import kronstadt.core.domain.SymbolListing
 import kronstadt.core.domain.SymbolSpan
 import kronstadt.core.domain.SymbolTree
 import kronstadt.core.domain.TextRange
@@ -15,7 +16,7 @@ import kronstadt.core.port.FileStore
 import kotlin.time.Duration
 
 /**
- * Use case behind `kt_get_definition`: where a name used inside a Symbol is declared, and that declaration's contract
+ * Use case behind getting a definition: where a name used inside a Symbol is declared, and that declaration's contract
  * (its KDoc and declaration, without the body), found by text within the Symbol Span so the agent never computes positions.
  */
 public class GetDefinition(
@@ -62,13 +63,14 @@ public class GetDefinition(
                 diagnostic?.let { d -> d.code?.let { "$it: ${d.message}" } ?: d.message },
             )
         }
-        val text = definitions.map { definition ->
-            when (definition) {
-                is Definition.InSource -> sourceTarget(session, definition, name)
-                is Definition.InLibrary -> libraryTarget(definition, name)
-            }
-        }.joinToString("\n\n")
-        return GetDefinitionResult.Found(text)
+        return GetDefinitionResult.Found(
+            definitions.map { definition ->
+                when (definition) {
+                    is Definition.InSource -> sourceTarget(session, definition, name)
+                    is Definition.InLibrary -> libraryTarget(definition, name)
+                }
+            },
+        )
     }
 
     /** [name] as a whole identifier, not part of a longer one; backticks optional. */
@@ -79,66 +81,57 @@ public class GetDefinition(
 
     /**
      * A declaration in a source file: a project Symbol, a local, or something in a file Kronstadt can't address (not
-     * Kotlin, or outside the project), shown with the line it is on. [name] stands in for a name that can't be read.
+     * Kotlin, or outside the project), with the line it is on. [name] stands in for a name that can't be read.
      */
-    private suspend fun sourceTarget(session: AnalysisSession, definition: Definition.InSource, name: String): String {
+    private suspend fun sourceTarget(session: AnalysisSession, definition: Definition.InSource, name: String): FoundDefinition {
         val location = definition.location
         val file = location.file
         val line = location.range.start.line
-        if (files.resolve(file.toString()) != file) return "// $name in $file, L${line + 1} (outside the project: read-only, not addressable)"
+        if (files.resolve(file.toString()) != file) return FoundDefinition.OutsideProject(name, file.toString(), line + 1)
         val shown = files.display(file)
         if (!AnalysedFile.isKotlin(file)) {
             val document = files.read(file)?.takeIf { line < it.lineCount }
-            return "// ${document?.slice(location.range) ?: name} in $shown, L${line + 1} (not Kotlin: read-only, not addressable)" +
-                (document?.let { "\n" + it.line(line).trim() } ?: "")
+            return FoundDefinition.NotKotlin(document?.slice(location.range) ?: name, shown, line + 1, document?.line(line)?.trim())
         }
-        val analysed = session.analyse(files, file) ?: return "// $name in $shown, L${line + 1} (file not found)"
+        val analysed = session.analyse(files, file) ?: return FoundDefinition.FileNotFound(name, shown, line + 1)
         val node = analysed.nodes.lastOrNull { it.symbol.selectionRange.start == location.range.start }
             ?: return local(analysed, location.range)
-        val listing = analysed.listing(node)
-        val canonical = listing.path.toString()
-        return "// $canonical in $shown, L${listing.firstLine}-${listing.lastLine}\n" +
-            DeclarationHead.of(analysed.document, node.symbol, analysed.listedLines(node).first) + "\n" +
-            "// Body omitted. Full source: kt_read_symbol(symbol=\"$canonical\", file=\"$shown\")"
+        return FoundDefinition.InSource(
+            analysed.listing(node),
+            shown,
+            DeclarationHead.of(analysed.document, node.symbol, analysed.listedLines(node).first),
+        )
     }
 
     /**
      * A library or JDK declaration, which no tool can edit. With sources: its fully qualified name, then its KDoc and
      * declaration without the body. Without: the class it is in, from the class file's path.
      */
-    private fun libraryTarget(definition: Definition.InLibrary, name: String): String {
-        val where = "${definition.origin}!/${definition.entry} (library: read-only, not addressable)"
+    private fun libraryTarget(definition: Definition.InLibrary, name: String): FoundDefinition {
         val source = definition.source
         val node = source?.let { SymbolTree(it.symbols).nodes.lastOrNull { node -> node.symbol.selectionRange.start == definition.range.start } }
         if (source == null || node == null) {
             val className = definition.entry.removeSuffix(".class").replace('/', '.').replace('$', '.')
-            val member = if (className.substringAfterLast('.') == name) "" else "$name in "
-            return "// $member$className, in ${definition.origin} (library: read-only, not addressable; no sources, so no KDoc or declaration)"
+            val member = name.takeUnless { className.substringAfterLast('.') == it }
+            return FoundDefinition.LibraryWithoutSources(member, className, definition.origin)
         }
         val fqName = (listOf(source.document.packageName) + (node.ancestors + node.symbol).map { it.name })
             .filter { it.isNotEmpty() }.joinToString(".")
         val (first, _) = SymbolSpan.lines(source.document, node.symbol)
-        return "// $fqName in $where\n" + DeclarationHead.of(source.document, node.symbol, first)
+        return FoundDefinition.InLibrary(fqName, definition.origin, definition.entry, DeclarationHead.of(source.document, node.symbol, first))
     }
 
     /** A declaration no Symbol Path addresses (a local variable, parameter or local function): where it is. */
-    private fun local(analysed: AnalysedFile, range: TextRange): String {
-        val name = analysed.document.slice(range)
-        val enclosing = analysed.nodes.lastOrNull { range.start in it.symbol.range }
-            ?.let { analysed.path(it).toString() } ?: FILE_LEVEL
+    private fun local(analysed: AnalysedFile, range: TextRange): FoundDefinition {
+        val enclosing = analysed.nodes.lastOrNull { range.start in it.symbol.range }?.let { analysed.path(it).toString() }
         val line = range.start.line
-        return "// $name is local to $enclosing in ${analysed.shown}, not addressable; declared at L${line + 1}\n" +
-            analysed.document.line(line).trim()
-    }
-
-    private companion object {
-        const val FILE_LEVEL = "(file level)"
+        return FoundDefinition.Local(analysed.document.slice(range), enclosing, analysed.shown, line + 1, analysed.document.line(line).trim())
     }
 }
 
 public sealed interface GetDefinitionResult {
-    /** Each definition as its own block, in the code intelligence's order. */
-    public data class Found(val text: String) : GetDefinitionResult
+    /** Each definition, in the code intelligence's order. */
+    public data class Found(val definitions: List<FoundDefinition>) : GetDefinitionResult
     public data class LookupFailed(val failure: LookupFailure) : GetDefinitionResult
 
     /** The `at` Snippet doesn't occur exactly once in [symbol]'s span in [file]: [miss] says how often and where. */
@@ -158,4 +151,28 @@ public sealed interface GetDefinitionResult {
 
     /** The index was still incomplete after waiting. */
     public data class NotReady(val readiness: Readiness.NotReady) : GetDefinitionResult
+}
+
+/** One declaration a name resolved to. Lines are 1-based; a file is as shown, unless outside the project. */
+public sealed interface FoundDefinition {
+    /** A project Symbol: its [listing] (canonical Symbol Path and line span), and its KDoc and declaration without the body. */
+    public data class InSource(val listing: SymbolListing, val file: String, val head: String) : FoundDefinition
+
+    /** A local variable, parameter or local function, inside the Symbol at [enclosing] (`null`: outside any), and its declaration's [source] line. */
+    public data class Local(val name: String, val enclosing: String?, val file: String, val line: Int, val source: String) : FoundDefinition
+
+    /** A library or JDK declaration with sources: its fully qualified name, where it is, and its KDoc and declaration. */
+    public data class InLibrary(val qualifiedName: String, val origin: String, val entry: String, val head: String) : FoundDefinition
+
+    /** A library or JDK declaration without sources: the class it is in, and the [member] name unless it is that class. */
+    public data class LibraryWithoutSources(val member: String?, val className: String, val origin: String) : FoundDefinition
+
+    /** A declaration in a file that isn't Kotlin, and its [source] line if the file could be read. */
+    public data class NotKotlin(val name: String, val file: String, val line: Int, val source: String?) : FoundDefinition
+
+    /** A declaration outside the project, at its absolute [file]. */
+    public data class OutsideProject(val name: String, val file: String, val line: Int) : FoundDefinition
+
+    /** A declaration in a Kotlin file that could no longer be read. */
+    public data class FileNotFound(val name: String, val file: String, val line: Int) : FoundDefinition
 }

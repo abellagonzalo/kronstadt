@@ -1,5 +1,8 @@
 package kronstadt.core.application
 
+import kronstadt.core.domain.PreferredOverFunctions
+import kronstadt.core.domain.SymbolSpan
+
 import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Position
@@ -37,7 +40,7 @@ class ReadSymbolTest {
 
         val result = assertIs<ReadSymbolResult.Found>(readSymbol(source, greet)("src/A.kt", "greet"))
 
-        assertEquals("// greet in src/A.kt, L3-4\nfun greet(): String =\n    \"hi\"", result.text)
+        assertEquals(ReadSymbolResult.Found("greet", "src/A.kt", SymbolSpan(2, 3, "fun greet(): String =\n    \"hi\"")), result)
     }
 
     @Test
@@ -53,12 +56,10 @@ class ReadSymbolTest {
         val one = assertIs<ReadSymbolResult.Found>(readSymbol(source, oneFunction)("src/A.kt", "edit"))
         val signed = assertIs<ReadSymbolResult.Found>(readSymbol(source, tools)("src/A.kt", "edit(Int)"))
 
-        assertEquals(
-            "// edit in src/A.kt, L2-2 (the property; functions share its name: edit(Int), edit(String))\n    val edit = 0",
-            two.text,
-        )
-        assertEquals("// edit in src/A.kt, L2-2 (the property; a function shares its name: edit(Int))\n    val edit = 0", one.text)
-        assertEquals("// edit(Int) in src/A.kt, L3-3\n    fun edit(n: Int) = n", signed.text)
+        val edit = SymbolSpan(1, 1, "    val edit = 0")
+        assertEquals(ReadSymbolResult.Found("edit", "src/A.kt", edit, PreferredOverFunctions(SymbolKind.PROPERTY, listOf("edit(Int)", "edit(String)"))), two)
+        assertEquals(ReadSymbolResult.Found("edit", "src/A.kt", edit, PreferredOverFunctions(SymbolKind.PROPERTY, listOf("edit(Int)"))), one)
+        assertEquals(ReadSymbolResult.Found("edit(Int)", "src/A.kt", SymbolSpan(2, 2, "    fun edit(n: Int) = n")), signed)
     }
 
     // Nested declarations, as kotlin-lsp reports them: a class range starts at its KDoc and covers annotations.
@@ -88,20 +89,20 @@ class ReadSymbolTest {
     @Test
     fun `reading a class gives the whole class with its KDoc, annotations and nested members`() = runTest {
         val result = assertIs<ReadSymbolResult.Found>(read("Runner"))
-        assertEquals("// Runner in src/A.kt, L3-11\n" + nested.lines().subList(2, 11).joinToString("\n"), result.text)
+        assertEquals(ReadSymbolResult.Found("Runner", "src/A.kt", SymbolSpan(2, 10, nested.lines().subList(2, 11).joinToString("\n"))), result)
     }
 
     @Test
     fun `trailing segments address a nested Symbol, and the end-of-line comment belongs to it`() = runTest {
         val result = assertIs<ReadSymbolResult.Found>(read("Nested/run"))
-        assertEquals("// Nested/run in src/A.kt, L9-9\n        fun run(): Int = 2 // the nested one", result.text)
+        assertEquals(ReadSymbolResult.Found("Nested/run", "src/A.kt", SymbolSpan(8, 8, "        fun run(): Int = 2 // the nested one")), result)
         assertIs<ReadSymbolResult.Found>(read("Runner/Nested/run"))
     }
 
     @Test
     fun `a leading slash anchors the path at the top level`() = runTest {
         val result = assertIs<ReadSymbolResult.Found>(read("/run"))
-        assertEquals("// /run in src/A.kt, L13-13\nfun run(): Int = 3", result.text)
+        assertEquals(ReadSymbolResult.Found("/run", "src/A.kt", SymbolSpan(12, 12, "fun run(): Int = 3")), result)
         assertIs<LookupFailure.NotFound>(read("/Nested").lookupFailure())
     }
 
@@ -138,7 +139,7 @@ class ReadSymbolTest {
     @Test
     fun `a parameter-type signature picks an overload, ignoring whitespace`() = runTest {
         val result = assertIs<ReadSymbolResult.Found>(readOverload("parse( String,Int )"))
-        assertEquals("// parse(String, Int) in src/A.kt, L4-4\n    fun parse(text: String, radix: Int): Int = text.toInt(radix)", result.text)
+        assertEquals(ReadSymbolResult.Found("parse(String, Int)", "src/A.kt", SymbolSpan(3, 3, "    fun parse(text: String, radix: Int): Int = text.toInt(radix)")), result)
         assertIs<ReadSymbolResult.Found>(readOverload("Parser/merge(Map<String,Int>, List<Int>)"))
         assertEquals(listOf("parse(String)", "parse(String, Int)"), assertIs<LookupFailure.Ambiguous>(readOverload("parse").lookupFailure()).candidates.map { it.path })
     }
@@ -151,7 +152,7 @@ class ReadSymbolTest {
 
     @Test
     fun `the canonical path is the shortest unambiguous one`() = runTest {
-        assertEquals("// merge in src/A.kt, L6-6", assertIs<ReadSymbolResult.Found>(readOverload("/Parser/merge")).text.lines().first())
+        assertEquals("merge in src/A.kt, L6-6", assertIs<ReadSymbolResult.Found>(readOverload("/Parser/merge")).location)
     }
 
     @Test
@@ -193,8 +194,8 @@ class ReadSymbolTest {
     @Test
     fun `a trailing comma after the Symbol belongs to its span, with or without an end-of-line comment`() = runTest {
         val read = readSymbol(trailingCommas, commaBox)
-        assertEquals("// width in src/A.kt, L2-2\n    val width: Int,", assertIs<ReadSymbolResult.Found>(read("src/A.kt", "width")).text)
-        assertEquals("// height in src/A.kt, L3-3\n    val height: Int, // tall", assertIs<ReadSymbolResult.Found>(read("src/A.kt", "height")).text)
+        assertEquals(ReadSymbolResult.Found("width", "src/A.kt", SymbolSpan(1, 1, "    val width: Int,")), read("src/A.kt", "width"))
+        assertEquals(ReadSymbolResult.Found("height", "src/A.kt", SymbolSpan(2, 2, "    val height: Int, // tall")), read("src/A.kt", "height"))
     }
 
     @Test
@@ -222,7 +223,7 @@ class ReadSymbolTest {
         // "/** 😀 */ " is 10 UTF-16 units, "fun " 4 more: the backticked name starts at column 14.
         val fn = CodeSymbol("😀name", SymbolKind.FUNCTION, range(0, 0, 1, 5), range(0, 14, 0, 22), parameterTypes = "", type = "(): Int")
         val result = assertIs<ReadSymbolResult.Found>(readSymbol(source, fn)("src/A.kt", "`😀name`"))
-        assertEquals("// `😀name` in src/A.kt, L1-2\n/** 😀 */ fun `😀name`(): Int =\n    1", result.text)
+        assertEquals(ReadSymbolResult.Found("`😀name`", "src/A.kt", SymbolSpan(0, 1, "/** 😀 */ fun `😀name`(): Int =\n    1")), result)
     }
 
     @Test
@@ -256,9 +257,9 @@ class ReadSymbolTest {
         val box = symbol("Box", SymbolKind.CLASS, range(0, 0, 2, 1), 0, 6, children = listOf(primary, secondary))
         val read = readSymbol(source, box)
 
-        assertEquals("// Box in src/A.kt, L1-3", assertIs<ReadSymbolResult.Found>(read("src/A.kt", "Box")).text.lines().first())
+        assertEquals("Box in src/A.kt, L1-3", assertIs<ReadSymbolResult.Found>(read("src/A.kt", "Box")).location)
         val result = assertIs<ReadSymbolResult.Found>(read("src/A.kt", "Box/constructor()"))
-        assertEquals("// constructor() in src/A.kt, L2-2\n    constructor() : this(0)", result.text)
+        assertEquals(ReadSymbolResult.Found("constructor()", "src/A.kt", SymbolSpan(1, 1, "    constructor() : this(0)")), result)
     }
 
     // Special forms (ADR 0002), with trees shaped as kotlin-lsp 271.2085.0 reports them (see the contract test).
@@ -293,12 +294,12 @@ class ReadSymbolTest {
 
     @Test
     fun `an extension receiver is written inside the segment, Kotlin-style`() = runTest {
-        assertEquals("// String.shout in src/A.kt, L9-9\nfun String.shout(): String = uppercase()", assertIs<ReadSymbolResult.Found>(readExtension("String.shout")).text)
-        assertEquals("// String.decorate in src/A.kt, L2-2", assertIs<ReadSymbolResult.Found>(readExtension("Formatter/String.decorate")).text.lines().first())
-        assertEquals("// Int.decorate in src/A.kt, L4-4", assertIs<ReadSymbolResult.Found>(readExtension("Int.decorate")).text.lines().first())
-        assertEquals("// decorate in src/A.kt, L6-6", assertIs<ReadSymbolResult.Found>(readExtension("Formatter/decorate")).text.lines().first())
-        assertEquals("// List<T>.second in src/A.kt, L11-11", assertIs<ReadSymbolResult.Found>(readExtension("List< T >.second")).text.lines().first())
-        assertEquals("// String.firstChar in src/A.kt, L13-14", assertIs<ReadSymbolResult.Found>(readExtension("String.firstChar")).text.lines().first())
+        assertEquals(ReadSymbolResult.Found("String.shout", "src/A.kt", SymbolSpan(8, 8, "fun String.shout(): String = uppercase()")), readExtension("String.shout"))
+        assertEquals("String.decorate in src/A.kt, L2-2", assertIs<ReadSymbolResult.Found>(readExtension("Formatter/String.decorate")).location)
+        assertEquals("Int.decorate in src/A.kt, L4-4", assertIs<ReadSymbolResult.Found>(readExtension("Int.decorate")).location)
+        assertEquals("decorate in src/A.kt, L6-6", assertIs<ReadSymbolResult.Found>(readExtension("Formatter/decorate")).location)
+        assertEquals("List<T>.second in src/A.kt, L11-11", assertIs<ReadSymbolResult.Found>(readExtension("List< T >.second")).location)
+        assertEquals("String.firstChar in src/A.kt, L13-14", assertIs<ReadSymbolResult.Found>(readExtension("String.firstChar")).location)
     }
 
     @Test
@@ -329,9 +330,11 @@ class ReadSymbolTest {
 
     @Test
     fun `a bare name prefers the property over a same-named function beside it, and parentheses select the function`() = runTest {
-        assertEquals("// Sized/size in src/A.kt, L2-2 (the property; a function shares its name: size(Int))", assertIs<ReadSymbolResult.Found>(readSized("Sized/size")).text.lines().first())
-        assertEquals("// size(Int) in src/A.kt, L4-4", assertIs<ReadSymbolResult.Found>(readSized("size(Int)")).text.lines().first())
-        assertEquals("// size() in src/A.kt, L8-8", assertIs<ReadSymbolResult.Found>(readSized("size()")).text.lines().first())
+        val size = assertIs<ReadSymbolResult.Found>(readSized("Sized/size"))
+        assertEquals("Sized/size in src/A.kt, L2-2", size.location)
+        assertEquals(PreferredOverFunctions(SymbolKind.PROPERTY, listOf("size(Int)")), size.preferred)
+        assertEquals("size(Int) in src/A.kt, L4-4", assertIs<ReadSymbolResult.Found>(readSized("size(Int)")).location)
+        assertEquals("size() in src/A.kt, L8-8", assertIs<ReadSymbolResult.Found>(readSized("size()")).location)
         assertIs<LookupFailure.NotFound>(readSized("Sized/size()").lookupFailure())
     }
 
@@ -369,7 +372,7 @@ class ReadSymbolTest {
         listOf("counter/get", "get", "set", "Hidden/counter/set", "outer/local", "local").forEach { path ->
             assertEquals(emptyList(), assertIs<LookupFailure.NotFound>(read("src/A.kt", path).lookupFailure(), path).suggestions.map { it.path }, path)
         }
-        assertEquals("// counter in src/A.kt, L2-6", assertIs<ReadSymbolResult.Found>(read("src/A.kt", "counter")).text.lines().first())
+        assertEquals("counter in src/A.kt, L2-6", assertIs<ReadSymbolResult.Found>(read("src/A.kt", "counter")).location)
     }
 
     private val forms = """
@@ -425,38 +428,38 @@ class ReadSymbolTest {
     private suspend fun readForm(symbol: String) =
         readSymbol(forms, box, widget, outer, tint, names)("src/A.kt", symbol)
 
-    private suspend fun headerOf(symbol: String) = assertIs<ReadSymbolResult.Found>(readForm(symbol), symbol).text.lines().first()
+    private suspend fun locationOf(symbol: String) = assertIs<ReadSymbolResult.Found>(readForm(symbol), symbol).location
 
     @Test
     fun `constructors are named constructor, and a primary constructor's val parameters are properties`() = runTest {
-        assertEquals("// Box/constructor(Int) in src/A.kt, L5-5", headerOf("Box/constructor(Int)"))
+        assertEquals("Box/constructor(Int) in src/A.kt, L5-5", locationOf("Box/constructor(Int)"))
         // The primary constructor starts on the class's line, so it can be named but not read on its own.
         assertIs<LookupFailure.SharedLine>(readForm("Box/constructor(Int, Int)").lookupFailure())
         assertEquals(listOf("constructor(Int, Int)", "Box/constructor(Int)", "Tint/constructor"), assertIs<LookupFailure.Ambiguous>(readForm("constructor").lookupFailure()).candidates.map { it.path })
         // Resolved as a property; its range stops before the comma, which its span takes in (#68).
-        assertEquals("// width in src/A.kt, L2-2", headerOf("Box/width"))
+        assertEquals("width in src/A.kt, L2-2", locationOf("Box/width"))
         assertIs<LookupFailure.NotFound>(readForm("Box/height").lookupFailure())
         assertIs<LookupFailure.NotFound>(readForm("Box/Box").lookupFailure())
     }
 
     @Test
     fun `a companion is Companion, or its own name when it has one`() = runTest {
-        assertEquals("// Companion/create in src/A.kt, L10-10", headerOf("Widget/Companion/create"))
-        assertEquals("// Companion in src/A.kt, L9-11", headerOf("Widget/Companion"))
-        assertEquals("// Factory/create in src/A.kt, L16-16", headerOf("Outer/Factory/create"))
+        assertEquals("Companion/create in src/A.kt, L10-10", locationOf("Widget/Companion/create"))
+        assertEquals("Companion in src/A.kt, L9-11", locationOf("Widget/Companion"))
+        assertEquals("Factory/create in src/A.kt, L16-16", locationOf("Outer/Factory/create"))
         assertIs<LookupFailure.NotFound>(readForm("Outer/Companion/create").lookupFailure())
     }
 
     @Test
     fun `enum entries and the members of their bodies are addressable`() = runTest {
-        assertEquals("// PALE in src/A.kt, L21-21", headerOf("Tint/PALE"))
-        assertEquals("// DEEP in src/A.kt, L22-24", headerOf("Tint/DEEP"))
-        assertEquals("// hex in src/A.kt, L23-23", headerOf("Tint/DEEP/hex()"))
+        assertEquals("PALE in src/A.kt, L21-21", locationOf("Tint/PALE"))
+        assertEquals("DEEP in src/A.kt, L22-24", locationOf("Tint/DEEP"))
+        assertEquals("hex in src/A.kt, L23-23", locationOf("Tint/DEEP/hex()"))
     }
 
     @Test
     fun `a typealias is addressed by its name`() = runTest {
-        assertEquals("// Names in src/A.kt, L27-27\ntypealias Names = List<String>", assertIs<ReadSymbolResult.Found>(readForm("Names")).text)
+        assertEquals(ReadSymbolResult.Found("Names", "src/A.kt", SymbolSpan(26, 26, "typealias Names = List<String>")), readForm("Names"))
     }
 
     @Test
@@ -466,10 +469,10 @@ class ReadSymbolTest {
         val orBlank = symbol("orBlank", SymbolKind.FUNCTION, range(2, 0, 2, 42), 2, 12, parameterTypes = "", type = "(): String", receiver = "String?")
         val read = readSymbol(source, twice, orBlank)
 
-        assertEquals("// ((Int) -> Unit).twice in src/A.kt, L1-1", assertIs<ReadSymbolResult.Found>(read("src/A.kt", "((Int)->Unit).twice")).text.lines().first())
+        assertEquals("((Int) -> Unit).twice in src/A.kt, L1-1", assertIs<ReadSymbolResult.Found>(read("src/A.kt", "((Int)->Unit).twice")).location)
         assertIs<ReadSymbolResult.Found>(read("src/A.kt", "((Int) -> Unit).twice"))
         assertIs<ReadSymbolResult.Found>(read("src/A.kt", "((Int) -> Unit).twice(Int)"))
-        assertEquals("// String?.orBlank in src/A.kt, L3-3", assertIs<ReadSymbolResult.Found>(read("src/A.kt", "String?.orBlank")).text.lines().first())
+        assertEquals("String?.orBlank in src/A.kt, L3-3", assertIs<ReadSymbolResult.Found>(read("src/A.kt", "String?.orBlank")).location)
         assertIs<LookupFailure.InvalidPath>(read("src/A.kt", "(Int)x").lookupFailure())
     }
 }

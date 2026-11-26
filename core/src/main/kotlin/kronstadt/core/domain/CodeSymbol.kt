@@ -39,7 +39,7 @@ public data class CodeSymbol(
      */
     val parameterTypes: String? = null,
     /**
-     * The text `kt_read_structure` shows next to the Symbol's path, without an extension receiver: `(String): Int` for
+     * The text a file's structure shows next to the Symbol's path, without an extension receiver: `(String): Int` for
      * a function, `: Char` for a property. Null when the language server shows nothing.
      */
     val type: String? = null,

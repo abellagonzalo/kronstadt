@@ -21,7 +21,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  * intelligence finds unused in the file's current text but not in its base, among those [eligible] keeps of the
  * suspects for that file. Its organize-imports decides, except for an import a star import new in its answer covers
  * (#81): that one is unused if removing it adds no error. Without an answer an import counts as used. The diagnostics
- * this takes share one [budget]. Shared by `kt_edit` and `kt_rename_symbol`; returns the imports removed, by file.
+ * this takes share one [budget]. Shared by Edit and RenameSymbol; returns the imports removed, by file.
  *
  * A file's imports can depend on another edited file, so the change is judged as a whole (#138): every edited file is
  * brought to its current text before any is asked about its current text, and to its base before any is asked about

@@ -9,8 +9,8 @@ import java.nio.file.Path
 import kotlin.time.Duration
 
 /**
- * Use case behind `kt_find_usages`: every Usage of one Symbol in project source, grouped by file and then by the
- * canonical Symbol Path that contains it, so each group can be passed straight to `kt_read_symbol` or `kt_edit`.
+ * Use case behind finding Usages: every Usage of one Symbol in project source, grouped by file and then by the
+ * canonical Symbol Path that contains it, so each group can be passed straight to a read or an Edit.
  */
 public class FindUsages(
     private val files: FileStore,
@@ -66,28 +66,26 @@ public class FindUsages(
             fits
         }
         val omitted = withUsages.drop(shown.size)
-        val text = buildString {
-            append(count(withUsages.sumOf { (_, usages) -> usages.size }, "usage")).append(" in ").append(count(withUsages.size, "file"))
-            if (imports > 0) append(" (+").append(count(imports, "import")).append(')')
-            shown.forEach { (file, usages) ->
-                val analysed = session.analyse(files, file) ?: return@forEach
-                append('\n').append(analysed.shown)
-                usages.groupBy { usage ->
-                    analysed.nodes.lastOrNull { usage.range.start in it.symbol.range }
-                }.forEach { (node, inNode) ->
-                    append("\n  ").append(node?.let { analysed.path(it).toString() } ?: FILE_LEVEL)
-                    inNode.map { it.range.start.line }.distinct().forEach { line ->
-                        append("\n    L${line + 1}: ").append(truncate(analysed.document.line(line).trim()))
-                    }
-                }
+        val listed = shown.mapNotNull { (file, usages) ->
+            val analysed = session.analyse(files, file) ?: return@mapNotNull null
+            val inSymbols = usages.groupBy { usage ->
+                analysed.nodes.lastOrNull { usage.range.start in it.symbol.range }
+            }.map { (node, inNode) ->
+                UsagesInSymbol(
+                    node?.let { analysed.path(it).toString() },
+                    inNode.map { it.range.start.line }.distinct().map { line -> UsageLine(line + 1, analysed.document.line(line).trim()) },
+                )
             }
-            if (omitted.isNotEmpty()) {
-                append("\n… ").append(count(omitted.sumOf { (_, usages) -> usages.size }, "more usage"))
-                append(" in ").append(count(omitted.size, "file")).append(": ")
-                append(omitted.joinToString(", ") { (file, _) -> files.display(file) })
-            }
+            UsagesInFile(analysed.shown, inSymbols)
         }
-        return FindUsagesResult.Found(text)
+        return FindUsagesResult.Found(
+            usageCount = withUsages.sumOf { (_, usages) -> usages.size },
+            fileCount = withUsages.size,
+            importCount = imports,
+            files = listed,
+            leftOut = omitted.map { (file, _) -> files.display(file) },
+            leftOutUsageCount = omitted.sumOf { (_, usages) -> usages.size },
+        )
     }
 
     /** A file in a test source set: `src/test`, or any `src/<name>` that starts with `test` or ends with `Test`. */
@@ -98,21 +96,25 @@ public class FindUsages(
         }
     }
 
-    private fun truncate(source: String) = if (source.length <= MAX_LINE) source else source.take(MAX_LINE - 1) + "…"
-
-    private fun count(n: Int, noun: String) = if (n == 1) "1 $noun" else "$n ${noun}s"
-
     public companion object {
         /** Usages shown at most, in whole files. */
         public const val MAX_USAGES: Int = 100
-        private const val MAX_LINE = 120
-        private const val FILE_LEVEL = "(file level)"
     }
 }
 
 public sealed interface FindUsagesResult {
-    /** The rendered Usages: a summary line, then each file and the Symbol Paths in it that hold Usages. */
-    public data class Found(val text: String) : FindUsagesResult
+    /**
+     * [usageCount] Usages in [fileCount] files, besides [importCount] imports. [files] lists those within the cap of
+     * [FindUsages.MAX_USAGES], whole files only; [leftOut] names the files beyond it, which hold [leftOutUsageCount] Usages.
+     */
+    public data class Found(
+        val usageCount: Int,
+        val fileCount: Int,
+        val importCount: Int,
+        val files: List<UsagesInFile>,
+        val leftOut: List<String> = emptyList(),
+        val leftOutUsageCount: Int = 0,
+    ) : FindUsagesResult
 
     /** [symbol] (its canonical path) has no Usages in any of [searchedFiles] files, other than [imports] imports. */
     public data class NoUsages(val symbol: String, val searchedFiles: Int, val imports: Int = 0) : FindUsagesResult
@@ -129,3 +131,12 @@ public sealed interface FindUsagesResult {
     /** The index was still incomplete after waiting. */
     public data class NotReady(val readiness: Readiness.NotReady) : FindUsagesResult
 }
+
+/** The Usages in one [file] (as shown), grouped by the Symbol that holds them, in source order. */
+public data class UsagesInFile(val file: String, val inSymbols: List<UsagesInSymbol>)
+
+/** The [lines] holding Usages inside the Symbol at canonical Symbol Path [symbol]; `null` is outside any Symbol. */
+public data class UsagesInSymbol(val symbol: String?, val lines: List<UsageLine>)
+
+/** A 1-based [line] holding one or more Usages, and its [source], trimmed but not cut. */
+public data class UsageLine(val line: Int, val source: String)

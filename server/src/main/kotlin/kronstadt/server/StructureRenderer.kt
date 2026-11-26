@@ -1,4 +1,8 @@
-package kronstadt.core.domain
+package kronstadt.server
+
+import kronstadt.core.domain.AnalysedFile
+import kronstadt.core.domain.SymbolKind
+import kronstadt.core.domain.SymbolListing
 
 /**
  * Renders a token-cheap skeleton of a file: every addressable Symbol, without bodies, nested under its container.
@@ -6,9 +10,9 @@ package kronstadt.core.domain
  * Each entry shows the Symbol's canonical Symbol Path (exactly what the tools accept), its type as the language
  * server shows it, without an extension receiver (so overloads look different), and its 1-based line span, as `kt_read_symbol` reports it.
  */
-public object StructureRenderer {
+internal object StructureRenderer {
     /** The skeleton under a `// <file>` header line, or nothing at all for a file without declarations. */
-    public fun render(file: AnalysedFile): String {
+    fun render(file: AnalysedFile): String {
         val body = file.listings.joinToString("\n", transform = ::entry)
         if (body.isEmpty()) return ""
         return "// ${file.shown}\n$body"

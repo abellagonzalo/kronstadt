@@ -16,7 +16,7 @@ internal suspend fun AnalysisSession.analyse(files: FileStore, file: Path): Anal
 
 /**
  * Where in-file resolution reads a file's text and `documentSymbol` tree: the file on disk for read tools, the Shadow
- * Workspace's current text for `kt_edit`.
+ * Workspace's current text for an Edit.
  */
 internal fun interface DocumentSource {
     /** [file] as this source has it, analysed; null if it doesn't exist. */

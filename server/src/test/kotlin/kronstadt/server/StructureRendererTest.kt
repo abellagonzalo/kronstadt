@@ -1,4 +1,9 @@
-package kronstadt.core.domain
+package kronstadt.server
+
+import kronstadt.core.domain.CodeSymbol
+import kronstadt.core.domain.SymbolKind
+import kronstadt.core.domain.SymbolSpan
+import kronstadt.core.domain.TextDocument
 
 import kotlin.test.Test
 import kotlin.test.assertEquals

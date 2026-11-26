@@ -6,6 +6,9 @@ import kronstadt.core.application.Edit
 import kronstadt.core.application.EditResult
 import kronstadt.core.application.FindUsages
 import kronstadt.core.application.FindUsagesResult
+import kronstadt.core.application.UsageLine
+import kronstadt.core.application.UsagesInFile
+import kronstadt.core.application.UsagesInSymbol
 import kronstadt.core.application.RenameResult
 import kronstadt.core.application.RenameSymbol
 import kronstadt.core.application.RenamedFile
@@ -57,13 +60,8 @@ class CreatedFileUsagesContractTest {
         create(created, "package fixture\n\nfun read(): Int = topLevelVal + 1\n")
 
         assertEquals(
-            """
-            |1 usage in 1 file
-            |$created
-            |  read
-            |    L3: fun read(): Int = topLevelVal + 1
-            """.trimMargin(),
-            assertIs<FindUsagesResult.Found>(FindUsages(files, lsp)("topLevelVal")).text,
+            FindUsagesResult.Found(1, 1, 0, listOf(UsagesInFile(created, listOf(UsagesInSymbol("read", listOf(UsageLine(3, "fun read(): Int = topLevelVal + 1"))))))),
+            FindUsages(files, lsp)("topLevelVal"),
         )
 
         val renamed = RenameSymbol(files, lsp)("topLevelVal", "renamedVal")
@@ -82,13 +80,8 @@ class CreatedFileUsagesContractTest {
         create(created, "package fixture.fresh\n\nimport fixture.topLevelVar\n\nfun write(): Int = topLevelVar * 2\n")
 
         assertEquals(
-            """
-            |1 usage in 1 file (+1 import)
-            |$created
-            |  write
-            |    L5: fun write(): Int = topLevelVar * 2
-            """.trimMargin(),
-            assertIs<FindUsagesResult.Found>(FindUsages(files, lsp)("topLevelVar")).text,
+            FindUsagesResult.Found(1, 1, 1, listOf(UsagesInFile(created, listOf(UsagesInSymbol("write", listOf(UsageLine(5, "fun write(): Int = topLevelVar * 2"))))))),
+            FindUsages(files, lsp)("topLevelVar"),
         )
 
         val renamed = RenameSymbol(files, lsp)("topLevelVar", "renamedVar")

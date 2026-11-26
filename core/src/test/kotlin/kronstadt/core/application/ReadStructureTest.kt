@@ -24,9 +24,11 @@ class ReadStructureTest {
     private val readStructure = ReadStructure(files, intelligence)
 
     @Test
-    fun `renders the structure and analyses the content it read`() = runTest {
+    fun `returns the analysed file with its listings, analysing the content it read`() = runTest {
         val result = assertIs<ReadStructureResult.Structure>(readStructure("src/A.kt"))
-        assertEquals("// src/A.kt\nclass A  // L1-2", result.text)
+        assertEquals("src/A.kt", result.file.shown)
+        val listing = result.file.listings.single()
+        assertEquals(Triple("A", SymbolKind.CLASS, 1 to 2), Triple(listing.path.toString(), listing.kind, listing.firstLine to listing.lastLine))
         assertEquals("class A {\n}\n", intelligence.analysed.single().second.text)
     }
 

@@ -125,20 +125,21 @@ class FindUsagesTest {
     }
 
     /** Finds [symbol]'s Usages when the Symbol named at [declaredAt] has [references]. */
-    private suspend fun usages(symbol: String, vararg references: SourceLocation, declaredAt: Pair<Path, Position> = greetName): String {
+    private suspend fun usages(symbol: String, vararg references: SourceLocation, declaredAt: Pair<Path, Position> = greetName): FindUsagesResult.Found {
         val (files, intelligence) = project(mapOf(declaredAt to references.toList()))
-        return assertIs<FindUsagesResult.Found>(FindUsages(files, intelligence)(symbol)).text
+        return assertIs<FindUsagesResult.Found>(FindUsages(files, intelligence)(symbol))
     }
 
+    private fun found(usages: Int, files: Int, imports: Int, vararg listed: UsagesInFile) = FindUsagesResult.Found(usages, files, imports, listed.toList())
+
+    private fun inFile(file: String, vararg inSymbols: UsagesInSymbol) = UsagesInFile(file, inSymbols.toList())
+
+    private fun inSymbol(symbol: String?, vararg lines: Pair<Int, String>) = UsagesInSymbol(symbol, lines.map { (line, source) -> UsageLine(line, source) })
+
     @Test
-    fun `lists Usages under the Symbol Path that contains them, after a summary line, each source line once`() = runTest {
+    fun `lists Usages under the Symbol Path that contains them, each source line once, with the counts`() = runTest {
         assertEquals(
-            """
-            |2 usages in 1 file
-            |src/main/kotlin/com/example/Greeter.kt
-            |  greetTwice
-            |    L6: fun greetTwice(name: String): String = greet(name) + greet(name)
-            """.trimMargin(),
+            found(2, 1, 0, inFile(greeterKt, inSymbol("greetTwice", 6 to "fun greetTwice(name: String): String = greet(name) + greet(name)"))),
             usages("Greeter/greet", ref(greeterKt, 5, 43), ref(greeterKt, 5, 57)),
         )
     }
@@ -146,39 +147,29 @@ class FindUsagesTest {
     @Test
     fun `attributes Usages in lambdas and local functions to the nearest addressable Symbol`() = runTest {
         assertEquals(
-            """
-            |2 usages in 1 file
-            |src/main/kotlin/com/example/Callers.kt
-            |  greetAll
-            |    L8: fun polite(name: String) = Greeter().greet(name) + "!"
-            |    L9: return names.map { Greeter().greet(it) }
-            """.trimMargin(),
+            found(
+                2, 1, 0,
+                inFile(
+                    callersKt,
+                    inSymbol("greetAll", 8 to "fun polite(name: String) = Greeter().greet(name) + \"!\"", 9 to "return names.map { Greeter().greet(it) }"),
+                ),
+            ),
             usages("Greeter/greet", ref(callersKt, 7, 41), ref(callersKt, 8, 34)),
         )
     }
 
     @Test
-    fun `lists Usages outside any Symbol under (file level)`() = runTest {
+    fun `Usages outside any Symbol are in no Symbol`() = runTest {
         assertEquals(
-            """
-            |1 usage in 1 file
-            |scripts/hello.kts
-            |  (file level)
-            |    L3: println(Greeter().greet("script"))
-            """.trimMargin(),
+            found(1, 1, 0, inFile(helloKts, inSymbol(null, 3 to "println(Greeter().greet(\"script\"))"))),
             usages("Greeter/greet", ref(helloKts, 2, 18)),
         )
     }
 
     @Test
-    fun `counts imports in the summary without listing them, nor files that only import the Symbol`() = runTest {
+    fun `counts imports without listing them, nor files that only import the Symbol`() = runTest {
         assertEquals(
-            """
-            |1 usage in 1 file (+2 imports)
-            |src/main/kotlin/com/example/Callers.kt
-            |  greeting
-            |    L5: val greeting = Greeter().greet("world")
-            """.trimMargin(),
+            found(1, 1, 2, inFile(callersKt, inSymbol("greeting", 5 to "val greeting = Greeter().greet(\"world\")"))),
             usages("Greeter", ref(callersKt, 2, 19), ref(callersKt, 4, 15), ref(helloKts, 0, 19), declaredAt = greeterName),
         )
     }
@@ -186,23 +177,17 @@ class FindUsagesTest {
     @Test
     fun `lists main files before test files, each by path, and Usages in line order`() = runTest {
         assertEquals(
-            """
-            |5 usages in 4 files
-            |scripts/hello.kts
-            |  (file level)
-            |    L3: println(Greeter().greet("script"))
-            |src/main/kotlin/com/example/Callers.kt
-            |  greeting
-            |    L5: val greeting = Greeter().greet("world")
-            |  greetAll
-            |    L9: return names.map { Greeter().greet(it) }
-            |src/main/kotlin/com/example/Greeter.kt
-            |  greetTwice
-            |    L6: fun greetTwice(name: String): String = greet(name) + greet(name)
-            |src/integrationTest/kotlin/com/example/GreeterTest.kt
-            |  greets
-            |    L4: fun greets() = check(Greeter().greet("x") == "Hello, x")
-            """.trimMargin(),
+            found(
+                5, 4, 0,
+                inFile(helloKts, inSymbol(null, 3 to "println(Greeter().greet(\"script\"))")),
+                inFile(
+                    callersKt,
+                    inSymbol("greeting", 5 to "val greeting = Greeter().greet(\"world\")"),
+                    inSymbol("greetAll", 9 to "return names.map { Greeter().greet(it) }"),
+                ),
+                inFile(greeterKt, inSymbol("greetTwice", 6 to "fun greetTwice(name: String): String = greet(name) + greet(name)")),
+                inFile(greeterTestKt, inSymbol("greets", 4 to "fun greets() = check(Greeter().greet(\"x\") == \"Hello, x\")")),
+            ),
             usages(
                 "Greeter/greet",
                 ref(greeterTestKt, 3, 35),
@@ -215,27 +200,27 @@ class FindUsagesTest {
     }
 
     @Test
-    fun `shows at most 100 Usages, cut at a file boundary, and names the files left out`() = runTest {
+    fun `lists at most 100 Usages, cut at a file boundary, and names the files left out`() = runTest {
         val files = (1..3).map { calls(it, 40) }
         val (store, intelligence) = project(mapOf(greetName to files.flatMap { (file, _, _) -> callsRefs(file, 40) }), extra = files)
 
-        val text = assertIs<FindUsagesResult.Found>(FindUsages(store, intelligence)("Greeter/greet")).text
+        val found = assertIs<FindUsagesResult.Found>(FindUsages(store, intelligence)("Greeter/greet"))
 
-        assertEquals("120 usages in 3 files", text.lines().first())
-        assertEquals(listOf("src/main/kotlin/com/example/Calls1.kt", "src/main/kotlin/com/example/Calls2.kt"), text.lines().filter { it.startsWith("src/") })
-        assertEquals(80, text.lines().count { it.startsWith("    L") })
-        assertEquals("… 40 more usages in 1 file: src/main/kotlin/com/example/Calls3.kt", text.lines().last())
+        assertEquals(120 to 3, found.usageCount to found.fileCount)
+        assertEquals(listOf("src/main/kotlin/com/example/Calls1.kt", "src/main/kotlin/com/example/Calls2.kt"), found.files.map { it.file })
+        assertEquals(80, found.files.sumOf { inFile -> inFile.inSymbols.sumOf { it.lines.size } })
+        assertEquals(listOf("src/main/kotlin/com/example/Calls3.kt") to 40, found.leftOut to found.leftOutUsageCount)
     }
 
     @Test
-    fun `shows a first file of more than 100 Usages whole`() = runTest {
+    fun `lists a first file of more than 100 Usages whole`() = runTest {
         val files = listOf(calls(1, 120), calls(2, 1))
         val (store, intelligence) = project(mapOf(greetName to callsRefs(files[0].first, 120) + callsRefs(files[1].first, 1)), extra = files)
 
-        val text = assertIs<FindUsagesResult.Found>(FindUsages(store, intelligence)("Greeter/greet")).text
+        val found = assertIs<FindUsagesResult.Found>(FindUsages(store, intelligence)("Greeter/greet"))
 
-        assertEquals(120, text.lines().count { it.startsWith("    L") })
-        assertEquals("… 1 more usage in 1 file: src/main/kotlin/com/example/Calls2.kt", text.lines().last())
+        assertEquals(120, found.files.sumOf { inFile -> inFile.inSymbols.sumOf { it.lines.size } })
+        assertEquals(listOf("src/main/kotlin/com/example/Calls2.kt") to 1, found.leftOut to found.leftOutUsageCount)
     }
 
     @Test
@@ -255,15 +240,7 @@ class FindUsagesTest {
 
         val result = FindUsages(files, intelligence)("Greeter", file = callersKt)
 
-        assertEquals(
-            """
-            |1 usage in 1 file (+1 import)
-            |src/main/kotlin/com/example/Callers.kt
-            |  greeting
-            |    L5: val greeting = Greeter().greet("world")
-            """.trimMargin(),
-            assertIs<FindUsagesResult.Found>(result).text,
-        )
+        assertEquals(found(1, 1, 1, inFile(callersKt, inSymbol("greeting", 5 to "val greeting = Greeter().greet(\"world\")"))), result)
     }
 
     @Test
@@ -284,15 +261,7 @@ class FindUsagesTest {
 
         val result = FindUsages(files, intelligence)("greet", declaredIn = greeterKt)
 
-        assertEquals(
-            """
-        |1 usage in 1 file
-        |src/main/kotlin/com/example/Callers.kt
-        |  greeting
-        |    L5: val greeting = Greeter().greet("world")
-        """.trimMargin(),
-            assertIs<FindUsagesResult.Found>(result).text,
-        )
+        assertEquals(found(1, 1, 0, inFile(callersKt, inSymbol("greeting", 5 to "val greeting = Greeter().greet(\"world\")"))), result)
     }
 
     @Test
@@ -304,15 +273,7 @@ class FindUsagesTest {
 
         val result = FindUsages(files, intelligence)("greet", file = helloKts, declaredIn = greeterKt)
 
-        assertEquals(
-            """
-        |1 usage in 1 file
-        |scripts/hello.kts
-        |  (file level)
-        |    L3: println(Greeter().greet("script"))
-        """.trimMargin(),
-            assertIs<FindUsagesResult.Found>(result).text,
-        )
+        assertEquals(found(1, 1, 0, inFile(helloKts, inSymbol(null, 3 to "println(Greeter().greet(\"script\"))"))), result)
     }
 
     @Test
@@ -373,7 +334,7 @@ class FindUsagesTest {
     }
 
     @Test
-    fun `cuts a long source line to 120 characters`() = runTest {
+    fun `keeps a long source line whole, trimmed`() = runTest {
         val longKt = "src/main/kotlin/com/example/Long.kt"
         val line = "val long = Greeter().greet(\"${"x".repeat(150)}\")"
         val long = symbol("long", SymbolKind.PROPERTY, range(2, 0, 2, line.length), 2, 4)
@@ -382,9 +343,9 @@ class FindUsagesTest {
             extra = listOf(Triple(longKt, "package com.example\n\n    $line\n", long.copy(range = range(2, 4, 2, 4 + line.length)))),
         )
 
-        val text = assertIs<FindUsagesResult.Found>(FindUsages(files, intelligence)("greet")).text
+        val found = assertIs<FindUsagesResult.Found>(FindUsages(files, intelligence)("greet"))
 
-        assertEquals("    L3: " + line.take(119) + "…", text.lines().last())
+        assertEquals(UsageLine(3, line), found.files.single().inSymbols.single().lines.single())
     }
 
     @Test
@@ -392,9 +353,9 @@ class FindUsagesTest {
         val outside = SourceLocation(Path.of("/elsewhere/Greeter.kt"), range(0, 0, 0, 5))
         val (files, intelligence) = project(mapOf(greetName to listOf(outside, ref(greeterKt, 5, 43))))
 
-        val text = assertIs<FindUsagesResult.Found>(FindUsages(files, intelligence)("greet")).text
+        val found = assertIs<FindUsagesResult.Found>(FindUsages(files, intelligence)("greet"))
 
-        assertEquals("1 usage in 1 file", text.lines().first())
+        assertEquals(1 to 1, found.usageCount to found.fileCount)
     }
 
     @Test

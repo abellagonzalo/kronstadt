@@ -6,19 +6,29 @@ import kronstadt.core.application.EditResult
 import kronstadt.core.application.EditedFile
 import kronstadt.core.application.EditedSymbol
 import kronstadt.core.application.FindUsagesResult
+import kronstadt.core.application.FoundDefinition
 import kronstadt.core.application.GetDefinitionResult
 import kronstadt.core.application.IndentationHint
 import kronstadt.core.application.LookupFailure
 import kronstadt.core.application.OperationFailure
 import kronstadt.core.application.Problem
+import kronstadt.core.application.ReadStructureResult
+import kronstadt.core.application.ReadSymbolResult
 import kronstadt.core.application.RenameResult
 import kronstadt.core.application.Snippet
 import kronstadt.core.application.SourceLine
+import kronstadt.core.application.UsageLine
+import kronstadt.core.application.UsagesInFile
+import kronstadt.core.application.UsagesInSymbol
 import kronstadt.core.application.ValidationFailure
 import kronstadt.core.application.WriteBackFailure
 import kronstadt.core.domain.PreferredOverFunctions
 import kronstadt.core.domain.SymbolCandidate
 import kronstadt.core.domain.SymbolKind
+import kronstadt.core.domain.SymbolListing
+import kronstadt.core.domain.SymbolPath
+import kronstadt.core.domain.SymbolSpan
+import kronstadt.core.domain.TextDocument
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -454,6 +464,48 @@ class RepliesTest {
 
     // kt_find_usages
 
+    // kt_read_structure
+
+    @Test
+    fun `a structure is the file's skeleton under a header line naming it`() {
+        val file = analysedFile(TextDocument("class A {\n}\n"), listOf(symbol("A", SymbolKind.CLASS, range(0, 0, 1, 1), 0, 6)))
+
+        assertEquals(Reply.result("// src/A.kt\nclass A  // L1-2"), Replies.readStructure(ReadStructureResult.Structure(file)))
+    }
+
+    // kt_read_symbol
+
+    @Test
+    fun `a read Symbol is a header line with its canonical path, file and 1-based line span, then its raw source`() {
+        assertEquals(
+            Reply.result("// greet in src/A.kt, L3-4\nfun greet(): String =\n    \"hi\""),
+            Replies.readSymbol(ReadSymbolResult.Found("greet", "src/A.kt", SymbolSpan(2, 3, "fun greet(): String =\n    \"hi\""))),
+        )
+    }
+
+    @Test
+    fun `a property a bare name chose over same-named functions has a header naming its kind and the functions`() {
+        val edit = SymbolSpan(1, 1, "    val edit = 0")
+        fun read(vararg functions: String) =
+            Replies.readSymbol(ReadSymbolResult.Found("edit", "src/A.kt", edit, PreferredOverFunctions(SymbolKind.PROPERTY, functions.toList())))
+
+        assertEquals(
+            Reply.result("// edit in src/A.kt, L2-2 (the property; functions share its name: edit(Int), edit(String))\n    val edit = 0"),
+            read("edit(Int)", "edit(String)"),
+        )
+        assertEquals(Reply.result("// edit in src/A.kt, L2-2 (the property; a function shares its name: edit(Int))\n    val edit = 0"), read("edit(Int)"))
+    }
+
+    @Test
+    fun `the kind a bare name chose is named as messages name it`() {
+        fun header(kind: SymbolKind) =
+            Replies.readSymbol(ReadSymbolResult.Found("x", "src/A.kt", SymbolSpan(0, 0, "x"), PreferredOverFunctions(kind, listOf("x()")))).text.lines().first()
+
+        assertEquals("// x in src/A.kt, L1-1 (the property; a function shares its name: x())", header(SymbolKind.VARIABLE))
+        assertEquals("// x in src/A.kt, L1-1 (the enum entry; a function shares its name: x())", header(SymbolKind.ENUM_ENTRY))
+        assertEquals("// x in src/A.kt, L1-1 (the class; a function shares its name: x())", header(SymbolKind.CLASS))
+    }
+
     @Test
     fun `a Symbol with too many declarations to resolve project-wide fails without declaredIn`() {
         assertEquals(
@@ -492,6 +544,76 @@ class RepliesTest {
             Reply.result("No usages of greet other than 1 import (searched 1 file)"),
             Replies.findUsages(FindUsagesResult.NoUsages("greet", 1, imports = 1)),
         )
+    }
+
+    @Test
+    fun `Usages come after a summary line, by file, then by the Symbol Path that holds them, outside any Symbol at file level`() {
+        val found = FindUsagesResult.Found(
+            usageCount = 3,
+            fileCount = 2,
+            importCount = 0,
+            files = listOf(
+                UsagesInFile("scripts/hello.kts", listOf(UsagesInSymbol(null, listOf(UsageLine(3, "println(Greeter().greet(\"script\"))"))))),
+                UsagesInFile(
+                    "src/main/kotlin/com/example/Callers.kt",
+                    listOf(
+                        UsagesInSymbol("greeting", listOf(UsageLine(5, "val greeting = Greeter().greet(\"world\")"))),
+                        UsagesInSymbol("greetAll", listOf(UsageLine(9, "return names.map { Greeter().greet(it) }"))),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(
+            Reply.result(
+                """
+            |3 usages in 2 files
+            |scripts/hello.kts
+            |  (file level)
+            |    L3: println(Greeter().greet("script"))
+            |src/main/kotlin/com/example/Callers.kt
+            |  greeting
+            |    L5: val greeting = Greeter().greet("world")
+            |  greetAll
+            |    L9: return names.map { Greeter().greet(it) }
+            """.trimMargin(),
+            ),
+            Replies.findUsages(found),
+        )
+    }
+
+    @Test
+    fun `the summary line counts imports, singular or plural`() {
+        val callers = listOf(UsagesInFile("src/Callers.kt", listOf(UsagesInSymbol("greeting", listOf(UsageLine(5, "greet()"))))))
+
+        assertEquals("1 usage in 1 file (+1 import)", Replies.findUsages(FindUsagesResult.Found(1, 1, 1, callers)).text.lines().first())
+        assertEquals("1 usage in 1 file (+2 imports)", Replies.findUsages(FindUsagesResult.Found(1, 1, 2, callers)).text.lines().first())
+    }
+
+    @Test
+    fun `the files left out by the cap are counted and named on the last line`() {
+        val calls1 = listOf(UsagesInFile("src/Calls1.kt", listOf(UsagesInSymbol("calls", listOf(UsageLine(4, "greet()"))))))
+
+        assertEquals(
+            "… 40 more usages in 2 files: src/Calls2.kt, src/Calls3.kt",
+            Replies.findUsages(FindUsagesResult.Found(41, 3, 0, calls1, listOf("src/Calls2.kt", "src/Calls3.kt"), 40)).text.lines().last(),
+        )
+        assertEquals(
+            "… 1 more usage in 1 file: src/Calls2.kt",
+            Replies.findUsages(FindUsagesResult.Found(2, 2, 0, calls1, listOf("src/Calls2.kt"), 1)).text.lines().last(),
+        )
+    }
+
+    @Test
+    fun `a long source line is cut to 120 characters`() {
+        val line = "val long = Greeter().greet(\"${"x".repeat(150)}\")"
+        val fits = "x".repeat(120)
+        fun usages(vararg sources: String) = FindUsagesResult.Found(
+            sources.size, 1, 0,
+            listOf(UsagesInFile("src/Long.kt", listOf(UsagesInSymbol("long", sources.mapIndexed { i, source -> UsageLine(i + 3, source) })))),
+        )
+
+        assertEquals(listOf("    L3: " + line.take(119) + "…", "    L4: $fits"), Replies.findUsages(usages(line, fits)).text.lines().takeLast(2))
     }
 
     // kt_get_definition
@@ -589,6 +711,96 @@ class RepliesTest {
         assertEquals(
             Reply.result("'return' on L6 of greet resolves to no declaration (a keyword, a literal or an unresolved reference)."),
             Replies.getDefinition(GetDefinitionResult.Unresolved("return", "greet", 6, null), atGiven = false),
+        )
+    }
+
+    private fun definitions(vararg found: FoundDefinition) = Replies.getDefinition(GetDefinitionResult.Found(found.toList()), atGiven = false)
+
+    @Test
+    fun `a project target shows its header, KDoc and signature without the body, and how to read the rest`() {
+        val greeterKt = "src/main/kotlin/com/example/Greeter.kt"
+        val listing = SymbolListing(SymbolPath(listOf(SymbolPath.Segment("greet"))), SymbolKind.FUNCTION, "(String): String", 1, 5, 11)
+        val head = "    /**\n     * Greets [name].\n     */\n    @Deprecated(\"use greetAll\")\n    fun greet(name: String): String"
+
+        assertEquals(
+            Reply.result(
+                """
+            |// greet in src/main/kotlin/com/example/Greeter.kt, L5-11
+            |    /**
+            |     * Greets [name].
+            |     */
+            |    @Deprecated("use greetAll")
+            |    fun greet(name: String): String
+            |// Body omitted. Full source: kt_read_symbol(symbol="greet", file="src/main/kotlin/com/example/Greeter.kt")
+            """.trimMargin(),
+            ),
+            definitions(FoundDefinition.InSource(listing, greeterKt, head)),
+        )
+    }
+
+    @Test
+    fun `a local declaration shows its enclosing Symbol Path, or file level, and its declaration line`() {
+        assertEquals(
+            Reply.result(
+                "// greeter is local to welcome in src/main/kotlin/com/example/Caller.kt, not addressable; declared at L4\n" +
+                    "val greeter = Greeter(\"Hi\")",
+            ),
+            definitions(FoundDefinition.Local("greeter", "welcome", "src/main/kotlin/com/example/Caller.kt", 4, "val greeter = Greeter(\"Hi\")")),
+        )
+        assertEquals(
+            Reply.result("// it is local to (file level) in scripts/a.kts, not addressable; declared at L2\nval it = 1"),
+            definitions(FoundDefinition.Local("it", null, "scripts/a.kts", 2, "val it = 1")),
+        )
+    }
+
+    @Test
+    fun `a library target shows its fully qualified name, its jar, and its KDoc and signature, read-only`() {
+        val head = "/**\n * Returns a new read-only list of given elements.\n */\npublic fun <T> listOf(vararg elements: T): List<T>"
+
+        assertEquals(
+            Reply.result(
+                """
+            |// kotlin.collections.listOf in kotlin-stdlib-2.4.21-sources.jar!/commonMain/kotlin/collections/Collections.kt (library: read-only, not addressable)
+            |/**
+            | * Returns a new read-only list of given elements.
+            | */
+            |public fun <T> listOf(vararg elements: T): List<T>
+            """.trimMargin(),
+            ),
+            definitions(
+                FoundDefinition.InLibrary("kotlin.collections.listOf", "kotlin-stdlib-2.4.21-sources.jar", "commonMain/kotlin/collections/Collections.kt", head),
+            ),
+        )
+    }
+
+    @Test
+    fun `a target without sources shows the class it is in, and the member unless it is that class`() {
+        assertEquals(
+            Reply.result("// name in java.io.File, in JDK java.base (library: read-only, not addressable; no sources, so no KDoc or declaration)"),
+            definitions(FoundDefinition.LibraryWithoutSources("name", "java.io.File", "JDK java.base")),
+        )
+        assertEquals(
+            Reply.result("// java.io.File, in JDK java.base (library: read-only, not addressable; no sources, so no KDoc or declaration)"),
+            definitions(FoundDefinition.LibraryWithoutSources(null, "java.io.File", "JDK java.base")),
+        )
+    }
+
+    @Test
+    fun `several definitions are each their own block, and a file Kronstadt can't address shows where it is`() {
+        assertEquals(
+            Reply.result(
+                "// hello in src/main/java/com/example/Legacy.java, L4 (not Kotlin: read-only, not addressable)\n" +
+                    "public static String hello() { return \"hi\"; }\n\n" +
+                    "// hello in src/main/java/com/example/Gone.java, L2 (not Kotlin: read-only, not addressable)\n\n" +
+                    "// greet in /elsewhere/Gen.kt, L10 (outside the project: read-only, not addressable)\n\n" +
+                    "// greet in src/main/kotlin/Gone.kt, L3 (file not found)",
+            ),
+            definitions(
+                FoundDefinition.NotKotlin("hello", "src/main/java/com/example/Legacy.java", 4, "public static String hello() { return \"hi\"; }"),
+                FoundDefinition.NotKotlin("hello", "src/main/java/com/example/Gone.java", 2, null),
+                FoundDefinition.OutsideProject("greet", "/elsewhere/Gen.kt", 10),
+                FoundDefinition.FileNotFound("greet", "src/main/kotlin/Gone.kt", 3),
+            ),
         )
     }
 }
