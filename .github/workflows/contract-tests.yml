@@ -1,12 +1,11 @@
-# Seam 2: the lsp adapter and the server against a real kotlin-lsp. Slow, so separate from Build.
+# Seam 2: the lsp adapter and the server against a real kotlin-lsp.
+# Runs only on demand (Actions tab > Run workflow): too slow to run on every change, so the PR gate is Build alone.
+# Locally: ./gradlew :lsp:contractTest :server:contractTest
 # macOS because Index Seeds call clonefile(2) and renamex_np(2).
 # KOTLIN_LSP_VERSION is the tested version in the README (ADR 0001); bump both together.
 name: Contract tests
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 concurrency:
