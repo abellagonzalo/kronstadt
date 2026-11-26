@@ -9,7 +9,6 @@ import kronstadt.core.domain.TextRange
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
 
 /** `edit_in` Operations of an Edit: an exact string replaced once, inside a Symbol Span or a whole file. */
 class EditInTest {
@@ -212,23 +211,25 @@ class EditInTest {
             EditIn(path, "greet", old = "import a.b.Unused", new = ""),
         )
 
-        assertEquals(EditResult.OperationFailed(1, OperationFailure.NotExactlyOnce("import a.b.Unused", EditInScope("greet", path), 0, emptyList())), result)
+        assertEquals(EditResult.OperationFailed(1, OperationFailure.NotExactlyOnce(EditInScope("greet", path), Snippet.Miss("import a.b.Unused", 0, emptyList()))), result)
         assertEquals(source, files.content(path))
     }
 
     @Test
-    fun `edit_in matches whitespace exactly, so a differently indented text doesn't match, but says where it would`() = runTest {
+    fun `edit_in whose text doesn't occur exactly once rejects the Edit with the Snippet's miss`() = runTest {
         val (result, files) = run(emptyMap(), EditIn(path, "greet", old = "  val n = 1\n  return n", new = ""))
 
         assertEquals(
             EditResult.OperationFailed(
                 0,
                 OperationFailure.NotExactlyOnce(
-                    "  val n = 1\n  return n",
                     EditInScope("greet", path),
-                    0,
-                    emptyList(),
-                    IndentationHint(6, IndentationHint.Indents(line = 6, file = "    ", snippet = "  ")),
+                    Snippet.Miss(
+                        "  val n = 1\n  return n",
+                        0,
+                        emptyList(),
+                        IndentationHint(6, IndentationHint.Indents(line = 6, file = "    ", snippet = "  ")),
+                    ),
                 ),
             ),
             result,
@@ -255,46 +256,14 @@ class EditInTest {
             EditResult.OperationFailed(
                 0,
                 OperationFailure.NotExactlyOnce(
-                    "return n",
                     EditInScope("edit", path, PreferredOverFunctions(SymbolKind.PROPERTY, listOf("edit(Int)"))),
-                    0,
-                    emptyList(),
+                    Snippet.Miss("return n", 0, emptyList()),
                 ),
             ),
             bare,
         )
-        assertEquals(EditResult.OperationFailed(0, OperationFailure.NotExactlyOnce("val edit", EditInScope("edit(Int)", path), 0, emptyList())), signed)
+        assertEquals(EditResult.OperationFailed(0, OperationFailure.NotExactlyOnce(EditInScope("edit(Int)", path), Snippet.Miss("val edit", 0, emptyList()))), signed)
         assertEquals(tools, files.content(path))
-    }
-
-    /** The indentation hint of [result], an Edit failed on an `edit_in` that occurs nowhere. */
-    private fun hintOf(result: EditResult): IndentationHint? {
-        val failure = assertIs<OperationFailure.NotExactlyOnce>(assertIs<EditResult.OperationFailed>(result).failure)
-        assertEquals(0, failure.count)
-        return failure.indentation
-    }
-
-    @Test
-    fun `edit_in text whose lines are each indented differently from the file's gets a hint without indents`() = runTest {
-        val (result, _) = run(emptyMap(), EditIn(path, "greet", old = "  val n = 1\n      return n", new = ""))
-
-        assertEquals(IndentationHint(6, null), hintOf(result))
-    }
-
-    @Test
-    fun `edit_in on a whole file gets the indentation hint too, but not when the text occurs more than once that way`() = runTest {
-        val (once, _) = run(emptyMap(), EditIn(path, null, old = "fun other(): Int {\n  val n = 1", new = ""))
-        val (twice, _) = run(emptyMap(), EditIn(path, null, old = "  val n = 1\n  return n", new = ""))
-
-        assertEquals(IndentationHint(10, IndentationHint.Indents(line = 11, file = "    ", snippet = "  ")), hintOf(once))
-        assertEquals(null, hintOf(twice))
-    }
-
-    @Test
-    fun `edit_in text that differs in more than indentation gets no hint`() = runTest {
-        val (result, _) = run(emptyMap(), EditIn(path, "greet", old = "  val n = 2\n  return n", new = ""))
-
-        assertEquals(null, hintOf(result))
     }
 
     /** Runs [operation] on a CRLF file holding [crlf], whose symbols the fake gives by text in [texts]. */
@@ -331,14 +300,6 @@ class EditInTest {
     }
 
     @Test
-    fun `edit_in in a CRLF file still matches indentation exactly`() = runTest {
-        val (result, files) = runCrlf(crlf, mapOf(crlf to listOf(function("greet", 2, 5))), EditIn(path, "greet", old = "val n = 1\n  return n", new = ""))
-
-        assertEquals(IndentationHint(4, IndentationHint.Indents(line = 5, file = "    ", snippet = "  ")), hintOf(result))
-        assertEquals(crlf, files.content(path))
-    }
-
-    @Test
     fun `edit_in on a whole CRLF file replaces only the lines its multi-line text is on`() = runTest {
         val file = "package a\r\n\r\n// one\r\n// two\r\n// three\r\n\r\nfun greet(): Int = 1\r\n"
         val expected = "package a\r\n\r\n// one and two\r\n// three\r\n\r\nfun greet(): Int = 1\r\n"
@@ -348,45 +309,6 @@ class EditInTest {
 
         assertEquals(expected, files.content(path))
         assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0))), result)
-    }
-
-    @Test
-    fun `edit_in text ending in a lone CR matches a whole CRLF line break`() = runTest {
-        val file = "package a\r\n\r\nfun greet(): Int = 1\r\n"
-        val expected = "package b\r\n\r\nfun greet(): Int = 1\r\n"
-        val texts = mapOf(file to listOf(function("greet", 2, 2)), expected to listOf(function("greet", 2, 2)))
-
-        val (result, files) = runCrlf(file, texts, EditIn(path, null, old = "package a\r", new = "package b\r"))
-
-        assertEquals(expected, files.content(path))
-        assertIs<EditResult.Written>(result)
-    }
-
-    @Test
-    fun `edit_in text's line break never matches half of a CRLF, so it occurs once`() = runTest {
-        val file = "package a\r\n\r\nfun greet(): Int = 1\r\n"
-        // If a "\n" could take the "\n" half of the first "\r\n", this would also occur from there, twice in all.
-        val expected = "package a\r\n\r\n\r\nfun greet(): Int = 1\r\n"
-        val texts = mapOf(file to listOf(function("greet", 2, 2)), expected to listOf(function("greet", 3, 3)))
-
-        val (result, files) = runCrlf(file, texts, EditIn(path, null, old = "\n\nfun", new = "\n\n\nfun"))
-
-        assertEquals(expected, files.content(path))
-        assertIs<EditResult.Written>(result)
-    }
-
-    @Test
-    fun `edit_in whose text occurs several times rejects the Edit and lists where`() = runTest {
-        val (result, files) = run(emptyMap(), EditIn(path, null, old = "val n = 1", new = "val n = 2"))
-
-        assertEquals(
-            EditResult.OperationFailed(
-                0,
-                OperationFailure.NotExactlyOnce("val n = 1", EditInScope(null, path), 2, listOf(Occurrence(6, "val n = 1"), Occurrence(11, "val n = 1"))),
-            ),
-            result,
-        )
-        assertEquals(source, files.content(path))
     }
 
     @Test
