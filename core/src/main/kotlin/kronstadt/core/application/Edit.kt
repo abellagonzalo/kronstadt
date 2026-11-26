@@ -10,7 +10,6 @@ import kronstadt.core.domain.SymbolCandidate
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.addingImports
 import kronstadt.core.domain.Validation
-import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.core.port.ContentHash
 import kronstadt.core.port.FileStore
@@ -166,7 +165,7 @@ public class Edit(
             val shadow = ShadowWorkspace(files, session, resolver, validationTimeout)
             val listed = mutableMapOf<Path, MutableSet<ImportDirective>>()
             combined.zip(paths).forEachIndexed { index, (operation, parsed) ->
-                when (val applied = apply(session, shadow, operation, parsed)) {
+                when (val applied = apply(shadow, operation, parsed)) {
                     is Applied.Done -> {
                         addImports(shadow, applied.file, imports[index])
                         listed.getOrPut(applied.file) { mutableSetOf() } += imports[index]
@@ -201,82 +200,18 @@ public class Edit(
         data class Failed(val failure: OperationFailure) : Applied
     }
 
-    private sealed interface Located {
-        data class In(val file: Path) : Located
-        data class Failed(val failure: OperationFailure) : Located
-    }
-
     /**
-     * The file of [parsed], which has none. The project lookup sees only the disk, so its candidates in files this Edit
-     * has edited give way to those in their current text ([ShadowWorkspace.findInEdited]). One candidate left is the
-     * target if the disk has it too, else it needs its file; several are ambiguous. None leaves the disk lookup's answer:
-     * a Symbol it found in an edited file, or in several that all were, is then said to be removed earlier.
+     * Changes the lines around the span of [operation]'s Symbol, as the Shadow Workspace locates it; new code is
+     * re-indented to the span's column, except an [EditIn]'s. An [EditIn] without a Symbol works on its whole file
+     * instead, and a [Create] makes one.
      */
-    private suspend fun locate(session: AnalysisSession, shadow: ShadowWorkspace, parsed: ParsedLookup): Located {
-        val lookup = resolver.resolve(session, parsed)
-        val onDisk: List<Pair<SymbolCandidate, Path?>> = when (lookup) {
-            is Outcome.Ok -> listOf(lookup.value.let { it.analysed.candidate(it.node) to it.analysed.file })
-            is Outcome.Failed -> when (val failure = lookup.failure) {
-                is LookupFailure.Ambiguous -> failure.candidates.map { it to files.resolve(it.file) }
-                is LookupFailure.NotFound -> emptyList()
-                else -> return Located.Failed(OperationFailure.LookupFailed(failure))
-            }
-        }
-        val candidates = onDisk.filterNot { (_, file) -> file != null && shadow.isChanged(file) }.map { it.first } + shadow.findInEdited(parsed)
-        val candidate = candidates.singleOrNull()
-        return when {
-            candidates.size > 1 -> Located.Failed(OperationFailure.LookupFailed(LookupFailure.Ambiguous(parsed.symbol, null, candidates)))
-            candidate != null -> onDisk.firstOrNull { (shown, _) -> shown.file == candidate.file }?.second
-                ?.let { Located.In(it) }
-                ?: Located.Failed(OperationFailure.NeedsFile(parsed.symbol, candidates))
-            lookup is Outcome.Ok -> Located.In(lookup.value.analysed.file)
-            lookup is Outcome.Failed && lookup.failure is LookupFailure.NotFound -> Located.Failed(OperationFailure.LookupFailed(lookup.failure))
-            else -> Located.Failed(
-                removedEarlier(shadow, parsed, onDisk)
-                    ?: OperationFailure.LookupFailed(LookupFailure.NotFound(parsed.symbol, null, emptyList())),
-            )
-        }
-    }
-
-    /**
-     * The failure for [parsed] when earlier Operations removed or renamed it in every file of [onDisk], its matches on
-     * disk, with close names in each file's current text. Null if there are none, or any is still there or unreadable.
-     */
-    private suspend fun removedEarlier(
-        shadow: ShadowWorkspace,
-        parsed: ParsedLookup,
-        onDisk: List<Pair<SymbolCandidate, Path?>>,
-    ): OperationFailure? {
-        val removals = onDisk.distinctBy { (shown, _) -> shown.file }.map { (shown, file) ->
-            val removed = file?.let { shadow.resolve(it, parsed) } as? ShadowWorkspace.Lookup.RemovedEarlier ?: return null
-            shown.file to removed.suggestions
-        }
-        if (removals.isEmpty()) return null
-        val (removedIn, suggestions) = removals.unzip()
-        return OperationFailure.RemovedEarlier(parsed.symbol, removedIn, suggestions.flatten())
-    }
-
-    /**
-     * Resolves [operation]'s Symbol against the Shadow Workspace's current text and changes the lines around its span;
-     * new code is re-indented to the span's column, except an [EditIn]'s. An [EditIn] without a Symbol works on its
-     * whole file instead, and a [Create] makes one.
-     */
-    private suspend fun apply(session: AnalysisSession, shadow: ShadowWorkspace, operation: Operation, parsed: ParsedLookup?): Applied {
+    private suspend fun apply(shadow: ShadowWorkspace, operation: Operation, parsed: ParsedLookup?): Applied {
         if (parsed == null) return if (operation is Create) create(shadow, operation) else applyToFile(shadow, operation as EditIn)
-        // Without a file, the Symbol Path is resolved project-wide only to find its file; it is resolved again in the
-        // Shadow Workspace, against the text the earlier Operations left.
-        val file = parsed.file?.let { path -> classify(shadow, path).getOrElse { return Applied.Failed(OperationFailure.LookupFailed(it)) } }
-            ?: when (val located = locate(session, shadow, parsed)) {
-                is Located.In -> located.file
-                is Located.Failed -> return Applied.Failed(located.failure)
-            }
-        val shown = files.display(file)
-        val found = when (val lookup = shadow.resolve(file, parsed)) {
-            is ShadowWorkspace.Lookup.Found -> lookup
-            is ShadowWorkspace.Lookup.Failed -> return Applied.Failed(OperationFailure.LookupFailed(lookup.failure))
-            is ShadowWorkspace.Lookup.RemovedEarlier ->
-                return Applied.Failed(OperationFailure.RemovedEarlier(parsed.symbol, listOf(shown), lookup.suggestions))
+        val found = when (val located = shadow.locate(parsed)) {
+            is ShadowWorkspace.Located.Found -> located
+            is ShadowWorkspace.Located.Failed -> return Applied.Failed(located.failure)
         }
+        val file = found.file
         val document = found.document
         val span = found.span
         val prefix = FileLayout.indentOf(document.line(span.firstLine))
@@ -287,7 +222,7 @@ public class Edit(
             is InsertBefore -> span.siblingBefore(reindented(operation.code))
             is InsertAfter -> span.siblingAfter(reindented(operation.code))
             is EditIn -> return applySplice(
-                shadow, file, Splice.inSpan(document, span.firstLine..span.lastLine, operation), EditInScope(found.canonical, shown, found.preferred),
+                shadow, file, Splice.inSpan(document, span.firstLine..span.lastLine, operation), EditInScope(found.canonical, files.display(file), found.preferred),
             )
             is Delete -> span.deletion(document)
         }
@@ -302,7 +237,7 @@ public class Edit(
      */
     private suspend fun applyToFile(shadow: ShadowWorkspace, operation: EditIn): Applied {
         val path = checkNotNull(operation.file) { "an edit_in without a symbol has a file" }
-        val file = classify(shadow, path).getOrElse { return Applied.Failed(OperationFailure.LookupFailed(it)) }
+        val file = shadow.fileNamed(path).getOrElse { return Applied.Failed(OperationFailure.LookupFailed(it)) }
         val analysed = shadow.analysed(file) ?: return Applied.Failed(OperationFailure.LookupFailed(LookupFailure.FileNotFound(path)))
         val document = analysed.document
         // Lines outside the document (before the first, after the last) lie in no Symbol Span.
@@ -330,16 +265,6 @@ public class Edit(
             ShadowWorkspace.NotCreated.ON_DISK -> Applied.Failed(OperationFailure.FileExists(files.display(file), inEdit = false))
             ShadowWorkspace.NotCreated.IN_EDIT -> Applied.Failed(OperationFailure.FileExists(files.display(file), inEdit = true))
         }
-    }
-
-    /** The file [path] names, as [FileStore.classify] finds it on disk, or one an earlier [Create] of this Edit made. */
-    private suspend fun classify(shadow: ShadowWorkspace, path: String): Outcome<Path> {
-        val onDisk = files.classify(path)
-        if (onDisk is Outcome.Failed && onDisk.failure is LookupFailure.FileNotFound) {
-            val created = files.resolve(path)?.takeIf { shadow.current(it) != null }
-            if (created != null) return Outcome.Ok(created)
-        }
-        return onDisk
     }
 
     /** Adds those of [imports] that [file] lacks to its current text (see [addingImports]); never removes or reorders any. */
