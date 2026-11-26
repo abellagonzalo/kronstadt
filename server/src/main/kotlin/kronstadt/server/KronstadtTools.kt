@@ -43,6 +43,7 @@ import kronstadt.core.application.ReadSymbolResult
 import kronstadt.core.application.RenameResult
 import kronstadt.core.application.RenameSymbol
 import kronstadt.core.application.Replace
+import kronstadt.core.application.SourceLine
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolKind
 
@@ -516,22 +517,23 @@ internal class KronstadtTools(
             "'${failure.symbol}' exists only in what earlier Operations of this Edit wrote, and a Symbol Path without a " +
                 "file is looked up on disk; pass its file:\n" + candidates(failure.candidates, withFiles = true) + "\n"
         is OperationFailure.NotExactlyOnce -> {
-            val hint = failure.indentation
+            val miss = failure.miss
+            val hint = miss.indentation
             // Missing from a Symbol a bare name chose over same-named functions: say so, as 'old' may be in one of them.
             val preferred = failure.scope.preferred
             val missingIn = where(failure.scope, preferred?.let { " (${it.picked})" } ?: "")
             val sharedName = preferred?.let { " " + it.sharedName.replaceFirstChar(Char::uppercaseChar) + "." } ?: ""
-            if (failure.lines.isEmpty() && hint != null) {
+            if (miss.lines.isEmpty() && hint != null) {
                 "'old' doesn't occur in $missingIn exactly as written, but " + indentationHint(hint, "'old'") + " " +
                     (if (failure.scope.wholeFile) "Read the file to copy it." else "Copy 'old' from kt_read_symbol output.") +
                     sharedName
-            } else if (failure.lines.isEmpty()) {
+            } else if (miss.lines.isEmpty()) {
                 "'old' doesn't occur in $missingIn, exactly as written (whitespace included; $LINE_BREAK_RULE). " +
                     (if (failure.scope.wholeFile) "Read the file to copy it." else "Use kt_read_symbol to see its source.") +
                     sharedName
             } else {
-                "'old' occurs ${failure.count} times in ${where(failure.scope)}; make it longer so it occurs exactly once:\n" +
-                    failure.lines.joinToString("\n") { "  L${it.line}: ${it.source}" } + "\n"
+                "'old' occurs ${miss.count} times in ${where(failure.scope)}; make it longer so it occurs exactly once:\n" +
+                    sourceLines(miss.lines) + "\n"
             }
         }
         is OperationFailure.StartsInIndentation ->
@@ -567,6 +569,9 @@ internal class KronstadtTools(
         return "occurs once at line ${hint.line} if indentation is ignored: the file indents $indented by ${indent(indents.file)}, " +
             "$named by ${indent(indents.snippet)}."
     }
+
+    /** Where a Snippet or a name occurs, one `  L<line>: <source>` line each. */
+    private fun sourceLines(lines: List<SourceLine>): String = lines.joinToString("\n") { "  L${it.line}: ${it.source}" }
 
     /** Leading whitespace in words: `4 spaces`, `1 tab`, `1 tab and 2 spaces`, `nothing`. */
     private fun indent(whitespace: String): String {
@@ -670,21 +675,32 @@ internal class KronstadtTools(
                 "'${result.name}' on L${result.line} of ${result.symbol} resolves to no declaration (a keyword, a literal " +
                     "or an unresolved reference)." + (result.diagnostic?.let { " Compiler: $it" } ?: ""),
             )
-            is GetDefinitionResult.NotExactlyOnce -> {
-                val what = "'${result.text}'" + if (result.text == name) " (as a whole identifier)" else ""
+            is GetDefinitionResult.AtNotExactlyOnce -> {
+                val miss = result.miss
+                val what = "'${miss.snippet}'"
                 val where = "${result.symbol} in ${result.file}"
-                val hint = result.indentation
+                val hint = miss.indentation
                 error(
-                    if (result.lines.isEmpty() && hint != null) {
+                    if (miss.lines.isEmpty() && hint != null) {
                         "$what doesn't occur in $where exactly as written, but " +
                             indentationHint(hint, "'at'") + " Copy 'at' from kt_read_symbol output."
-                    } else if (result.lines.isEmpty()) {
+                    } else if (miss.lines.isEmpty()) {
+                        "$what doesn't occur in $where. Use kt_read_symbol to see its source."
+                    } else {
+                        "$what occurs more than once in $where; pass an 'at' snippet that occurs exactly once:\n" + sourceLines(miss.lines)
+                    },
+                )
+            }
+            is GetDefinitionResult.NameNotExactlyOnce -> {
+                val what = "'${result.name}' (as a whole identifier)"
+                val where = "${result.symbol} in ${result.file}"
+                error(
+                    if (result.lines.isEmpty()) {
                         "$what doesn't occur in $where. Use kt_read_symbol to see its source."
                     } else {
                         "$what occurs more than once in $where; " +
-                            (if (at != null && result.text == name) "pick an 'at' snippet in which it occurs once" else "pass an 'at' snippet that occurs exactly once") +
-                            ":\n" +
-                            result.lines.joinToString("\n") { "  L${it.line}: ${it.source}" }
+                            (if (at != null) "pick an 'at' snippet in which it occurs once" else "pass an 'at' snippet that occurs exactly once") +
+                            ":\n" + sourceLines(result.lines)
                     },
                 )
             }

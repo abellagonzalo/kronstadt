@@ -156,11 +156,11 @@ class GetDefinitionTest {
         val (files, intelligence) = project()
 
         assertEquals(
-            GetDefinitionResult.NotExactlyOnce(
-                text = "greeter",
+            GetDefinitionResult.NameNotExactlyOnce(
+                name = "greeter",
                 symbol = "welcome",
                 file = callerKt,
-                lines = listOf(Occurrence(4, "val greeter = Greeter(\"Hi\")"), Occurrence(5, "return greeter.greet(guest)")),
+                lines = listOf(SourceLine(4, "val greeter = Greeter(\"Hi\")"), SourceLine(5, "return greeter.greet(guest)")),
             ),
             GetDefinition(files, intelligence)("welcome", "greeter"),
         )
@@ -172,7 +172,7 @@ class GetDefinitionTest {
         val (files, intelligence) = project()
 
         assertEquals(
-            GetDefinitionResult.NotExactlyOnce("greete", "welcome", callerKt, emptyList()),
+            GetDefinitionResult.NameNotExactlyOnce("greete", "welcome", callerKt, emptyList()),
             GetDefinition(files, intelligence)("welcome", "greete"),
         )
     }
@@ -196,19 +196,6 @@ class GetDefinitionTest {
     }
 
     @Test
-    fun `a multi-line at snippet with LF line breaks matches in a CRLF file`() = runTest {
-        val (files, intelligence) = project(mapOf(inCaller(4, 11) to listOf(inCallerAt(3, 8, 7))), caller = callerSource.replace("\n", "\r\n"))
-
-        val result = GetDefinition(files, intelligence)("welcome", "greeter", at = "Greeter(\"Hi\")\n    return greeter.greet")
-
-        assertEquals(
-            "// greeter is local to welcome in src/main/kotlin/com/example/Caller.kt, not addressable; declared at L4\n" +
-                "val greeter = Greeter(\"Hi\")",
-            assertIs<GetDefinitionResult.Found>(result).text,
-        )
-    }
-
-    @Test
     fun `a parameter is local too`() = runTest {
         val (files, intelligence) = project(mapOf(inCaller(4, 25) to listOf(inCallerAt(2, 12, 5))))
 
@@ -222,49 +209,15 @@ class GetDefinitionTest {
     }
 
     @Test
-    fun `an at snippet that doesn't occur exactly once fails and lists its lines`() = runTest {
-        val (files, intelligence) = project()
-
-        assertEquals(
-            GetDefinitionResult.NotExactlyOnce(
-                text = "greeter",
-                symbol = "welcome",
-                file = callerKt,
-                lines = listOf(Occurrence(4, "val greeter = Greeter(\"Hi\")"), Occurrence(5, "return greeter.greet(guest)")),
-            ),
-            GetDefinition(files, intelligence)("welcome", "greet", at = "greeter"),
-        )
-    }
-
-    @Test
-    fun `an at snippet that occurs only with different indentation fails, saying where it would occur`() = runTest {
+    fun `an at snippet that doesn't occur exactly once fails with the Snippet's miss`() = runTest {
         val (files, intelligence) = project()
         val at = "  val greeter = Greeter(\"Hi\")\n  return greeter.greet(guest)"
 
         assertEquals(
-            GetDefinitionResult.NotExactlyOnce(
-                text = at,
+            GetDefinitionResult.AtNotExactlyOnce(
                 symbol = "welcome",
                 file = callerKt,
-                lines = emptyList(),
-                indentation = IndentationHint(4, IndentationHint.Indents(line = 4, file = "    ", snippet = "  ")),
-            ),
-            GetDefinition(files, intelligence)("welcome", "greet", at = at),
-        )
-    }
-
-    @Test
-    fun `an at snippet with LF line breaks that occurs only with different indentation in a CRLF file says where it would occur`() = runTest {
-        val (files, intelligence) = project(caller = callerSource.replace("\n", "\r\n"))
-        val at = "  val greeter = Greeter(\"Hi\")\n  return greeter.greet(guest)"
-
-        assertEquals(
-            GetDefinitionResult.NotExactlyOnce(
-                text = at,
-                symbol = "welcome",
-                file = callerKt,
-                lines = emptyList(),
-                indentation = IndentationHint(4, IndentationHint.Indents(line = 4, file = "    ", snippet = "  ")),
+                miss = Snippet.Miss(at, 0, emptyList(), IndentationHint(4, IndentationHint.Indents(line = 4, file = "    ", snippet = "  "))),
             ),
             GetDefinition(files, intelligence)("welcome", "greet", at = at),
         )
@@ -275,7 +228,7 @@ class GetDefinitionTest {
         val (files, intelligence) = project()
 
         assertEquals(
-            GetDefinitionResult.NotExactlyOnce("guest", "welcome", callerKt, emptyList()),
+            GetDefinitionResult.NameNotExactlyOnce("guest", "welcome", callerKt, emptyList()),
             GetDefinition(files, intelligence)("welcome", "guest", at = "greeter.greet"),
         )
     }
@@ -410,7 +363,7 @@ class GetDefinitionTest {
         val (files, intelligence) = project()
 
         assertEquals(
-            GetDefinitionResult.NotExactlyOnce("gre", "welcome", callerKt, emptyList()),
+            GetDefinitionResult.NameNotExactlyOnce("gre", "welcome", callerKt, emptyList()),
             GetDefinition(files, intelligence)("welcome", "gre", at = "greeter.gre"),
         )
     }

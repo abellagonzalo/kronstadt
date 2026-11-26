@@ -41,22 +41,15 @@ public class GetDefinition(
         val document = analysed.document
         val lines = analysed.listedLines(found.node)
         val span = document.offsetOf(Position(lines.first, 0)) until document.offsetOf(Position(lines.last, Int.MAX_VALUE))
-        fun notExactlyOnce(text: String, matches: List<IntRange>, indentation: IndentationHint? = null) = GetDefinitionResult.NotExactlyOnce(
-            text,
-            found.canonical,
-            analysed.shown,
-            occurrenceLines(document, matches),
-            indentation,
-        )
         // The name is looked up inside the `at` snippet when there is one, else inside the whole span.
-        val scope = if (at == null) span else {
-            val snippets = occurrences(document, at, span)
-            snippets.singleOrNull()
-                ?: return notExactlyOnce(at, snippets, if (snippets.isEmpty()) indentationHint(document, at, span) else null)
+        val scope = if (at == null) span else when (val snippet = Snippet.find(document, at, span)) {
+            is Snippet.Match -> snippet.range
+            is Snippet.Miss -> return GetDefinitionResult.AtNotExactlyOnce(found.canonical, analysed.shown, snippet)
         }
         // Searched in the whole text, so the identifier boundaries see past the scope's ends.
         val names = identifier(name).findAll(document.text, scope.first).map { it.range }.takeWhile { it.last <= scope.last }.toList()
-        val nameRange = names.singleOrNull() ?: return notExactlyOnce(name, names)
+        val nameRange = names.singleOrNull()
+            ?: return GetDefinitionResult.NameNotExactlyOnce(name, found.canonical, analysed.shown, SourceLine.startingAt(document, names))
         val position = document.positionOf(nameRange.first)
         val definitions = session.definition(analysed.file, document, position)
         if (definitions.isEmpty()) {
@@ -148,17 +141,14 @@ public sealed interface GetDefinitionResult {
     public data class Found(val text: String) : GetDefinitionResult
     public data class LookupFailed(val failure: LookupFailure) : GetDefinitionResult
 
+    /** The `at` Snippet doesn't occur exactly once in [symbol]'s span in [file]: [miss] says how often and where. */
+    public data class AtNotExactlyOnce(val symbol: String, val file: String, val miss: Snippet.Miss) : GetDefinitionResult
+
     /**
-     * [text] (the name, or the `at` snippet) doesn't occur exactly once in [symbol]'s span in [file]; [lines] are where it
-     * does. With no occurrence of an `at` snippet, [indentation] says where it would occur once if indentation were ignored.
+     * [name] doesn't occur exactly once as a whole identifier in [symbol]'s span in [file], or in the `at` Snippet when
+     * there is one; [lines] are where it does.
      */
-    public data class NotExactlyOnce(
-        val text: String,
-        val symbol: String,
-        val file: String,
-        val lines: List<Occurrence>,
-        val indentation: IndentationHint? = null,
-    ) : GetDefinitionResult
+    public data class NameNotExactlyOnce(val name: String, val symbol: String, val file: String, val lines: List<SourceLine>) : GetDefinitionResult
 
     /**
      * [name] (on 1-based [line] of [symbol]) resolves to no declaration: a keyword, a literal or an unresolved
@@ -169,6 +159,3 @@ public sealed interface GetDefinitionResult {
     /** The index was still incomplete after waiting. */
     public data class NotReady(val readiness: Readiness.NotReady) : GetDefinitionResult
 }
-
-/** A 1-based [line] and its trimmed [source]. */
-public data class Occurrence(val line: Int, val source: String)
