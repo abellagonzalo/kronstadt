@@ -525,7 +525,7 @@ public sealed interface EditResult {
      */
     public data class NoRejectedEdit(val id: String, override val rejectedEdit: String? = null) : EditResult
 
-    /** The index was still incomplete after waiting [elapsed]; nothing was written. In an amend, the Rejected Edit is still kept as [rejectedEdit]. */
+    /** The index was still incomplete after the wait [readiness] gives; nothing was written. In an amend, the Rejected Edit is still kept as [rejectedEdit]. */
     public data class NotReady(val readiness: Readiness.NotReady, override val rejectedEdit: String? = null) : EditResult
 }
 
