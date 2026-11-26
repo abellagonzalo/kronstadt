@@ -1,5 +1,3 @@
-@file:OptIn(ExperimentalPathApi::class) // copyToRecursively, deleteRecursively
-
 package kronstadt.lsp
 
 import kotlinx.coroutines.Dispatchers
@@ -9,17 +7,11 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolKind
-import org.junit.jupiter.api.AfterAll
-import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.TestInstance
-import java.nio.file.Files
-import java.nio.file.Path
+import org.junit.jupiter.api.extension.RegisterExtension
 import java.util.Collections
-import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.appendText
-import kotlin.io.path.copyToRecursively
-import kotlin.io.path.deleteRecursively
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -39,29 +31,14 @@ import kotlin.time.TimeSource
 @Tag("contract")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class ReimportContractTest {
-    private lateinit var project: Path
-    private lateinit var indexDir: Path
-    private lateinit var lsp: LspCodeIntelligence
+    @JvmField
+    @RegisterExtension
+    internal val kotlinLsp = KotlinLspHarness()
+    private val project get() = kotlinLsp.project
+    private val lsp get() = kotlinLsp.lsp
 
     /** How long kotlin-lsp must have said nothing before the change; well above the startup gaps seen under load (#101). */
     private val quiet = 3.seconds
-    @BeforeAll
-    fun start() {
-        val fixture = Path.of(requireNotNull(System.getProperty("kronstadt.fixture")) { "run via ./gradlew :lsp:contractTest" })
-        project = Files.createTempDirectory("kronstadt-fixture").toRealPath()
-        fixture.copyToRecursively(project, followLinks = false, overwrite = true)
-        val command = (System.getenv("KRONSTADT_LANGUAGE_SERVER") ?: "kotlin-lsp --stdio").trim().split(Regex("\\s+"))
-        indexDir = Files.createTempDirectory("kronstadt-index").toRealPath().resolve("kotlin-server")
-        lsp = runBlocking { LspCodeIntelligence.start(command, project, indexDir) }
-    }
-
-    @AfterAll
-    fun stop() {
-        if (::lsp.isInitialized) lsp.close()
-        if (::project.isInitialized) project.deleteRecursively()
-        if (::indexDir.isInitialized) indexDir.parent.deleteRecursively()
-    }
-
     /** Whether Kronstadt reported ready when asked at [at]; [answeredAt] is when the answer came back. */
     private class ReadinessSample(val at: ComparableTimeMark, val answeredAt: ComparableTimeMark, val ready: Boolean)
 

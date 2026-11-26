@@ -1,10 +1,6 @@
-@file:OptIn(ExperimentalPathApi::class) // copyToRecursively, deleteRecursively
-
 package kronstadt.lsp
 
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import kronstadt.core.application.FindUsages
 import kronstadt.core.application.FindUsagesResult
 import kronstadt.core.application.RenameResult
@@ -12,31 +8,22 @@ import kronstadt.core.application.RenameSymbol
 import kronstadt.core.application.RenamedFile
 import kronstadt.core.domain.FileChange
 import kronstadt.core.domain.Position
-import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
 import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.TextRange
 import kronstadt.workspace.LocalFileStore
-import org.junit.jupiter.api.AfterAll
-import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.MethodOrderer
 import org.junit.jupiter.api.Order
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.TestInstance
 import org.junit.jupiter.api.TestMethodOrder
+import org.junit.jupiter.api.extension.RegisterExtension
 import java.nio.file.Files
-import java.nio.file.Path
-import kotlin.io.path.ExperimentalPathApi
-import kotlin.io.path.copyToRecursively
-import kotlin.io.path.deleteRecursively
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
-import kotlin.time.Duration
-import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.minutes
 
 /**
  * Seam 2, #169: a Symbol whose name is in backticks, the fixture's `` `backticked name` ``. Its `selectionRange` starts at
@@ -48,37 +35,16 @@ import kotlin.time.Duration.Companion.minutes
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @TestMethodOrder(MethodOrderer.OrderAnnotation::class)
 class BacktickedNameContractTest {
-    private lateinit var project: Path
-    private lateinit var indexDir: Path
-    private lateinit var lsp: LspCodeIntelligence
-    private lateinit var files: LocalFileStore
-
-    @BeforeAll
-    fun start() {
-        val fixture = Path.of(requireNotNull(System.getProperty("kronstadt.fixture")) { "run via ./gradlew :lsp:contractTest" })
-        project = Files.createTempDirectory("kronstadt-fixture-backticked").toRealPath()
-        fixture.copyToRecursively(project, followLinks = false, overwrite = true)
-        Files.writeString(project.resolve(USAGES), USAGES_TEXT)
-        val command = (System.getenv("KRONSTADT_LANGUAGE_SERVER") ?: "kotlin-lsp --stdio").trim().split(Regex("\\s+"))
-        indexDir = Files.createTempDirectory("kronstadt-index").toRealPath().resolve("kotlin-server")
-        lsp = runBlocking { LspCodeIntelligence.start(command, project, indexDir) }
-        files = LocalFileStore(project)
-    }
-
-    @AfterAll
-    fun stop() {
-        if (::lsp.isInitialized) lsp.close()
-        if (::project.isInitialized) project.deleteRecursively()
-        if (::indexDir.isInitialized) indexDir.parent.deleteRecursively()
-    }
+    @JvmField
+    @RegisterExtension
+    internal val kotlinLsp = KotlinLspHarness { project -> Files.writeString(project.resolve(USAGES), USAGES_TEXT) }
+    private val project get() = kotlinLsp.project
+    private val lsp get() = kotlinLsp.lsp
+    private val files by lazy { LocalFileStore(project) }
 
     @Test
     @Order(1)
-    fun `becomes ready`() = runBlocking {
-        withTimeout(5.minutes) {
-            while (lsp.awaitReady(Duration.ZERO) != Readiness.Ready) delay(20.milliseconds)
-        }
-    }
+    fun `becomes ready`() = kotlinLsp.awaitReady()
 
     @Test
     @Order(2)

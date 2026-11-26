@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalPathApi::class) // copyToRecursively, deleteRecursively
+@file:OptIn(ExperimentalPathApi::class) // deleteRecursively
 
 package kronstadt.lsp
 
@@ -61,11 +61,10 @@ import org.junit.jupiter.api.Order
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.TestInstance
 import org.junit.jupiter.api.TestMethodOrder
+import org.junit.jupiter.api.extension.RegisterExtension
 import java.nio.file.Files
-import java.nio.file.Path
 import java.util.Collections
 import kotlin.io.path.ExperimentalPathApi
-import kotlin.io.path.copyToRecursively
 import kotlin.io.path.deleteRecursively
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -89,9 +88,13 @@ import kotlin.time.Duration.Companion.seconds
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @TestMethodOrder(MethodOrderer.OrderAnnotation::class)
 class KotlinLspContractTest {
-    private lateinit var project: Path
-    private lateinit var indexDir: Path
-    private lateinit var lsp: LspCodeIntelligence
+    @JvmField
+    @RegisterExtension
+    internal val kotlinLsp = KotlinLspHarness()
+    private val project get() = kotlinLsp.project
+    /** A missing directory, as for a new worktree: kotlin-lsp creates it. */
+    private val indexDir get() = kotlinLsp.indexDir
+    private val lsp get() = kotlinLsp.lsp
 
     /**
      * Readiness signals from just after [start] subscribes, to pin the order kotlin-lsp sends them in. It may miss the
@@ -102,22 +105,12 @@ class KotlinLspContractTest {
 
     @BeforeAll
     fun start() {
-        val fixture = Path.of(requireNotNull(System.getProperty("kronstadt.fixture")) { "run via ./gradlew :lsp:contractTest" })
-        project = Files.createTempDirectory("kronstadt-fixture").toRealPath()
-        fixture.copyToRecursively(project, followLinks = false, overwrite = true)
-        val command = (System.getenv("KRONSTADT_LANGUAGE_SERVER") ?: "kotlin-lsp --stdio").trim().split(Regex("\\s+"))
-        // A missing directory, as for a new worktree: kotlin-lsp creates it.
-        indexDir = Files.createTempDirectory("kronstadt-index").toRealPath().resolve("kotlin-server")
-        lsp = runBlocking { LspCodeIntelligence.start(command, project, indexDir) }
         recording.launch { lsp.readinessSignals.collect { signals += it } }
     }
 
     @AfterAll
     fun stop() {
         recording.cancel()
-        if (::lsp.isInitialized) lsp.close()
-        if (::project.isInitialized) project.deleteRecursively()
-        if (::indexDir.isInitialized) indexDir.parent.deleteRecursively()
     }
 
     @Test
