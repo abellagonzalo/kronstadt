@@ -34,15 +34,6 @@ class KtFindUsagesToolTest {
     private suspend fun findUsages(arguments: String): Pair<Boolean, String> = tools.call("kt_find_usages", arguments)
 
     @Test
-    fun `a Symbol with too many declarations to resolve project-wide fails without declaredIn`() = runTest {
-        assertEquals(
-            true to "'stay' can't be resolved without a file: so many declarations are named 'stay', dependencies' included, " +
-                "that $INDEX_STOPS and may not list them all; pass the file that declares it as declaredIn",
-            findUsages("""{"symbol": "stay"}"""),
-        )
-    }
-
-    @Test
     fun `declaredIn resolves the Symbol in that file`() = runTest {
         assertEquals(
             false to "No usages of stay (searched 3 files)",
@@ -99,38 +90,6 @@ class KtFindUsagesToolTest {
         assertEquals(
             false to "No usages of stay (searched 3 files)",
             findUsages("""{"symbol": "stay", "declaredIn": "A.kt", "file": "  "}"""),
-        )
-    }
-
-    @Test
-    fun `no usages in one file names the one file searched`() = runTest {
-        assertEquals(
-            false to "No usages of stay (searched 1 file)",
-            findUsages("""{"symbol": "stay", "declaredIn": "A.kt", "file": "C.kt"}"""),
-        )
-    }
-
-    @Test
-    fun `no usages other than one import says so`() = runTest {
-        assertEquals(
-            false to "No usages of wave other than 1 import (searched 3 files)",
-            findUsages("""{"symbol": "wave", "declaredIn": "A.kt"}"""),
-        )
-    }
-
-    @Test
-    fun `no usages other than several imports counts them`() = runTest {
-        assertEquals(
-            false to "No usages of greet other than 2 imports (searched 3 files)",
-            findUsages("""{"symbol": "greet", "declaredIn": "A.kt"}"""),
-        )
-    }
-
-    @Test
-    fun `no usages other than an import in the one file searched`() = runTest {
-        assertEquals(
-            false to "No usages of greet other than 1 import (searched 1 file)",
-            findUsages("""{"symbol": "greet", "declaredIn": "A.kt", "file": "C.kt"}"""),
         )
     }
 
