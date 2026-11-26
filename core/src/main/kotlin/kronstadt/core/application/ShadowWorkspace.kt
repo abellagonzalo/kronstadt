@@ -102,24 +102,86 @@ internal class ShadowWorkspace(
         return CollateralCheck(files, session, ::analysedAs, timeout).run(changed)
     }
 
-    sealed interface Lookup {
+    /** Where an Operation's Symbol Path is in the Edit's current view of the project, or why it can't be targeted there. */
+    sealed interface Located {
         /**
-         * The Symbol at [canonical] and its [span] in [document], the file's current text. [preferred] is set when a bare
+         * The Symbol at [canonical] and its [span] in [document], [file]'s current text. [preferred] is set when a bare
          * name chose it over same-named functions (ADR 0002).
          */
         data class Found(
+            val file: Path,
             val document: TextDocument,
             val canonical: String,
             val span: SymbolSpan,
             val preferred: PreferredOverFunctions? = null,
-        ) : Lookup
-        data class Failed(val failure: LookupFailure) : Lookup
+        ) : Located
 
-        /**
-         * The Symbol is in the file as read from disk, but an earlier Operation removed or renamed it; [suggestions]
-         * are close names in the current text.
-         */
-        data class RemovedEarlier(val suggestions: List<SymbolCandidate>) : Lookup
+        /** Only ever an [OperationFailure.LookupFailed], [OperationFailure.NeedsFile] or [OperationFailure.RemovedEarlier]. */
+        data class Failed(val failure: OperationFailure) : Located
+    }
+
+    /**
+     * The Symbol [parsed] names in the Edit's current view of the project: in the text earlier Operations left, and in
+     * files an earlier [create] made. A Symbol on disk that an earlier Operation removed or renamed is said to be.
+     */
+    suspend fun locate(parsed: ParsedLookup): Located {
+        val path = parsed.file ?: return locateWithoutFile(parsed)
+        val file = fileNamed(path).getOrElse { return Located.Failed(OperationFailure.LookupFailed(it)) }
+        return resolve(file, parsed)
+    }
+
+    /** The file [path] names, as [FileStore.classify] finds it on disk, or one an earlier [create] of this Edit made. */
+    suspend fun fileNamed(path: String): Outcome<Path> {
+        val onDisk = files.classify(path)
+        if (onDisk is Outcome.Failed && onDisk.failure is LookupFailure.FileNotFound) {
+            val created = files.resolve(path)?.takeIf { current(it) != null }
+            if (created != null) return Outcome.Ok(created)
+        }
+        return onDisk
+    }
+
+    /**
+     * [parsed], which has no file. The project lookup sees only the disk, so its candidates in files this Edit has edited
+     * give way to those in their current text ([findInEdited]). One candidate left is the target if the disk has it too,
+     * else it needs its file; several are ambiguous. None leaves the disk lookup's answer: a Symbol it found in an edited
+     * file, or in several that all were, is then said to be removed earlier.
+     */
+    private suspend fun locateWithoutFile(parsed: ParsedLookup): Located {
+        val lookup = resolver.resolve(session, parsed)
+        val onDisk: List<Pair<SymbolCandidate, Path?>> = when (lookup) {
+            is Outcome.Ok -> listOf(lookup.value.let { it.analysed.candidate(it.node) to it.analysed.file })
+            is Outcome.Failed -> when (val failure = lookup.failure) {
+                is LookupFailure.Ambiguous -> failure.candidates.map { it to files.resolve(it.file) }
+                is LookupFailure.NotFound -> emptyList()
+                else -> return Located.Failed(OperationFailure.LookupFailed(failure))
+            }
+        }
+        val candidates = onDisk.filterNot { (_, file) -> file != null && isChanged(file) }.map { it.first } + findInEdited(parsed)
+        val candidate = candidates.singleOrNull()
+        val file = when {
+            candidates.size > 1 -> return Located.Failed(OperationFailure.LookupFailed(LookupFailure.Ambiguous(parsed.symbol, null, candidates)))
+            candidate != null -> onDisk.firstOrNull { (shown, _) -> shown.file == candidate.file }?.second
+                ?: return Located.Failed(OperationFailure.NeedsFile(parsed.symbol, candidates))
+            lookup is Outcome.Ok -> lookup.value.analysed.file
+            lookup is Outcome.Failed && lookup.failure is LookupFailure.NotFound -> return Located.Failed(OperationFailure.LookupFailed(lookup.failure))
+            else -> return Located.Failed(
+                removedEarlier(parsed, onDisk) ?: OperationFailure.LookupFailed(LookupFailure.NotFound(parsed.symbol, null, emptyList())),
+            )
+        }
+        return resolve(file, parsed)
+    }
+
+    /**
+     * The failure for [parsed] when earlier Operations removed or renamed it in every file of [onDisk], its matches on
+     * disk, with close names in each file's current text. Null if there are none, or any is still there or unreadable.
+     */
+    private suspend fun removedEarlier(parsed: ParsedLookup, onDisk: List<Pair<SymbolCandidate, Path?>>): OperationFailure.RemovedEarlier? {
+        val removals = onDisk.distinctBy { (shown, _) -> shown.file }.map { (_, file) ->
+            val failed = file?.let { resolve(it, parsed) } as? Located.Failed ?: return null
+            failed.failure as? OperationFailure.RemovedEarlier ?: return null
+        }
+        if (removals.isEmpty()) return null
+        return OperationFailure.RemovedEarlier(parsed.symbol, removals.flatMap { it.files }, removals.flatMap { it.suggestions })
     }
 
     /** [file]'s current text, loading it from disk on first touch; null if there's no such file. */
@@ -132,15 +194,18 @@ internal class ShadowWorkspace(
     fun baseHashes(): Map<Path, ContentHash?> = touched.mapValues { it.value.baseHash }
 
     /** Resolves [parsed] against [file]'s current text, loading the file from disk on first touch. */
-    suspend fun resolve(file: Path, parsed: ParsedLookup): Lookup {
+    private suspend fun resolve(file: Path, parsed: ParsedLookup): Located {
+        fun failed(failure: LookupFailure) = Located.Failed(OperationFailure.LookupFailed(failure))
         val resolution = resolver.resolveIn(this, file, parsed)
-            ?: return Lookup.Failed(LookupFailure.FileNotFound(parsed.file ?: files.display(file)))
+            ?: return failed(LookupFailure.FileNotFound(parsed.file ?: files.display(file)))
         val found = resolution.getOrElse { failure ->
-            if (failure is LookupFailure.NotFound && inBase(file, parsed)) return Lookup.RemovedEarlier(failure.suggestions)
-            return Lookup.Failed(failure)
+            if (failure is LookupFailure.NotFound && inBase(file, parsed)) {
+                return Located.Failed(OperationFailure.RemovedEarlier(parsed.symbol, listOf(files.display(file)), failure.suggestions))
+            }
+            return failed(failure)
         }
-        val span = resolver.span(found).getOrElse { return Lookup.Failed(it) }
-        return Lookup.Found(found.analysed.document, found.canonical, span, found.preferred)
+        val span = resolver.span(found).getOrElse { return failed(it) }
+        return Located.Found(file, found.analysed.document, found.canonical, span, found.preferred)
     }
 
     /** Whether [parsed] resolves in [file] as read from disk, which differs from its current text only once edited. */
@@ -152,13 +217,13 @@ internal class ShadowWorkspace(
     }
 
     /** Whether an Operation of this Edit has changed [file], so that its current text, not the disk's, is what counts. */
-    fun isChanged(file: Path): Boolean = touched[file]?.isChanged == true
+    private fun isChanged(file: Path): Boolean = touched[file]?.isChanged == true
 
     /**
      * Where [parsed] is in the current text of the files this Edit has edited, in its package if it names one: what
      * a project-wide lookup, which sees only the disk, can't find.
      */
-    suspend fun findInEdited(parsed: ParsedLookup): List<SymbolCandidate> =
+    private suspend fun findInEdited(parsed: ParsedLookup): List<SymbolCandidate> =
         touched.filterValues { it.isChanged }.keys.flatMap { file ->
             val current = touched.getValue(file).current
             val packageName = parsed.path.packageName

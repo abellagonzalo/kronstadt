@@ -5,7 +5,9 @@ import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Severity
+import kronstadt.core.domain.SymbolCandidate
 import kronstadt.core.domain.SymbolKind
+import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.SymbolPath
 import kronstadt.core.domain.TextRange
 import java.io.IOException
@@ -24,15 +26,15 @@ class ShadowWorkspaceTest {
 
     private fun range(line: Int, startChar: Int, endChar: Int) = TextRange(Position(line, startChar), Position(line, endChar))
 
-    /** A function `fun <name>(): Int = …` in [text], declared from [line] to the end of [lastLine]. */
-    private fun function(text: String, name: String, line: Int, lastLine: Int = line) = CodeSymbol(
+    /** A function `fun <name>(<parameters>): Int = …` in [text], declared from [line] to the end of [lastLine]. */
+    private fun function(text: String, name: String, line: Int, lastLine: Int = line, parameterTypes: String = "") = CodeSymbol(
         name,
         SymbolKind.FUNCTION,
         TextRange(Position(line, 0), Position(lastLine, text.lines()[lastLine].length)),
         range(line, 4, 4 + name.length),
         emptyList(),
-        parameterTypes = "",
-        type = "(): Int",
+        parameterTypes = parameterTypes,
+        type = "($parameterTypes): Int",
     )
 
     private fun error(line: Int, message: String) = Diagnostic(range(line, 0, 1), Severity.ERROR, message, "ERR")
@@ -46,7 +48,7 @@ class ShadowWorkspaceTest {
         |""".trimMargin()
     private val sourceSymbols = listOf(function(source, "one", 2), function(source, "four", 4))
 
-    private fun path(text: String) = ParsedLookup(text, SymbolPath.parse(text).getOrThrow(), file = null)
+    private fun path(text: String, file: String? = null) = ParsedLookup(text, SymbolPath.parse(text).getOrThrow(), file)
 
     /** Runs [block] on a Shadow Workspace over [files], in one session that must close everything it opened. */
     private fun shadow(
@@ -60,8 +62,8 @@ class ShadowWorkspaceTest {
     }
 
     private suspend fun ShadowWorkspace.replace(file: String, symbol: String, code: String) {
-        val found = assertIs<ShadowWorkspace.Lookup.Found>(resolve(root.resolve(file), path(symbol)), symbol)
-        replaceLines(root.resolve(file), found.span.firstLine..found.span.lastLine, code.lines())
+        val found = assertIs<ShadowWorkspace.Located.Found>(locate(path(symbol, file)), symbol)
+        replaceLines(found.file, found.span.firstLine..found.span.lastLine, code.lines())
     }
 
     @Test
@@ -75,11 +77,139 @@ class ShadowWorkspaceTest {
         shadow(files, intelligence) {
             replace(a, "one", "fun two(): Int = 2")
 
-            val found = assertIs<ShadowWorkspace.Lookup.Found>(resolve(root.resolve(a), path("two")))
+            val found = assertIs<ShadowWorkspace.Located.Found>(locate(path("two", a)))
+            assertEquals(root.resolve(a), found.file)
             assertEquals("two", found.canonical)
             assertEquals(2..2, found.span.firstLine..found.span.lastLine)
-            assertIs<ShadowWorkspace.Lookup.RemovedEarlier>(resolve(root.resolve(a), path("one")))
-            assertIs<LookupFailure.NotFound>(assertIs<ShadowWorkspace.Lookup.Failed>(resolve(root.resolve(a), path("three"))).failure)
+            assertIs<OperationFailure.RemovedEarlier>(assertIs<ShadowWorkspace.Located.Failed>(locate(path("one", a))).failure)
+            val missing = assertIs<OperationFailure.LookupFailed>(assertIs<ShadowWorkspace.Located.Failed>(locate(path("three", a))).failure)
+            assertIs<LookupFailure.NotFound>(missing.failure)
+        }
+    }
+
+    private val declaration = Regex("""^fun (\w+)\(([^)]*)\): Int""")
+
+    /** The top-level functions `fun <name>(<parameters>): Int = …` in each of [texts], one per line. */
+    private fun symbolsOf(vararg texts: String) = texts.associateWith { text ->
+        text.lines().mapIndexedNotNull { line, code ->
+            val (name, parameters) = declaration.find(code)?.destructured ?: return@mapIndexedNotNull null
+            val types = parameters.split(", ").filter { it.isNotEmpty() }.joinToString(", ") { it.substringAfter(": ") }
+            function(text, name, line, parameterTypes = types)
+        }
+    }
+
+    /** The project index's entries for each function [name] declares in [file], whose text on disk is [text]. */
+    private fun indexed(file: String, text: String, name: String) = symbolsOf(text).getValue(text)
+        .filter { it.name == name }
+        .map { SymbolLocation(name, SymbolKind.FUNCTION, root.resolve(file), it.range) }
+
+    private val renamed = source.replace("fun one(): Int = 1", "fun two(): Int = 2")
+    private val ones = source.replace("fun one(", "fun ones(")
+
+    /** Runs [block] on a Shadow Workspace over [files], whose functions the index lists as [index], with every text in [texts] analysable. */
+    private fun locating(files: Map<String, String>, index: List<SymbolLocation>, vararg texts: String, block: suspend ShadowWorkspace.() -> Unit) =
+        shadow(FakeFileStore(root, files), FakeCodeIntelligence(symbolsByText = symbolsOf(*texts), index = index), block)
+
+    @Test
+    fun `a Symbol an earlier Operation removed or renamed is said to be, with close names, whether its path has a file or not`() =
+        locating(mapOf(a to source), indexed(a, source, "one"), source, ones) {
+            replace(a, "one", "fun ones(): Int = 1")
+
+            val removed = ShadowWorkspace.Located.Failed(OperationFailure.RemovedEarlier("one", listOf(a), listOf(SymbolCandidate("ones", a))))
+            assertEquals(removed, locate(path("one", a)))
+            assertEquals(removed, locate(path("one")))
+        }
+
+    @Test
+    fun `a Symbol without a file whose several disk matches earlier Operations all renamed away is said to be removed in each file`() =
+        locating(mapOf(a to source, b to source), indexed(a, source, "one") + indexed(b, source, "one"), source, ones) {
+            replace(a, "one", "fun ones(): Int = 1")
+            replace(b, "one", "fun ones(): Int = 1")
+
+            assertEquals(
+                ShadowWorkspace.Located.Failed(
+                    OperationFailure.RemovedEarlier("one", listOf(a, b), listOf(SymbolCandidate("ones", a), SymbolCandidate("ones", b))),
+                ),
+                locate(path("one")),
+            )
+        }
+
+    @Test
+    fun `a Symbol without a file whose overloads in one file earlier Operations all renamed away is said to be removed once, in that file`() {
+        val overloads = "package a\n\nfun one(): Int = 1\n\nfun one(n: Int): Int = n\n"
+        val oneRenamed = overloads.replace("fun one(): Int", "fun ones(): Int")
+        val bothRenamed = oneRenamed.replace("fun one(n: Int)", "fun ones(n: Int)")
+        locating(mapOf(a to overloads), indexed(a, overloads, "one"), overloads, oneRenamed, bothRenamed) {
+            replace(a, "one()", "fun ones(): Int = 1")
+            replace(a, "one(Int)", "fun ones(n: Int): Int = n")
+
+            assertEquals(
+                ShadowWorkspace.Located.Failed(
+                    OperationFailure.RemovedEarlier("one", listOf(a), listOf(SymbolCandidate("ones()", a), SymbolCandidate("ones(Int)", a))),
+                ),
+                locate(path("one")),
+            )
+        }
+    }
+
+    @Test
+    fun `a Symbol without a file that only an earlier Operation made needs its file, and is told where it is`() =
+        locating(mapOf(a to source), emptyList(), source, renamed) {
+            replace(a, "one", "fun two(): Int = 2")
+
+            assertEquals(ShadowWorkspace.Located.Failed(OperationFailure.NeedsFile("two", listOf(SymbolCandidate("two", a)))), locate(path("two")))
+        }
+
+    @Test
+    fun `a Symbol without a file that is on disk in an unedited file and was made earlier in another is ambiguous between both`() =
+        locating(mapOf(a to source, b to renamed), indexed(b, renamed, "two"), source, renamed) {
+            replace(a, "one", "fun two(): Int = 2")
+
+            assertEquals(
+                ShadowWorkspace.Located.Failed(
+                    OperationFailure.LookupFailed(LookupFailure.Ambiguous("two", null, listOf(SymbolCandidate("two", b), SymbolCandidate("two", a)))),
+                ),
+                locate(path("two")),
+            )
+        }
+
+    @Test
+    fun `a Symbol without a file in a file an earlier Operation edited is found in that file's current text`() {
+        val three = source.replace("fun one(): Int = 1", "fun one(): Int = 1\n\nfun three(): Int = 3")
+        locating(mapOf(a to source), indexed(a, source, "four"), source, three) {
+            replace(a, "one", "fun one(): Int = 1\n\nfun three(): Int = 3")
+
+            val found = assertIs<ShadowWorkspace.Located.Found>(locate(path("four")))
+            assertEquals(root.resolve(a), found.file)
+            assertEquals(three, found.document.text)
+            assertEquals("four", found.canonical)
+            assertEquals(6..6, found.span.firstLine..found.span.lastLine)
+        }
+    }
+
+    @Test
+    fun `a Symbol without a file that earlier Operations renamed away on disk and made in another file needs that file`() =
+        locating(mapOf(a to source, b to renamed), indexed(b, renamed, "two"), source, renamed) {
+            replace(b, "two", "fun one(): Int = 1")
+            replace(a, "one", "fun two(): Int = 2")
+
+            assertEquals(ShadowWorkspace.Located.Failed(OperationFailure.NeedsFile("two", listOf(SymbolCandidate("two", a)))), locate(path("two")))
+        }
+
+    @Test
+    fun `a Symbol without a file that is ambiguous on disk also lists the one an earlier Operation made`() {
+        val c = "src/C.kt"
+        locating(mapOf(a to source, b to renamed, c to renamed), indexed(b, renamed, "two") + indexed(c, renamed, "two"), source, renamed) {
+            replace(a, "one", "fun two(): Int = 2")
+
+            assertEquals(
+                ShadowWorkspace.Located.Failed(
+                    OperationFailure.LookupFailed(
+                        LookupFailure.Ambiguous("two", null, listOf(SymbolCandidate("two", b), SymbolCandidate("two", c), SymbolCandidate("two", a))),
+                    ),
+                ),
+                locate(path("two")),
+            )
         }
     }
 

@@ -436,14 +436,14 @@ class EditTest {
     private fun renamedSymbols() = listOf(
         greeter(symbol("hi", SymbolKind.FUNCTION, range(3, 4, 3, 21), 3, 8, parameterTypes = "", type = "(): Int"), symbol("other", SymbolKind.FUNCTION, range(5, 4, 5, 24), 5, 8, parameterTypes = "", type = "(): Int"), lastLine = 6),
     )
-    private fun batchIntelligence(index: List<SymbolLocation> = emptyList()) = FakeCodeIntelligence(
+    private fun batchIntelligence() = FakeCodeIntelligence(
         symbolsByText = mapOf(
             source to listOf(greeter(greet, other)),
             hello to listOf(greeter(helloGreet, other)),
             renamed to renamedSymbols(),
             renamedAgain to renamedSymbols(),
         ),
-        index = index,
+        index = emptyList(),
     )
 
     @Test
@@ -495,195 +495,8 @@ class EditTest {
     }
 
     @Test
-    fun `an Operation without a file aimed at a Symbol an earlier one renamed is found on disk, then said to be removed`() = runTest {
-        val files = FakeFileStore(root, mapOf(path to source))
-        val intelligence = batchIntelligence(index = listOf(SymbolLocation("greet", SymbolKind.FUNCTION, root.resolve(path), greet.range, "Greeter")))
-
-        val result = edit(intelligence, files)(
-            listOf(Replace(path, "Greeter/greet", "fun hi(): Int = 1"), Replace(null, "Greeter/greet", "fun greet() = 1")),
-        )
-
-        assertIs<OperationFailure.RemovedEarlier>(assertIs<EditResult.OperationFailed>(result).failure)
-        assertEquals(1, result.index)
-        assertEquals(emptyList(), files.written)
-    }
-
-    @Test
-    fun `an Operation without a file whose several disk matches earlier ones all renamed away says so for each file, and nothing is written`() = runTest {
-        val b = "src/B.kt"
-        val c = "src/C.kt"
-        val files = FakeFileStore(root, mapOf(b to source, c to source))
-        val greets = source.replace("    /** Says hi. */\n    fun greet(): String = \"hi\"\n", "    fun greets(): Int = 1\n")
-        val intelligence = FakeCodeIntelligence(
-            symbolsByText = mapOf(
-                source to listOf(greeter(greet, other)),
-                greets to listOf(greeter(symbol("greets", SymbolKind.FUNCTION, range(3, 4, 3, 25), 3, 8, parameterTypes = "", type = "(): Int"), symbol("other", SymbolKind.FUNCTION, range(5, 4, 5, 24), 5, 8, parameterTypes = "", type = "(): Int"), lastLine = 6)),
-            ),
-            index = listOf(b, c).map { SymbolLocation("greet", SymbolKind.FUNCTION, root.resolve(it), greet.range, "Greeter") },
-        )
-
-        val result = edit(intelligence, files)(
-            listOf(
-                Replace(b, "Greeter/greet", "fun greets(): Int = 1"),
-                Replace(c, "Greeter/greet", "fun greets(): Int = 1"),
-                Replace(null, "Greeter/greet", "fun greet() = 1"),
-            ),
-        )
-
-        assertEquals(
-            EditResult.OperationFailed(
-                2,
-                OperationFailure.RemovedEarlier(
-                    "Greeter/greet",
-                    listOf(b, c),
-                    listOf(SymbolCandidate("Greeter/greets", b), SymbolCandidate("Greeter/greets", c)),
-                ),
-            ),
-            result,
-        )
-        assertEquals(emptyList(), files.written)
-        intelligence.assertOneSessionClosedEverything()
-    }
-
-    @Test
-    fun `an Operation without a file whose overloads in one file earlier ones all renamed away says so once, for that file`() = runTest {
-        val b = "src/B.kt"
-        val overloads = "package a\n\nclass Greeter {\n    fun greet(): Int = 1\n\n    fun greet(n: Int): Int = n\n}\n"
-        val oneRenamed = overloads.replace("fun greet(): Int", "fun greets(): Int")
-        val bothRenamed = oneRenamed.replace("fun greet(n: Int)", "fun greets(n: Int)")
-        fun members(first: String, second: String) = listOf(
-            greeter(
-                symbol(first, SymbolKind.FUNCTION, range(3, 4, 3, 19 + first.length), 3, 8, parameterTypes = "", type = "(): Int"),
-                symbol(second, SymbolKind.FUNCTION, range(5, 4, 5, 25 + second.length), 5, 8, parameterTypes = "Int", type = "(Int): Int"),
-                lastLine = 6,
-            ),
-        )
-        val files = FakeFileStore(root, mapOf(b to overloads))
-        val intelligence = FakeCodeIntelligence(
-            symbolsByText = mapOf(
-                overloads to members("greet", "greet"),
-                oneRenamed to members("greets", "greet"),
-                bothRenamed to members("greets", "greets"),
-            ),
-            index = listOf(range(3, 4, 3, 24), range(5, 4, 5, 30)).map { SymbolLocation("greet", SymbolKind.FUNCTION, root.resolve(b), it, "Greeter") },
-        )
-
-        val result = edit(intelligence, files)(
-            listOf(
-                Replace(b, "Greeter/greet()", "fun greets(): Int = 1"),
-                Replace(b, "Greeter/greet(Int)", "fun greets(n: Int): Int = n"),
-                Replace(null, "Greeter/greet", "fun greet() = 1"),
-            ),
-        )
-
-        assertEquals(
-            EditResult.OperationFailed(
-                2,
-                OperationFailure.RemovedEarlier("Greeter/greet", listOf(b), listOf(SymbolCandidate("Greeter/greets()", b), SymbolCandidate("Greeter/greets(Int)", b))),
-            ),
-            result,
-        )
-        assertEquals(emptyList(), files.written)
-        intelligence.assertOneSessionClosedEverything()
-    }
-
-    @Test
     fun `a removed-earlier failure needs at least one file`() {
         assertFailsWith<IllegalArgumentException> { OperationFailure.RemovedEarlier("Greeter/greet", emptyList(), emptyList()) }
-    }
-
-    @Test
-    fun `an Operation without a file can't target a Symbol an earlier one created, and is told where to find it`() = runTest {
-        val files = FakeFileStore(root, mapOf(path to source))
-        val intelligence = batchIntelligence()
-
-        val result = edit(intelligence, files)(
-            listOf(Replace(path, "Greeter/greet", "fun hi(): Int = 1"), Replace(null, "Greeter/hi", "fun hi(): Int = 2")),
-        )
-
-        assertEquals(EditResult.OperationFailed(1, OperationFailure.NeedsFile("Greeter/hi", listOf(SymbolCandidate("hi", path)))), result)
-        assertEquals(emptyList(), files.written)
-        intelligence.assertOneSessionClosedEverything()
-    }
-
-    private fun hiAt(file: String) = SymbolLocation("hi", SymbolKind.FUNCTION, root.resolve(file), range(3, 4, 3, 21), "Greeter")
-
-    @Test
-    fun `an Operation without a file whose Symbol is on disk in an unedited file and was made earlier in another is ambiguous between both`() = runTest {
-        val b = "src/B.kt"
-        val files = FakeFileStore(root, mapOf(path to source, b to renamed))
-        val intelligence = batchIntelligence(index = listOf(hiAt(b)))
-
-        val result = edit(intelligence, files)(
-            listOf(Replace(path, "Greeter/greet", "fun hi(): Int = 1"), Replace(null, "Greeter/hi", "fun hi(): Int = 2")),
-        )
-
-        assertEquals(
-            EditResult.OperationFailed(1, OperationFailure.LookupFailed(LookupFailure.Ambiguous("Greeter/hi", null, listOf(SymbolCandidate("hi", b), SymbolCandidate("hi", path))))),
-            result,
-        )
-        assertEquals(emptyList(), files.written)
-        intelligence.assertOneSessionClosedEverything()
-    }
-
-    @Test
-    fun `an Operation without a file whose Symbol is in a file an earlier one edited resolves against that file's current text`() = runTest {
-        val files = FakeFileStore(root, mapOf(path to source))
-        val intelligence = batchIntelligence(index = listOf(SymbolLocation("greet", SymbolKind.FUNCTION, root.resolve(path), greet.range, "Greeter")))
-
-        val result = edit(intelligence, files)(
-            listOf(
-                Replace(path, "Greeter/other", "fun other(): Int = 1"),
-                Replace(null, "Greeter/greet", "fun greet(): String =\n    \"hello\""),
-            ),
-        )
-
-        assertIs<EditResult.Written>(result)
-        assertEquals(hello, files.content(path))
-        intelligence.assertOneSessionClosedEverything()
-    }
-
-    @Test
-    fun `an Operation without a file whose Symbol an earlier one renamed away on disk and made in another file needs that file`() = runTest {
-        val b = "src/B.kt"
-        val files = FakeFileStore(root, mapOf(path to source, b to renamed))
-        val intelligence = batchIntelligence(index = listOf(hiAt(b)))
-
-        val result = edit(intelligence, files)(
-            listOf(
-                Replace(b, "Greeter/hi", "/** Says hi. */\nfun greet(): String = \"hi\""),
-                Replace(path, "Greeter/greet", "fun hi(): Int = 1"),
-                Replace(null, "Greeter/hi", "fun hi(): Int = 2"),
-            ),
-        )
-
-        assertEquals(EditResult.OperationFailed(2, OperationFailure.NeedsFile("Greeter/hi", listOf(SymbolCandidate("hi", path)))), result)
-        assertEquals(emptyList(), files.written)
-        intelligence.assertOneSessionClosedEverything()
-    }
-
-    @Test
-    fun `an Operation without a file ambiguous on disk also lists the Symbol an earlier one made`() = runTest {
-        val b = "src/B.kt"
-        val c = "src/C.kt"
-        val files = FakeFileStore(root, mapOf(path to source, b to renamed, c to renamed))
-        val intelligence = batchIntelligence(index = listOf(hiAt(b), hiAt(c)))
-
-        val result = edit(intelligence, files)(
-            listOf(Replace(path, "Greeter/greet", "fun hi(): Int = 1"), Replace(null, "Greeter/hi", "fun hi(): Int = 2")),
-        )
-
-        assertEquals(
-            EditResult.OperationFailed(
-                1,
-                OperationFailure.LookupFailed(
-                    LookupFailure.Ambiguous("Greeter/hi", null, listOf(SymbolCandidate("hi", b), SymbolCandidate("hi", c), SymbolCandidate("hi", path))),
-                ),
-            ),
-            result,
-        )
-        assertEquals(emptyList(), files.written)
-        intelligence.assertOneSessionClosedEverything()
     }
 
     @Test
