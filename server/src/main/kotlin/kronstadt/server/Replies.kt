@@ -215,7 +215,7 @@ internal object Replies {
     }
 
     /** The Reply of a tool that couldn't wait for kotlin-lsp to finish indexing. */
-    fun notReady(readiness: Readiness.NotReady): Reply = Reply.error(notReadyText(readiness))
+    private fun notReady(readiness: Readiness.NotReady): Reply = Reply.error(notReadyText(readiness))
 
     /**
      * The Reply of a tool call that threw [e]. An [AgentFacingFailure] shows its message alone; any other exception also
@@ -237,9 +237,9 @@ internal object Replies {
      * check's failure came from, as its prefix.
      */
     fun lookupFailure(failure: LookupFailure, advice: ToolAdvice, argument: String? = null): String =
-        argument?.let { "$it: " }.orEmpty() + lookupMessage(failure, advice)
+        argument?.let { "$it: " }.orEmpty() + lookupText(failure, advice)
 
-    private fun lookupMessage(failure: LookupFailure, advice: ToolAdvice): String {
+    private fun lookupText(failure: LookupFailure, advice: ToolAdvice): String {
         val declaredIn = advice.declaringFile == ToolAdvice.DeclaringFile.DECLARED_IN
         return when (failure) {
             is LookupFailure.InvalidPath -> "Invalid Symbol Path '${failure.symbol}': ${failure.reason}"
