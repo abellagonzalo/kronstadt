@@ -38,6 +38,7 @@ internal class KotlinLspHarness(
     lateinit var indexDir: Path
         private set
 
+    /** Kronstadt's adapter to that kotlin-lsp. */
     lateinit var lsp: LspCodeIntelligence
         private set
 
@@ -58,7 +59,7 @@ internal class KotlinLspHarness(
     }
 
     /** Polls kotlin-lsp until Kronstadt reports it ready; fails if it isn't within [timeout]. */
-    fun awaitReady(timeout: Duration = 5.minutes): Unit = runBlocking {
+    fun waitUntilReady(timeout: Duration = 5.minutes): Unit = runBlocking {
         withTimeout(timeout) {
             while (lsp.awaitReady(Duration.ZERO) != Readiness.Ready) delay(20.milliseconds)
         }

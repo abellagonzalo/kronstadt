@@ -92,7 +92,6 @@ class KotlinLspContractTest {
     @RegisterExtension
     internal val kotlinLsp = KotlinLspHarness()
     private val project get() = kotlinLsp.project
-    /** A missing directory, as for a new worktree: kotlin-lsp creates it. */
     private val indexDir get() = kotlinLsp.indexDir
     private val lsp get() = kotlinLsp.lsp
 

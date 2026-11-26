@@ -39,6 +39,7 @@ class ReimportContractTest {
 
     /** How long kotlin-lsp must have said nothing before the change; well above the startup gaps seen under load (#101). */
     private val quiet = 3.seconds
+
     /** Whether Kronstadt reported ready when asked at [at]; [answeredAt] is when the answer came back. */
     private class ReadinessSample(val at: ComparableTimeMark, val answeredAt: ComparableTimeMark, val ready: Boolean)
 

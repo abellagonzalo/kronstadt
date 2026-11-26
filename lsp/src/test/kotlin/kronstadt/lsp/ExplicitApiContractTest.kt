@@ -38,7 +38,7 @@ class ExplicitApiContractTest {
 
     @Test
     @Order(1)
-    fun `becomes ready`() = kotlinLsp.awaitReady()
+    fun `becomes ready`() = kotlinLsp.waitUntilReady()
 
     @Test
     @Order(2)

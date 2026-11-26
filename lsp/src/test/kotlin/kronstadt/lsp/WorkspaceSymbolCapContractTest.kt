@@ -36,7 +36,7 @@ class WorkspaceSymbolCapContractTest {
 
     @Test
     @Order(1)
-    fun `becomes ready`() = kotlinLsp.awaitReady(10.minutes)
+    fun `becomes ready`() = kotlinLsp.waitUntilReady(10.minutes)
 
     // kotlin-lsp returns at most 200 results, with no sign that it left any out: here 200 of the 1500 exact matches.
     @Test
