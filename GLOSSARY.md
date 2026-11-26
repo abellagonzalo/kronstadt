@@ -56,6 +56,10 @@ _Avoid_: pending edit, draft
 A compiler error an edit introduces in a file it didn't touch, such as a caller still using a signature the edit changed. It is reported with the edit's result and never blocks it.
 _Avoid_: caller error, ripple error, downstream error
 
+**Reply**:
+What Kronstadt tells the agent in answer to one tool call: a result or an error, as text.
+_Avoid_: response, message, output
+
 **Write-back**:
 Writing a validated edit from the Shadow Workspace to the file on disk.
 _Avoid_: commit (clashes with git), flush, save, persist
