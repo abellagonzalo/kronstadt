@@ -23,7 +23,7 @@ Ports and adapters. Gradle modules make the build enforce the boundary: `core` c
 
 ```
 core/        pure Kotlin, no I/O
-  domain/      Position, TextRange, TextDocument (offset math), PackageHeader (a file's package), CodeSymbol, StructureRenderer,
+  domain/      Position, TextRange, TextDocument (offset math), PackageHeader (a file's package), CodeSymbol,
                SymbolPath, SymbolTree (resolution, canonical paths), SymbolSpan, FileLayout (re-indent),
                Diagnostic, Validation (new-error diff)
   port/        CodeIntelligence, FileStore
@@ -34,7 +34,8 @@ workspace/   FileStore over the local disk, confined to the project root;
              IndexDirectories (kotlin-lsp index per worktree and Index Seed slots, under ~/Library/Caches/kronstadt);
              IndexSeeds (seed a new worktree's index, refresh the seed once kotlin-lsp exits; clonefile via FFM);
              DetachedSeedRefresh (that refresh, in a process that outlives Kronstadt: ADR 0005)
-server/      MCP stdio server: tool schemas -> use cases; composition root (Main.kt)
+server/      MCP stdio server: tool schemas -> use cases; Replies (and StructureRenderer) word their results;
+             composition root (Main.kt)
 evaluation/  dev-only, never shipped: judges v1 on Claude Code transcripts (see Evaluation below)
 ```
 
