@@ -1,31 +1,18 @@
-@file:OptIn(ExperimentalPathApi::class) // copyToRecursively, deleteRecursively
-
 package kronstadt.lsp
 
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
-import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolSearch
-import org.junit.jupiter.api.AfterAll
-import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.MethodOrderer
 import org.junit.jupiter.api.Order
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.TestInstance
 import org.junit.jupiter.api.TestMethodOrder
-import java.nio.file.Files
-import java.nio.file.Path
-import kotlin.io.path.ExperimentalPathApi
-import kotlin.io.path.copyToRecursively
+import org.junit.jupiter.api.extension.RegisterExtension
 import kotlin.io.path.createDirectories
-import kotlin.io.path.deleteRecursively
 import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.time.Duration
-import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 
 /**
@@ -38,37 +25,18 @@ import kotlin.time.Duration.Companion.minutes
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @TestMethodOrder(MethodOrderer.OrderAnnotation::class)
 class WorkspaceSymbolCapContractTest {
-    private lateinit var project: Path
-    private lateinit var indexDir: Path
-    private lateinit var lsp: LspCodeIntelligence
-
-    @BeforeAll
-    fun start() {
-        val fixture = Path.of(requireNotNull(System.getProperty("kronstadt.fixture")) { "run via ./gradlew :lsp:contractTest" })
-        project = Files.createTempDirectory("kronstadt-fixture-many").toRealPath()
-        fixture.copyToRecursively(project, followLinks = false, overwrite = true)
+    @JvmField
+    @RegisterExtension
+    internal val kotlinLsp = KotlinLspHarness { project ->
         val many = project.resolve("src/main/kotlin/fixture/many").createDirectories()
         for (i in 1..FILES) many.resolve("Many$i.kt").writeText("package fixture.many\n\nfun $NAME$i(): Int = $i\n\nobject Holder$i {\n    fun $NAME(): Int = $i\n}\n")
         many.resolve("Getter.kt").writeText("package fixture.many\n\nclass Getter {\n    operator fun get(index: Int): Int = index\n}\n")
-        val command = (System.getenv("KRONSTADT_LANGUAGE_SERVER") ?: "kotlin-lsp --stdio").trim().split(Regex("\\s+"))
-        indexDir = Files.createTempDirectory("kronstadt-index").toRealPath().resolve("kotlin-server")
-        lsp = runBlocking { LspCodeIntelligence.start(command, project, indexDir) }
     }
-
-    @AfterAll
-    fun stop() {
-        if (::lsp.isInitialized) lsp.close()
-        if (::project.isInitialized) project.deleteRecursively()
-        if (::indexDir.isInitialized) indexDir.parent.deleteRecursively()
-    }
+    private val lsp get() = kotlinLsp.lsp
 
     @Test
     @Order(1)
-    fun `becomes ready`() = runBlocking {
-        withTimeout(10.minutes) {
-            while (lsp.awaitReady(Duration.ZERO) != Readiness.Ready) delay(20.milliseconds)
-        }
-    }
+    fun `becomes ready`() = kotlinLsp.waitUntilReady(10.minutes)
 
     // kotlin-lsp returns at most 200 results, with no sign that it left any out: here 200 of the 1500 exact matches.
     @Test
