@@ -296,8 +296,9 @@ public class LspCodeIntelligence private constructor(
          * analyses of other files, not only its own (#56). A changed document is synced to the disk text and held by this
          * session, no longer retained, so it closes when the session ends, handing the file back to the watcher. A deleted
          * one is no longer retained, and closed now unless another session holds it; as in [end], the table is settled
-         * first and every close is attempted. An unchanged one, or one that can't be read, stays retained. Disk is read
-         * outside [syncLock]; a document another session synced meanwhile is left alone, since that sync is newer than the read.
+         * first and every close is attempted ([closeAll]). An unchanged one, or one that can't be read, stays retained.
+         * Disk is read outside [syncLock]; a document another session synced meanwhile is left alone, since that sync is
+         * newer than the read.
          */
         suspend fun syncRetained() {
             val retainedVersions = syncLock.withLock { openDocuments.filterValues { it.retained }.mapValues { it.value.version } }
@@ -321,10 +322,7 @@ public class LspCodeIntelligence private constructor(
                         true
                     }
                 }
-                val failures = closing.mapNotNull { uri ->
-                    runCatching { server.textDocumentService.didClose(DidCloseTextDocumentParams(TextDocumentIdentifier(uri))) }.exceptionOrNull()
-                }
-                failures.firstOrNull()?.let { throw it }
+                closeAll(closing)
                 for ((uri, text) in stale) {
                     if (text == null) continue
                     val open = openDocuments.getValue(uri)
@@ -349,8 +347,8 @@ public class LspCodeIntelligence private constructor(
 
         /**
          * Gives up this session's hold on each document; one no session holds, and not retained, is closed. The table is
-         * settled first and every close is attempted, so a failing `didClose` (the server is gone) leaves no bookkeeping
-         * behind; the first failure is rethrown after the rest were tried.
+         * settled first and every close is attempted ([closeAll]), so a failing `didClose` (the server is gone) leaves no
+         * bookkeeping behind.
          */
         suspend fun end() = syncLock.withLock {
             ended = true
@@ -365,7 +363,15 @@ public class LspCodeIntelligence private constructor(
                 }
             }
             held.clear()
-            val failures = closing.mapNotNull { uri ->
+            closeAll(closing)
+        }
+
+        /**
+         * Sends `didClose` for each of [uris], already taken out of the table. Every close is attempted even when one
+         * throws; the first failure is rethrown after the rest were tried.
+         */
+        private fun closeAll(uris: List<String>) {
+            val failures = uris.mapNotNull { uri ->
                 runCatching { server.textDocumentService.didClose(DidCloseTextDocumentParams(TextDocumentIdentifier(uri))) }.exceptionOrNull()
             }
             failures.firstOrNull()?.let { throw it }
