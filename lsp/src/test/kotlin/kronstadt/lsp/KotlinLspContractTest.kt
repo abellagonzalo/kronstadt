@@ -53,6 +53,8 @@ import kronstadt.core.domain.SymbolSpan
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.TextEdit
 import kronstadt.core.domain.TextRange
+import kronstadt.core.domain.Validation
+import kronstadt.core.domain.imports
 import kronstadt.workspace.LocalFileStore
 import org.eclipse.lsp4j.DocumentSymbol
 import org.eclipse.lsp4j.SymbolKind as LspSymbolKind
@@ -770,11 +772,11 @@ class KotlinLspContractTest {
             assertEquals(emptyList(), session.diagnostics(file, TextDocument(header + "fun p(): Path? = null\n")))
             assertEquals(
                 TextDocument("package fixture.alpha\n\nimport java.nio.file.Path\n\nfun p(): Path? = null\n"),
-                session.organizeImports(file, TextDocument(header + "fun p(): Path? = null\n")),
+                lsp.organizedImports(session, file, TextDocument(header + "fun p(): Path? = null\n")),
             )
             assertEquals(
                 TextDocument("package fixture.alpha\n\nimport kotlin.time.Duration\nimport java.io.File as F\n\nfun f(): F? = null\nfun d(): Duration = Duration.ZERO\n"),
-                session.organizeImports(file, TextDocument(header + "fun f(): F? = null\nfun d(): Duration = Duration.ZERO\n")),
+                lsp.organizedImports(session, file, TextDocument(header + "fun f(): F? = null\nfun d(): Duration = Duration.ZERO\n")),
             )
         }
         // The edit kotlin-lsp asked to apply was refused.
@@ -915,20 +917,47 @@ class KotlinLspContractTest {
             // 4 used: the unused IOException is dropped by name.
             assertEquals(
                 TextDocument(header.replace("import java.io.IOException\n", "") + four),
-                session.organizeImports(file, TextDocument(header + four)),
+                lsp.organizedImports(session, file, TextDocument(header + four)),
             )
             // Fully qualified names don't count towards the star.
             assertEquals(
                 TextDocument(header.replace("import java.io.IOException\n", "") + five),
-                session.organizeImports(file, TextDocument(header + five)),
+                lsp.organizedImports(session, file, TextDocument(header + five)),
             )
             // 6 imported, 5 used, IOException unused: only the star import is left, so its answer can't tell IOException is unused.
             assertEquals(
                 TextDocument("package fixture.gamma\n\nimport java.io.*\n\n" + four + "fun c(): Closeable? = null\nfun o(): OutputStream? = null\n"),
-                session.organizeImports(file, TextDocument(fiveNamed)),
+                lsp.organizedImports(session, file, TextDocument(fiveNamed)),
             )
         }
         assertTrue(Files.notExists(file))
+    }
+
+    @Test
+    @Order(27)
+    fun `an explicit import a new star import covers is an Unused Import when removing it adds no error, and used otherwise`() = runBlocking<Unit> {
+        val file = project.resolve(streamsPath)
+        val document = TextDocument(streams)
+        val usingAll = TextDocument("$streams\nfun serializable(): Serializable? = null\n")
+        // On disk, as for the Edits below: without the file, the removal check got no diagnostics and settled nothing.
+        Files.createDirectories(file.parent)
+        Files.writeString(file, streams)
+        try {
+            lsp.session { session ->
+                // Organize-imports answers java.io.* for both, so only removing each import tells which one is unused.
+                assertEquals(listOf("java.io.*"), lsp.organizedImports(session, file, document)?.imports?.map { it.text })
+                assertEquals(listOf("java.io.*"), lsp.organizedImports(session, file, usingAll)?.imports?.map { it.text })
+                assertEquals(
+                    setOf("java.io.Serializable"),
+                    session.unusedImports(file, document, document.imports.toSet(), Validation.DEFAULT_TIMEOUT).map { it.text }.toSet(),
+                )
+                assertEquals(emptySet(), session.unusedImports(file, usingAll, usingAll.imports.toSet(), Validation.DEFAULT_TIMEOUT))
+                // Without time for the check, an undecided import counts as used.
+                assertEquals(emptySet(), session.unusedImports(file, document, document.imports.toSet(), Duration.ZERO))
+            }
+        } finally {
+            Files.deleteIfExists(file)
+        }
     }
 
     @Test

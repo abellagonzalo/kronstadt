@@ -154,7 +154,7 @@ class RenameSymbolTest {
     private val withUnused = main.replace("import a.Greeter\n", "import a.Greeter\nimport a.Unused\n")
 
     /** Renames `Greeter` in [withUnused] the way kotlin-lsp does: its answer also deletes `import a.Unused`, in one edit across lines. */
-    private suspend fun renameDroppingUnused(organizedByText: Map<String, String>): Pair<FakeFileStore, RenameResult> {
+    private suspend fun renameDroppingUnused(unusedByText: Map<String, Set<String>>): Pair<FakeFileStore, RenameResult> {
         val files = FakeFileStore(root, mapOf(classPath to greeting, mainPath to withUnused))
         fun renamed(newName: String) = Rename.Changes(
             listOf(
@@ -173,17 +173,15 @@ class RenameSymbolTest {
         val intelligence = FakeCodeIntelligence(
             symbolsByText = mapOf(greeting to greeter("greet"), greeting.replace("Greeter", "Host") to host()),
             renames = mapOf((classFile to Position(2, 6)) to ::renamed),
-            organizedByText = organizedByText,
+            unusedByText = unusedByText,
         )
         return files to RenameSymbol(files, intelligence)("Greeter", "Host", file = classPath)
     }
 
     @Test
     fun `an import kotlin-lsp removes that the rename made unused goes, is reported, and isn't counted as a Usage`() = runTest {
-        // Organize-imports keeps a.Unused before the rename and drops it after.
-        val (files, result) = renameDroppingUnused(
-            mapOf(withUnused to withUnused, withUnused.replace("Greeter", "Host") to main.replace("Greeter", "Host")),
-        )
+        // a.Unused is used before the rename and unused after it.
+        val (files, result) = renameDroppingUnused(mapOf(withUnused.replace("Greeter", "Host") to setOf("a.Unused")))
 
         assertEquals(main.replace("Greeter", "Host"), files.content(mainPath))
         assertEquals(
@@ -198,9 +196,9 @@ class RenameSymbolTest {
 
     @Test
     fun `an import kotlin-lsp removes that was already unused stays, like kt_edit leaves it`() = runTest {
-        // Organize-imports drops a.Unused before the rename too.
+        // a.Unused is unused before the rename too.
         val (files, result) = renameDroppingUnused(
-            mapOf(withUnused to main, withUnused.replace("Greeter", "Host") to main.replace("Greeter", "Host")),
+            mapOf(withUnused to setOf("a.Unused"), withUnused.replace("Greeter", "Host") to setOf("a.Unused")),
         )
 
         assertEquals(withUnused.replace("Greeter", "Host"), files.content(mainPath))
@@ -208,7 +206,7 @@ class RenameSymbolTest {
     }
 
     @Test
-    fun `an import kotlin-lsp removes stays when organize-imports gives no answer`() = runTest {
+    fun `an import kotlin-lsp removes stays when the code intelligence finds no Unused Imports`() = runTest {
         val (files, result) = renameDroppingUnused(emptyMap())
 
         assertEquals(withUnused.replace("Greeter", "Host"), files.content(mainPath))

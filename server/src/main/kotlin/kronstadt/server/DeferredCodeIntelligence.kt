@@ -11,6 +11,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Definition
 import kronstadt.core.domain.Diagnostic
+import kronstadt.core.domain.ImportDirective
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
@@ -106,8 +107,8 @@ internal class DeferredCodeIntelligence(
         override suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String): Rename =
             open().rename(file, document, position, newName)
 
-        override suspend fun organizeImports(file: Path, document: TextDocument): TextDocument? =
-            open().organizeImports(file, document)
+        override suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration): Set<ImportDirective> =
+            open().unusedImports(file, document, among, budget)
 
         /** Only an analysis opens documents, so with nothing analysed yet there is nothing to tell. */
         override suspend fun writtenBack(file: Path, document: TextDocument) {

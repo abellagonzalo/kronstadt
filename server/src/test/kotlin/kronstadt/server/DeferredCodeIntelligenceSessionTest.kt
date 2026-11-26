@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Definition
 import kronstadt.core.domain.Diagnostic
+import kronstadt.core.domain.ImportDirective
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
@@ -127,7 +128,7 @@ private class RecordingIntelligence : CodeIntelligence {
                 override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> = emptyList()
                 override suspend fun prepareRename(file: Path, document: TextDocument, position: Position) = RenamePreparation.Refused("unsupported")
                 override suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String) = Rename.Refused("unsupported")
-                override suspend fun organizeImports(file: Path, document: TextDocument): TextDocument? = null
+                override suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration) = emptySet<ImportDirective>()
                 override suspend fun writtenBack(file: Path, document: TextDocument) {
                     events += "written back ${file.fileName}"
                 }

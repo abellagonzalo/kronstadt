@@ -7,6 +7,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Definition
 import kronstadt.core.domain.Diagnostic
+import kronstadt.core.domain.ImportDirective
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
@@ -112,7 +113,8 @@ fun EditResult.lookupFailure(): LookupFailure =
  * With a [searchCap], a search returns at most that many results, exact names first, possibly incomplete once it does.
  * Diagnostics are [diagnosticsByText] for the exact text, else none; each pull takes [diagnosticsDelay] and first runs
  * [beforeDiagnostics]; a pull of a text in [failingDiagnostics] fails. References are [references], and definitions [definitions], for the file and the exact position
- * asked about, else none. Organize-imports answers [organizedByText] for the exact text, else nothing.
+ * asked about, else none. The Unused Imports among those asked about are those [unusedByText] gives for the exact text,
+ * else none; each question is logged in [unusedAsked].
  *
  * Documents are modelled like the language server sees them: a session's first analysis of a file opens it at
  * version 1 (unless another session holds it), an analysis of different text changes it to the next version, and a
@@ -135,7 +137,7 @@ class FakeCodeIntelligence(
     private val definitions: Map<Pair<Path, Position>, List<Definition>> = emptyMap(),
     private val renames: Map<Pair<Path, Position>, (newName: String) -> Rename> = emptyMap(),
     private val renameRefusals: Map<Pair<Path, Position>, String> = emptyMap(),
-    private val organizedByText: Map<String, String> = emptyMap(),
+    private val unusedByText: Map<String, Set<String>> = emptyMap(),
     private val searchCap: Int? = null,
     /**
      * Diagnostics for a file's exact text given the text of every open document, ahead of [diagnosticsByText]: what
@@ -143,10 +145,10 @@ class FakeCodeIntelligence(
      */
     private val diagnosticsInContext: (file: Path, text: String, open: Map<Path, String>) -> List<Diagnostic>? = { _, _, _ -> null },
     /**
-     * Organize-imports' answer for a file's exact text given the text of every open document, ahead of
-     * [organizedByText]: what a file's unused imports depend on beyond its own text. Null leaves it to [organizedByText].
+     * The Unused Imports of a file's exact text given the text of every open document, ahead of [unusedByText]: what a
+     * file's unused imports depend on beyond its own text. Null leaves it to [unusedByText].
      */
-    private val organizedInContext: (file: Path, text: String, open: Map<Path, String>) -> String? = { _, _, _ -> null },
+    private val unusedInContext: (file: Path, text: String, open: Map<Path, String>) -> Set<String>? = { _, _, _ -> null },
 ) : CodeIntelligence {
     val analysed = mutableListOf<Pair<Path, TextDocument>>()
 
@@ -156,6 +158,9 @@ class FakeCodeIntelligence(
     /** Every file a references request was made in, in order. */
     val referenced = mutableListOf<Path>()
     val searched = mutableListOf<String>()
+
+    /** Every Unused Imports question, in order: the file and the imports it was asked about. */
+    val unusedAsked = mutableListOf<Pair<Path, Set<String>>>()
 
     /** What the language server was told, in order: `open <file> v1`, `change <file> v2`, `save <file>`, `close <file>`. */
     val events = mutableListOf<String>()
@@ -270,10 +275,11 @@ class FakeCodeIntelligence(
             return renames[file to position]?.invoke(newName) ?: Rename.Refused(CANNOT_RENAME)
         }
 
-        override suspend fun organizeImports(file: Path, document: TextDocument): TextDocument? {
+        override suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration): Set<ImportDirective> {
             sync(file, document)
-            return (organizedInContext(file, document.text, open.mapValues { it.value.text }) ?: organizedByText[document.text])
-                ?.let(::TextDocument)
+            unusedAsked += file to among.mapTo(mutableSetOf()) { it.text }
+            val unused = unusedInContext(file, document.text, open.mapValues { it.value.text }) ?: unusedByText[document.text].orEmpty()
+            return among.filterTo(mutableSetOf()) { it.text in unused }
         }
 
         override suspend fun writtenBack(file: Path, document: TextDocument) {

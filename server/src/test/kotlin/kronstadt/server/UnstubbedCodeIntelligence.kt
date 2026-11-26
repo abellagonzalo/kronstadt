@@ -3,6 +3,7 @@ package kronstadt.server
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Definition
 import kronstadt.core.domain.Diagnostic
+import kronstadt.core.domain.ImportDirective
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
@@ -27,7 +28,8 @@ internal open class UnstubbedAnalysisSession : AnalysisSession {
         notStubbed("prepareRename")
     override suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String): Rename =
         notStubbed("rename")
-    override suspend fun organizeImports(file: Path, document: TextDocument): TextDocument? = notStubbed("organizeImports")
+    override suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration): Set<ImportDirective> =
+        notStubbed("unusedImports")
     override suspend fun writtenBack(file: Path, document: TextDocument): Unit = notStubbed("writtenBack")
 }
 

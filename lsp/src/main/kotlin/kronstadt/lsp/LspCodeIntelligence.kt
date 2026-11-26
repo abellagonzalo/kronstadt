@@ -14,6 +14,7 @@ import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Definition
 import kronstadt.core.domain.LibrarySource
 import kronstadt.core.domain.Diagnostic
+import kronstadt.core.domain.ImportDirective
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
@@ -150,6 +151,10 @@ public class LspCodeIntelligence private constructor(
     internal suspend fun reportedDocumentSymbols(file: Path, document: TextDocument): List<DocumentSymbol> =
         session { (it as Session).reportedSymbols(file, document) }.orEmpty().map { it.right }
 
+    /** kotlin-lsp's organize-imports answer for [document] in [session], one of this instance's, so contract tests can pin what it reports. */
+    internal suspend fun organizedImports(session: AnalysisSession, file: Path, document: TextDocument): TextDocument? =
+        (session as Session).organizeImports(file, document)
+
     /** The documents one tool call holds open: its first analysis of a file counts it as one more holder. */
     private inner class Session : AnalysisSession {
         /** Guarded by [syncLock], like [openDocuments]. */
@@ -174,11 +179,22 @@ public class LspCodeIntelligence private constructor(
         }
 
         /**
+         * kotlin-lsp has no unused-import diagnostic, so its organize-imports answer decides (see [organizeImports]), except for
+         * an explicit import a star import new in that answer covers, which is settled by removing it (see
+         * [unusedImportsOrganized]). Without an answer every import counts as used. [budget] doesn't bound organize-imports.
+         */
+        override suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration): Set<ImportDirective> {
+            if (among.isEmpty()) return emptySet()
+            val organized = organizeImports(file, document) ?: return emptySet()
+            return unusedImportsOrganized(file, document, document.importsOrganizedIn(organized), among, budget)
+        }
+
+        /**
          * Runs kotlin-lsp's organize-imports command on [document] and applies the edit it sends back, which [refusedEdits]
          * refused, to a copy: kotlin-lsp 271.2085.0 reports no unused import as a diagnostic, and its "Organize imports" code
          * action carries no edit, only this command, which sends the edit before it answers. An error answer is no answer.
          */
-        override suspend fun organizeImports(file: Path, document: TextDocument): TextDocument? {
+        suspend fun organizeImports(file: Path, document: TextDocument): TextDocument? {
             val uri = LspMapping.uri(file)
             val params = ExecuteCommandParams(ORGANIZE_IMPORTS, listOf<Any>(uri))
             // Being unsure counts as used (ADR 0004): any failure, not only an error answer, is no answer.

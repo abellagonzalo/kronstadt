@@ -4,6 +4,7 @@ import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.FileChange
+import kronstadt.core.domain.ImportDirective
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
@@ -105,7 +106,7 @@ private class RenamingIntelligence(private val a: Path, private val b: Path) : U
             ),
         )
 
-        override suspend fun organizeImports(file: Path, document: TextDocument): TextDocument? = null
+        override suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration) = emptySet<ImportDirective>()
 
         override suspend fun writtenBack(file: Path, document: TextDocument) = Unit
     })

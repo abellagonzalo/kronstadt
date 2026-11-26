@@ -4,9 +4,9 @@ package kronstadt.core.domain
  * One import directive without the `import` keyword, e.g. `a.b.C`, `a.b.*` or `a.b.C as D`. Two directives are the
  * same when they import the same name under the same alias, backticks or whitespace aside; they sort by that name.
  */
-internal class ImportDirective(
+public class ImportDirective internal constructor(
     /** The directive as it is written in a file, whitespace normalized. */
-    val text: String,
+    public val text: String,
     private val key: String,
 ) : Comparable<ImportDirective> {
     override fun compareTo(other: ImportDirective): Int = key.compareTo(other.key)
@@ -16,36 +16,36 @@ internal class ImportDirective(
     override fun hashCode(): Int = key.hashCode()
 
     /** Whether this is a star import, e.g. `a.b.*`. */
-    val isStar: Boolean get() = key.endsWith(".*")
+    public val isStar: Boolean get() = key.endsWith(".*")
 
     /** Whether [star], a star import, brings this directive's name into scope too: it imports from that package, without an alias. */
-    fun isCoveredBy(star: ImportDirective): Boolean =
+    public fun isCoveredBy(star: ImportDirective): Boolean =
         star.isStar && !isStar && !isAliased && key.substringBeforeLast('.') + ".*" == star.key
 
     /** Whether this directive imports its name under an alias, e.g. `a.b.C as D`. */
-    val isAliased: Boolean get() = " as " in key
+    internal val isAliased: Boolean get() = " as " in key
 
     /** How many leading dot-separated segments of its imported name this directive shares with [other]'s. */
-    fun sharedSegments(other: ImportDirective): Int =
+    internal fun sharedSegments(other: ImportDirective): Int =
         segments.zip(other.segments).takeWhile { (a, b) -> a == b }.size
 
     /** The dot-separated segments of the imported name, alias aside, e.g. `a`, `b`, `*` for `a.b.*`. */
-    val segments: List<String> get() = key.substringBefore(" as ").split('.')
+    internal val segments: List<String> get() = key.substringBefore(" as ").split('.')
 
     /** The directive as a line of a file. */
-    val line: String get() = "import $text"
+    internal val line: String get() = "import $text"
 
     override fun toString(): String = text
 
-    companion object {
+    public companion object {
         /** [raw] as a directive, with or without the `import` keyword and a trailing `;`. */
-        fun parse(raw: String): Result<ImportDirective> = FileHeader.directive(raw)?.let { Result.success(it) }
+        public fun parse(raw: String): Result<ImportDirective> = FileHeader.directive(raw)?.let { Result.success(it) }
             ?: Result.failure(IllegalArgumentException("not an import directive: '$raw'"))
     }
 }
 
 /** Whole [lines] (0-based; empty to insert before `lines.first`) to replace with [newLines]. */
-internal data class LineSplice(val lines: IntRange, val newLines: List<String>)
+public data class LineSplice(val lines: IntRange, val newLines: List<String>)
 
 private const val BYTE_ORDER_MARK = "\uFEFF"
 
@@ -136,26 +136,16 @@ private val ImportDirective.layoutGroup: Int
     get() = if (isAliased) 4 else listOf("java", "javax", "kotlin").indexOf(segments.first()) + 1
 
 /** The imports [removingImports] removes, and the [splice] that removes them. */
-internal class ImportRemoval(val removed: List<ImportDirective>, val splice: LineSplice)
+public class ImportRemoval internal constructor(
+    /** The imports removed, in the order the file lists them. */
+    public val removed: List<ImportDirective>,
+    /** The lines to replace to remove them. */
+    public val splice: LineSplice,
+)
 
-/**
- * What [organized], a file's text after the code intelligence organized its imports, tells of the file's own imports:
- * those it [dropped], found unused, and those it left [undecided]: explicit imports it dropped only because a star
- * import of their package, new in [organized], now brings them in. kotlin-lsp collapses a package into a star once
- * enough of its names are used, whether or not one of them still is (#81). Every other import is kept: one still in
- * [organized], and a star import whose package it newly imports by name.
- */
-internal class OrganizedImports(val dropped: Set<ImportDirective>, val undecided: Set<ImportDirective>)
-
-/** What [organized], this file's text after the code intelligence organized its imports, tells of its imports. */
-internal fun TextDocument.importsOrganizedIn(organized: TextDocument): OrganizedImports {
-    val own = FileHeader.of(text).imports.map { it.directive }
-    val left = FileHeader.of(organized.text).imports.map { it.directive }.toSet()
-    val (newStars, newNames) = left.filter { it !in own }.partition { it.isStar }
-    val gone = own.filter { directive -> directive !in left && newNames.none { it.isCoveredBy(directive) } }
-    val (undecided, dropped) = gone.partition { directive -> newStars.any(directive::isCoveredBy) }
-    return OrganizedImports(dropped.toSet(), undecided.toSet())
-}
+/** The import directives in this file's header, in the order it lists them. */
+public val TextDocument.imports: List<ImportDirective>
+    get() = FileHeader.of(text).imports.map { it.directive }
 
 /**
  * The removal of those of [drop] this file has, each with its line; null if none goes. Only an import alone on its line
@@ -163,7 +153,7 @@ internal fun TextDocument.importsOrganizedIn(organized: TextDocument): Organized
  * changes, except that a blank line goes where a removed import would leave it next to another blank line or at the
  * list's start or end; an emptied list goes with the blank line that set it apart, so no stray one stays.
  */
-internal fun TextDocument.removingImports(drop: Set<ImportDirective>): ImportRemoval? {
+public fun TextDocument.removingImports(drop: Set<ImportDirective>): ImportRemoval? {
     val header = FileHeader.of(text)
     val removed = header.imports.filter { it.directive in drop && heldAlone(it) }
     if (removed.isEmpty()) return null

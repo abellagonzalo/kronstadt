@@ -2,9 +2,7 @@ package kronstadt.core.application
 
 import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.CodeSymbol
-import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.Position
-import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.TextRange
 import java.nio.file.Path
@@ -28,24 +26,16 @@ class EditImportsTest {
 
     /**
      * Runs [operations] on a file holding [source]; the fake reports the Symbols [symbolsByText] give for each exact
-     * text, organizes imports as [organizedByText] gives, reports [diagnosticsByText] and fails to pull diagnostics for the
-     * texts in [failingDiagnostics].
+     * text, and finds the Unused Imports [unusedByText] gives for each exact text.
      */
     private suspend fun run(
         source: String,
         symbolsByText: Map<String, List<CodeSymbol>>,
         vararg operations: Operation,
-        organizedByText: Map<String, String> = emptyMap(),
-        diagnosticsByText: Map<String, List<Diagnostic>> = emptyMap(),
-        failingDiagnostics: Set<String> = emptySet(),
+        unusedByText: Map<String, Set<String>> = emptyMap(),
     ): Pair<EditResult, FakeFileStore> {
         val files = FakeFileStore(root, mapOf(path to source))
-        val intelligence = FakeCodeIntelligence(
-            symbolsByText = symbolsByText,
-            organizedByText = organizedByText,
-            diagnosticsByText = diagnosticsByText,
-            failingDiagnostics = failingDiagnostics,
-        )
+        val intelligence = FakeCodeIntelligence(symbolsByText = symbolsByText, unusedByText = unusedByText)
         val result = Edit(files, intelligence)(operations.toList())
         intelligence.assertOneSessionClosedEverything()
         return result to files
@@ -130,9 +120,7 @@ class EditImportsTest {
         val texts = mapOf(source to listOf(function("greet", 5), function("make", 7)), expected to listOf(function("greet", 4)))
 
         val afterDelete = "package a\n\nimport b.Bravo\nimport c.Charlie\n\nfun greet(): Int = Charlie.one\n"
-        val organized = mapOf(source to source, afterDelete to expected)
-
-        val (result, files) = run(source, texts, Delete(path, "make"), organizedByText = organized)
+        val (result, files) = run(source, texts, Delete(path, "make"), unusedByText = mapOf(afterDelete to setOf("b.Bravo")))
 
         assertEquals(expected, files.content(path))
         assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0, importsRemoved = listOf("b.Bravo")))), result)
@@ -153,10 +141,7 @@ class EditImportsTest {
                 sourceAfter to listOf(function("greet", 4)),
                 targetAfter to listOf(function("hello", 4), function("make", 6)),
             ),
-            organizedByText = mapOf(
-                source to source,
-                "package a\n\nimport b.B\nimport c.C\n\nfun greet(): Int = 1\n" to "package a\n\nfun greet(): Int = 1\n",
-            ),
+            unusedByText = mapOf("package a\n\nimport b.B\nimport c.C\n\nfun greet(): Int = 1\n" to setOf("b.B", "c.C")),
         )
 
         val result = Edit(files, intelligence)(
@@ -167,6 +152,8 @@ class EditImportsTest {
         )
 
         intelligence.assertOneSessionClosedEverything()
+        // The listed import is never asked about.
+        assertEquals(setOf("b.B"), intelligence.unusedAsked.first { it.first == root.resolve(path) }.second)
         assertEquals(
             EditResult.Written(
                 listOf(
@@ -202,10 +189,10 @@ class EditImportsTest {
             ),
             // B.kt's member Thing.info, new in its current text, shadows the imported extension: x.info is unused in A.kt
             // exactly when B.kt is open at that text, whatever A.kt's own text.
-            organizedInContext = { file, text, open ->
+            unusedInContext = { file, _, open ->
                 if (file != root.resolve(path)) null
-                else if ("fun info()" in open.getValue(root.resolve(other))) text.replace("import x.info\n\n", "")
-                else text
+                else if ("fun info()" in open.getValue(root.resolve(other))) setOf("x.info")
+                else emptySet()
             },
         )
 
@@ -228,20 +215,17 @@ class EditImportsTest {
         val replaced = "package a\n\nimport d.D\nimport b.B\nimport c.Old\n\nfun greet() = D\n"
         val expected = "package a\n\nimport d.D\nimport c.Old\n\nfun greet() = D\n"
         val texts = mapOf(source to listOf(function("greet", 6)), expected to listOf(function("greet", 5)))
-        // Organize-imports sorts, and drops c.Old both before and after.
-        val organized = mapOf(
-            source to "package a\n\nimport b.B\nimport d.D\n\nfun greet() = D + B\n",
-            replaced to "package a\n\nimport d.D\n\nfun greet() = D\n",
-        )
+        // c.Old is unused both before and after.
+        val unused = mapOf(source to setOf("c.Old"), replaced to setOf("b.B", "c.Old"))
 
-        val (result, files) = run(source, texts, Replace(path, "greet", "fun greet() = D"), organizedByText = organized)
+        val (result, files) = run(source, texts, Replace(path, "greet", "fun greet() = D"), unusedByText = unused)
 
         assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 6, 6)), emptyList(), 0, emptyList(), 0, importsRemoved = listOf("b.B")))), result)
         assertEquals(expected, files.content(path))
     }
 
     @Test
-    fun `without an organize-imports answer, every import stays`() = runTest {
+    fun `without an Unused Imports answer, every import stays`() = runTest {
         val source = "package a\n\nimport b.Bravo\n\nfun greet(): Int = 1\n\nfun make() = Bravo()\n"
         val expected = "package a\n\nimport b.Bravo\n\nfun greet(): Int = 1\n"
         val texts = mapOf(source to listOf(function("greet", 4), function("make", 6)), expected to listOf(function("greet", 4)))
@@ -252,81 +236,46 @@ class EditImportsTest {
         assertEquals(expected, files.content(path))
     }
 
-    // kotlin-lsp's organize-imports collapses a package into a star import once 5 of its names are used, used or not (#81).
-    private val starSource = "package a\n\nimport c.C1\nimport c.C2\n\nfun greet() = C1\n\nfun make() = C2\n"
-    private val starAfterDelete = "package a\n\nimport c.C1\nimport c.C2\n\nfun greet() = C1\n"
-    private val starExpected = "package a\n\nimport c.C1\n\nfun greet() = C1\n"
-    private val starTexts = mapOf(
-        starSource to listOf(function("greet", 5), function("make", 7)),
-        starAfterDelete to listOf(function("greet", 5)),
-        starExpected to listOf(function("greet", 4)),
-    )
-    private val starOrganized = mapOf(
-        starSource to "package a\n\nimport c.*\n\nfun greet() = C1\n\nfun make() = C2\n",
-        starAfterDelete to "package a\n\nimport c.*\n\nfun greet() = C1\n",
-    )
-
-    private fun unresolved(name: String, line: Int) =
-        Diagnostic(TextRange(Position(line, 14), Position(line, 16)), Severity.ERROR, "Unresolved reference '$name'.", "UNRESOLVED_REFERENCE")
-
-    /** Removing an import from these texts leaves a name unresolved; from any other, nothing. */
-    private val starDiagnostics = mapOf(
-        // Without both imports, after the delete.
-        "package a\n\nfun greet() = C1\n" to listOf(unresolved("C1", 2)),
-        // Without c.C1, after the delete.
-        "package a\n\nimport c.C2\n\nfun greet() = C1\n" to listOf(unresolved("C1", 4)),
-        // Without c.C2, before the delete.
-        "package a\n\nimport c.C1\n\nfun greet() = C1\n\nfun make() = C2\n" to listOf(unresolved("C2", 6)),
+    // Which imports go is core's policy; which are Unused Imports is the code intelligence's answer (ADR 0004).
+    private val pairSource = "package a\n\nimport c.C1\nimport c.C2\n\nfun greet() = C1\n\nfun make() = C2\n"
+    private val pairAfterDelete = "package a\n\nimport c.C1\nimport c.C2\n\nfun greet() = C1\n"
+    private val pairExpected = "package a\n\nimport c.C1\n\nfun greet() = C1\n"
+    private val pairTexts = mapOf(
+        pairSource to listOf(function("greet", 5), function("make", 7)),
+        pairAfterDelete to listOf(function("greet", 5)),
+        pairExpected to listOf(function("greet", 4)),
     )
 
     @Test
-    fun `an import a new star import covers is removed if removing it adds no error, and one still used stays`() = runTest {
-        val (result, files) = run(
-            starSource, starTexts, Delete(path, "make"), organizedByText = starOrganized, diagnosticsByText = starDiagnostics,
-        )
+    fun `only the import the Edit made unused goes, and one still used stays`() = runTest {
+        val (result, files) = run(pairSource, pairTexts, Delete(path, "make"), unusedByText = mapOf(pairAfterDelete to setOf("c.C2")))
 
         assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0, importsRemoved = listOf("c.C2")))), result)
-        assertEquals(starExpected, files.content(path))
+        assertEquals(pairExpected, files.content(path))
     }
 
     @Test
-    fun `an import a new star import covers that was already unused before the Edit stays`() = runTest {
+    fun `an import that was already unused before the Edit stays`() = runTest {
         val source = "package a\n\nimport c.C1\nimport c.C2\n\nfun greet() = C1\n\nfun make() = 1\n"
-        val texts = mapOf(source to listOf(function("greet", 5), function("make", 7)), starAfterDelete to listOf(function("greet", 5)))
-        val organized = starOrganized + (source to "package a\n\nimport c.*\n\nfun greet() = C1\n\nfun make() = 1\n")
+        val texts = mapOf(source to listOf(function("greet", 5), function("make", 7)), pairAfterDelete to listOf(function("greet", 5)))
+        val unused = mapOf(source to setOf("c.C2"), pairAfterDelete to setOf("c.C2"))
 
-        val (result, files) = run(source, texts, Delete(path, "make"), organizedByText = organized, diagnosticsByText = starDiagnostics)
+        val (result, files) = run(source, texts, Delete(path, "make"), unusedByText = unused)
 
         assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0))), result)
-        assertEquals(starAfterDelete, files.content(path))
+        assertEquals(pairAfterDelete, files.content(path))
     }
 
     @Test
-    fun `an import an Operation lists stays, even if a new star import covers it and it is unused`() = runTest {
+    fun `an import an Operation lists stays, even if the Edit made it unused`() = runTest {
         val (result, files) = run(
-            starSource,
-            starTexts,
+            pairSource,
+            pairTexts,
             Delete(path, "make", imports = listOf("c.C2")),
-            organizedByText = starOrganized,
-            diagnosticsByText = starDiagnostics,
+            unusedByText = mapOf(pairAfterDelete to setOf("c.C2")),
         )
 
         assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0))), result)
-        assertEquals(starAfterDelete, files.content(path))
-    }
-
-    @Test
-    fun `without a diagnostics answer, an import a new star import covers counts as used and stays`() = runTest {
-        val (result, files) = run(
-            starSource,
-            starTexts,
-            Delete(path, "make"),
-            organizedByText = starOrganized,
-            diagnosticsByText = starDiagnostics,
-            failingDiagnostics = setOf("package a\n\nfun greet() = C1\n"),
-        )
-
-        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0))), result)
-        assertEquals(starAfterDelete, files.content(path))
+        assertEquals(pairAfterDelete, files.content(path))
     }
 }
