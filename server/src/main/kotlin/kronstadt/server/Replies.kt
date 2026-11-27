@@ -376,9 +376,12 @@ internal object Replies {
                 "Pick another name, or move that file first."
     }
 
+    /** Heads the imports an Edit or rename may have made unused but kept, for want of an answer about them (#209). */
+    private const val UNCHECKED_IMPORTS = "Kept imports it couldn't check (no answer from the code intelligence):"
+
     /**
      * A summary line with the new path, as kt_find_usages counts (`3 usages in 2 files (+1 import)`), then each changed
-     * file with its usages and new warnings, then any file rename and removed imports.
+     * file with its usages and new warnings, then any file rename, removed imports and imports kept unchecked.
      */
     private fun renamed(symbol: String, newName: String, result: RenameResult.Renamed) = buildString {
         val usages = result.files.sumOf { it.usages }
@@ -407,6 +410,10 @@ internal object Replies {
             append("Removed imports it made unused:\n")
             result.importsRemoved.forEach { append("  ").append(it.file).append(": ").append(it.import).append('\n') }
         }
+        if (result.importsUnchecked.isNotEmpty()) {
+            append(UNCHECKED_IMPORTS).append('\n')
+            result.importsUnchecked.forEach { append("  ").append(it.file).append(": ").append(it.import).append('\n') }
+        }
     }.trimEnd()
 
     /** One file's outcome: the Symbols the edit left, the imports it made unused and removed, then new warnings and the errors it already had. */
@@ -416,6 +423,10 @@ internal object Replies {
         if (file.importsRemoved.isNotEmpty()) {
             append("Removed imports it made unused:\n")
             file.importsRemoved.forEach { append("  ").append(it).append('\n') }
+        }
+        if (file.importsUnchecked.isNotEmpty()) {
+            append(UNCHECKED_IMPORTS).append('\n')
+            file.importsUnchecked.forEach { append("  ").append(it).append('\n') }
         }
         if (file.newWarnings.isNotEmpty()) {
             append("New warnings:\n")

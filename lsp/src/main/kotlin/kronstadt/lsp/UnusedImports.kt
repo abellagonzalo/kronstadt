@@ -35,9 +35,15 @@ internal fun TextDocument.importsOrganizedIn(organized: TextDocument): Organized
 
 /**
  * What [organized], kotlin-lsp's organize-imports answer for [document] (the content of [file]), shows of [among], its
- * imports (ADR 0004): those it dropped are unused, and those it left undecided are unused if removing them adds no
- * error, used if it adds one, and still undecided without an answer (see [removableAmong]). Every other one is used.
- * Without an organize-imports answer, every one is undecided. [budget] bounds only the removal check.
+ * imports (ADR 0004): those it dropped are unused, and those it left undecided are used if the code refers to their
+ * name, else unused if removing them adds no error, used if it adds one, and still undecided without an answer (see
+ * [removableAmong]). Every other one is used. Without an organize-imports answer, every one is undecided. [budget]
+ * bounds only the removal check.
+ *
+ * A collapsed package leaves every explicit import of it undecided, most of them still used; checking each by removing
+ * it cost a file 2 diagnostics round-trips plus one per import, enough to use up the budget of a batch of files (#209).
+ * Referring to the name settles most of them at no cost; a name that is referred to while its import is unused (a local
+ * declaration shadowing it) only keeps that import.
  */
 internal suspend fun AnalysisSession.unusedPerOrganizeImports(
     file: Path,
@@ -47,7 +53,9 @@ internal suspend fun AnalysisSession.unusedPerOrganizeImports(
     budget: Duration,
 ): ImportUsage {
     if (organized == null) return ImportUsage.undecided(among)
-    val removable = removableAmong(file, document, organized.undecided.intersect(among), budget)
+    val referred = document.namesInCode()
+    val suspects = organized.undecided.intersect(among).filterTo(linkedSetOf()) { it.importedName !in referred }
+    val removable = removableAmong(file, document, suspects, budget)
     return removable.copy(unused = organized.dropped.intersect(among) + removable.unused)
 }
 
@@ -92,4 +100,61 @@ private suspend fun AnalysisSession.removableAmong(
         // What was settled before the failure stands; the rest stays undecided.
     }
     return ImportUsage(unused, suspects - unused - used)
+}
+
+/** The simple name this directive brings into scope, backticks aside: its alias if it has one, e.g. `C` for `a.b.C`. */
+private val ImportDirective.importedName: String
+    get() = (text.substringAfter(" as ", "").ifEmpty { text.substringAfterLast('.') }).trim().removeSurrounding("`")
+
+/**
+ * The names this text's code refers to, backticks aside: identifiers outside its package and import lines, comments,
+ * and string and character literals (templates in strings too), and not right after a `.`, where a name is a member's.
+ * Missing a name only costs a removal check.
+ */
+private fun TextDocument.namesInCode(): Set<String> {
+    val names = mutableSetOf<String>()
+    var i = 0
+    var lineStart = true
+    var afterDot = false
+    /** Moves [i] past the first [end] at or after [from], or to the end of the text. */
+    fun skipPast(end: String, from: Int) {
+        val at = text.indexOf(end, from)
+        i = if (at < 0) text.length else at + end.length
+    }
+    /** Moves [i] to the end of its line, its line break or the end of the text. */
+    fun skipLine() {
+        i = text.indexOf('\n', i).takeIf { it >= 0 } ?: text.length
+    }
+    while (i < text.length) {
+        val c = text[i]
+        when {
+            c == '\n' -> { lineStart = true; afterDot = false; i++ }
+            c.isWhitespace() -> i++
+            text.startsWith("//", i) -> skipLine()
+            text.startsWith("/*", i) -> skipPast("*/", i + 2)
+            text.startsWith("\"\"\"", i) -> skipPast("\"\"\"", i + 3)
+            c == '"' || c == '\'' -> {
+                i++
+                while (i < text.length && text[i] != c && text[i] != '\n') i += if (text[i] == '\\') 2 else 1
+                i++
+                lineStart = false; afterDot = false
+            }
+            c == '`' -> {
+                val end = text.indexOf('`', i + 1).takeIf { it >= 0 } ?: text.length
+                if (!afterDot) names += text.substring(i + 1, end)
+                i = end + 1
+                lineStart = false; afterDot = false
+            }
+            c.isJavaIdentifierStart() -> {
+                val start = i
+                while (i < text.length && text[i].isJavaIdentifierPart()) i++
+                val word = text.substring(start, i)
+                if (lineStart && (word == "import" || word == "package")) skipLine()
+                else if (!afterDot) names += word
+                lineStart = false; afterDot = false
+            }
+            else -> { afterDot = c == '.'; lineStart = false; i++ }
+        }
+    }
+    return names
 }

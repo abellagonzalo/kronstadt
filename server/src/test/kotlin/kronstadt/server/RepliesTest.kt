@@ -9,12 +9,15 @@ import kronstadt.core.application.FindUsagesResult
 import kronstadt.core.application.FoundDefinition
 import kronstadt.core.application.GetDefinitionResult
 import kronstadt.core.application.IndentationHint
+import kronstadt.core.application.KeptImport
 import kronstadt.core.application.LookupFailure
 import kronstadt.core.application.OperationFailure
 import kronstadt.core.application.Problem
 import kronstadt.core.application.ReadStructureResult
 import kronstadt.core.application.ReadSymbolResult
+import kronstadt.core.application.RemovedImport
 import kronstadt.core.application.RenameResult
+import kronstadt.core.application.RenamedFile
 import kronstadt.core.application.Snippet
 import kronstadt.core.application.SourceLine
 import kronstadt.core.application.UsageLine
@@ -308,6 +311,39 @@ class RepliesTest {
         assertEquals(
             Reply.result("Edited A.kt\nRemoved imports it made unused:\n  b.Bravo\n  c.Charlie"),
             edit(EditResult.Written(listOf(written)), "edit_in"),
+        )
+    }
+
+    @Test
+    fun `the result lists the imports kept for want of an answer apart from the removed ones (#209)`() {
+        val written = EditedFile("A.kt", emptyList(), emptyList(), 0, emptyList(), 0, importsRemoved = listOf("b.Bravo"), importsUnchecked = listOf("c.Charlie"))
+
+        assertEquals(
+            Reply.result(
+                "Edited A.kt\nRemoved imports it made unused:\n  b.Bravo\n" +
+                    "Kept imports it couldn't check (no answer from the code intelligence):\n  c.Charlie",
+            ),
+            edit(EditResult.Written(listOf(written)), "edit_in"),
+        )
+    }
+
+    @Test
+    fun `a rename lists the imports it removed, then those kept for want of an answer, by file (#209)`() {
+        val renamed = RenameResult.Renamed(
+            newPath = "hello",
+            files = listOf(RenamedFile("A.kt", usages = 0), RenamedFile("B.kt", usages = 1)),
+            importsRemoved = listOf(RemovedImport("B.kt", "b.Bravo")),
+            importsUnchecked = listOf(KeptImport("B.kt", "c.Charlie")),
+        )
+
+        assertEquals(
+            Reply.result(
+                "Renamed greet to hello: 1 usage in 1 file, and the declaration. New path: hello\n" +
+                    "  A.kt: declaration\n  B.kt: 1 usage\n" +
+                    "Removed imports it made unused:\n  B.kt: b.Bravo\n" +
+                    "Kept imports it couldn't check (no answer from the code intelligence):\n  B.kt: c.Charlie",
+            ),
+            Replies.rename(renamed, "greet", "hello"),
         )
     }
 

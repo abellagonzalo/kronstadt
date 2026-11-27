@@ -165,6 +165,9 @@ class FakeCodeIntelligence(
     /** Every Unused Imports question, in order: the file and the imports it was asked about. */
     val unusedAsked = mutableListOf<Pair<Path, Set<String>>>()
 
+    /** The budget of every Unused Imports question, in the order of [unusedAsked]. */
+    val unusedBudgets = mutableListOf<Duration>()
+
     /** What the language server was told, in order: `open <file> v1`, `change <file> v2`, `save <file>`, `close <file>`. */
     val events = mutableListOf<String>()
 
@@ -281,6 +284,7 @@ class FakeCodeIntelligence(
         override suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration): ImportUsage {
             sync(file, document)
             unusedAsked += file to among.mapTo(mutableSetOf()) { it.text }
+            unusedBudgets += budget
             val unused = unusedInContext(file, document.text, open.mapValues { it.value.text }) ?: unusedByText[document.text].orEmpty()
             val undecided = undecidedByText[document.text].orEmpty()
             return ImportUsage(

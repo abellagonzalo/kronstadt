@@ -177,13 +177,14 @@ public class Edit(
             val read = shadow.baseHashes()
             bases.entries.firstOrNull { (file, hash) -> file in read && read[file] != hash }
                 ?.let { return@session Settled(EditResult.WriteBackFailed(WriteBackFailure.ChangedOnDisk(files.display(it.key))), Settlement.Drop) }
-            val removed = shadow.removeImportsMadeUnused(session, validationTimeout) { file, imports -> imports - listed[file].orEmpty() }
-                .mapKeys { files.display(it.key) }
+            val cleanup = shadow.removeImportsMadeUnused(session, validationTimeout) { file, imports -> imports - listed[file].orEmpty() }
+            val removed = cleanup.removed.mapKeys { files.display(it.key) }
+            val unchecked = cleanup.unchecked.mapKeys { files.display(it.key) }
             when (val validated = shadow.validate()) {
                 is ShadowWorkspace.Validated.Passed -> {
                     val collateral = shadow.collateralErrors(collateralTimeout)
                     val written = shadow.writeBack()?.let { EditResult.WriteBackFailed(it) }
-                        ?: EditResult.Written(validated.files.map { it.copy(importsRemoved = removed[it.file].orEmpty()) }, collateral)
+                        ?: EditResult.Written(validated.files.map { it.copy(importsRemoved = removed[it.file].orEmpty(), importsUnchecked = unchecked[it.file].orEmpty()) }, collateral)
                     Settled(written, Settlement.Drop)
                 }
                 is ShadowWorkspace.Validated.Failed -> when (val failure = validated.failure) {
@@ -367,6 +368,11 @@ public data class EditedFile(
     val morePreexistingErrors: Int,
     /** Imports the Edit made unused, which it removed (ADR 0004), e.g. `a.b.C`. */
     val importsRemoved: List<String> = emptyList(),
+    /**
+     * Imports the Edit may have made unused but kept, because the code intelligence gave no answer about them, e.g. none
+     * in time: neither that they are used after the Edit, nor that they were unused before it (#209).
+     */
+    val importsUnchecked: List<String> = emptyList(),
     /** Whether the Edit created the file (see [Create]). */
     val created: Boolean = false,
 )

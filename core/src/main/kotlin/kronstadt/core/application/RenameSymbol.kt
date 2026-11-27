@@ -155,7 +155,8 @@ public class RenameSymbol(
 
     /**
      * The written rename: each changed file's [applied] counts with its [reports] from Validation, the declaring file
-     * first, the imports [removed] from each file, the file renamed and the Symbol's new path.
+     * first, the imports removed from each file and those kept unchecked ([imports]), the file renamed and the Symbol's
+     * new path.
      */
     private suspend fun renamed(
         shadow: ShadowWorkspace,
@@ -164,7 +165,7 @@ public class RenameSymbol(
         newName: String,
         applied: Applying.Applied,
         reports: List<EditedFile>,
-        removed: Map<Path, List<String>>,
+        imports: ImportsMadeUnused,
     ): RenameResult.Renamed {
         val renamedFiles = applied.counts.entries.sortedWith(compareBy({ it.key != target }, { files.display(it.key) }))
             .map { (file, counted) ->
@@ -178,7 +179,8 @@ public class RenameSymbol(
             newPath(shadow, target, node, newName),
             renamedFiles,
             applied.fileRenamed,
-            removed.flatMap { (file, imports) -> imports.map { RemovedImport(files.display(file), it) } },
+            imports.removed.flatMap { (file, removed) -> removed.map { RemovedImport(files.display(file), it) } },
+            imports.unchecked.flatMap { (file, kept) -> kept.map { KeptImport(files.display(file), it) } },
         )
     }
 
@@ -266,6 +268,12 @@ public data class FileRenamed(val from: String, val to: String)
 /** An import kotlin-lsp removed from [file] while renaming, e.g. `a.b.C`. */
 public data class RemovedImport(val file: String, val import: String)
 
+/**
+ * An import of [file] the rename may have made unused but kept, because the code intelligence gave no answer about it,
+ * e.g. none in time; e.g. `a.b.C`.
+ */
+public data class KeptImport(val file: String, val import: String)
+
 /** The outcome of a rename: written, or why nothing was (except [WriteBackFailure.PartiallyWritten]). */
 public sealed interface RenameResult {
     /**
@@ -278,6 +286,7 @@ public sealed interface RenameResult {
         val files: List<RenamedFile>,
         val fileRenamed: FileRenamed? = null,
         val importsRemoved: List<RemovedImport> = emptyList(),
+        val importsUnchecked: List<KeptImport> = emptyList(),
     ) : RenameResult
 
     /** The Symbol Path or file doesn't name exactly one Symbol. */
