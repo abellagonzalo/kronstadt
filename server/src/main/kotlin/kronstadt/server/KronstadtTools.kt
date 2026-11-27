@@ -39,7 +39,8 @@ internal class KronstadtTools(
     private val renameSymbol: RenameSymbol,
 ) {
     fun registerOn(server: Server) {
-        // The catch in each handler answers with classes of Kronstadt's too: loaded now, with the handlers (#199).
+        // Builds a failure's Reply once and drops it, only to load the classes each handler's catch uses now, while the
+        // install is the one the server started from (#199).
         Replies.thrown(NoClassDefFoundError()).toResult()
 
         server.register(

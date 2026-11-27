@@ -35,8 +35,8 @@ internal class ToolHarness(
     intelligence: CodeIntelligence,
     /** How long the use cases that wait for readiness wait. */
     readinessTimeout: Duration = Readiness.DEFAULT_TIMEOUT,
-    /** Where the server's own classes are loaded from, if not where the test's are: an install that can change under it. */
-    install: ClassLoader? = null,
+    /** Where the server's own classes are loaded from: the test's own, or an install that can change under it. */
+    install: ClassLoader = KronstadtTools::class.java.classLoader,
 ) {
     private val server = Server(
         Implementation(name = "kronstadt-test", version = "0"),
@@ -52,14 +52,11 @@ internal class ToolHarness(
         val getDefinition = GetDefinition(files, intelligence, readinessTimeout)
         val edit = Edit(files, intelligence, readinessTimeout, writeCalls = writeCalls)
         val renameSymbol = RenameSymbol(files, intelligence, readinessTimeout, writeCalls = writeCalls)
-        if (install == null) {
-            KronstadtTools(readStructure, findSymbol, readSymbol, findUsages, getDefinition, edit, renameSymbol).registerOn(server)
-        } else {
-            val tools = install.loadClass(KronstadtTools::class.java.name)
-            val instance = tools.constructors.single()
-                .newInstance(readStructure, findSymbol, readSymbol, findUsages, getDefinition, edit, renameSymbol)
-            tools.getMethod("registerOn", Server::class.java).invoke(instance, server)
-        }
+        // Through reflection, so the tools can come from another class loader than the test's: one path for both.
+        val tools = install.loadClass(KronstadtTools::class.java.name)
+        val instance = tools.constructors.single()
+            .newInstance(readStructure, findSymbol, readSymbol, findUsages, getDefinition, edit, renameSymbol)
+        tools.getMethod("registerOn", Server::class.java).invoke(instance, server)
     }
 
     /** No tool handler talks back to the client. */
