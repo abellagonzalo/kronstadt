@@ -5,9 +5,9 @@ import kronstadt.core.domain.SymbolSpan
 
 import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.CodeSymbol
-import kronstadt.core.domain.Position
 import kronstadt.core.domain.SymbolKind
-import kronstadt.core.domain.TextRange
+import kronstadt.core.domain.range
+import kronstadt.core.domain.symbol
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -15,20 +15,6 @@ import kotlin.test.assertIs
 
 class ReadSymbolTest {
     private val root = Path.of("/project")
-
-    private fun range(startLine: Int, startChar: Int, endLine: Int, endChar: Int) =
-        TextRange(Position(startLine, startChar), Position(endLine, endChar))
-
-    /** A symbol whose name sits at [nameLine]:[nameChar], as kotlin-lsp reports it. */
-    private fun symbol(
-        name: String,
-        kind: SymbolKind,
-        range: TextRange,
-        nameLine: Int,
-        nameChar: Int,
-        parameterTypes: String? = null, type: String? = null, receiver: String? = null,
-        children: List<CodeSymbol> = emptyList(),
-    ) = CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, parameterTypes = parameterTypes, type = type, receiver = receiver)
 
     private fun readSymbol(source: String, vararg symbols: CodeSymbol, intelligence: FakeCodeIntelligence = FakeCodeIntelligence(symbols.toList())) =
         ReadSymbol(FakeFileStore(root, mapOf("src/A.kt" to source)), intelligence)

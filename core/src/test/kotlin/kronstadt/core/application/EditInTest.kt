@@ -2,10 +2,9 @@ package kronstadt.core.application
 
 import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.CodeSymbol
-import kronstadt.core.domain.Position
 import kronstadt.core.domain.PreferredOverFunctions
 import kronstadt.core.domain.SymbolKind
-import kronstadt.core.domain.TextRange
+import kronstadt.core.domain.range
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -14,9 +13,6 @@ import kotlin.test.assertEquals
 class EditInTest {
     private val root = Path.of("/project")
     private val path = "src/A.kt"
-
-    private fun range(startLine: Int, startChar: Int, endLine: Int, endChar: Int) =
-        TextRange(Position(startLine, startChar), Position(endLine, endChar))
 
     private fun function(name: String, firstLine: Int, lastLine: Int) = CodeSymbol(
         name,

@@ -8,7 +8,8 @@ import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolCandidate
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
-import kronstadt.core.domain.TextRange
+import kronstadt.core.domain.range
+import kronstadt.core.domain.symbol
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -18,12 +19,6 @@ import kotlin.time.Duration.Companion.seconds
 /** `kt_find_usages`: Usages of a resolved Symbol, grouped by file and by the Symbol Path that contains each one. */
 class FindUsagesTest {
     private val root = Path.of("/project")
-
-    private fun range(startLine: Int, startChar: Int, endLine: Int, endChar: Int) =
-        TextRange(Position(startLine, startChar), Position(endLine, endChar))
-
-    private fun symbol(name: String, kind: SymbolKind, range: TextRange, nameLine: Int, nameChar: Int, parameterTypes: String? = null, type: String? = null, receiver: String? = null, children: List<CodeSymbol> = emptyList()) =
-        CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, parameterTypes = parameterTypes, type = type, receiver = receiver)
 
     /** A reference to a name at [line]:[char] (zero-based) of [file]. */
     private fun ref(file: String, line: Int, char: Int) = SourceLocation(root.resolve(file), range(line, char, line, char + 5))

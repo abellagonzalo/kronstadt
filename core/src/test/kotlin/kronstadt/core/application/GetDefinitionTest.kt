@@ -12,7 +12,8 @@ import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextDocument
-import kronstadt.core.domain.TextRange
+import kronstadt.core.domain.range
+import kronstadt.core.domain.symbol
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -23,12 +24,6 @@ import kotlin.time.Duration.Companion.seconds
 /** `kt_get_definition`: where a name used inside a Symbol is declared, without the agent computing positions. */
 class GetDefinitionTest {
     private val root = Path.of("/project")
-
-    private fun range(startLine: Int, startChar: Int, endLine: Int, endChar: Int) =
-        TextRange(Position(startLine, startChar), Position(endLine, endChar))
-
-    private fun symbol(name: String, kind: SymbolKind, range: TextRange, nameLine: Int, nameChar: Int, parameterTypes: String? = null, type: String? = null, receiver: String? = null, children: List<CodeSymbol> = emptyList()) =
-        CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, parameterTypes = parameterTypes, type = type, receiver = receiver)
 
     // The Greeter, documented, and a caller that uses it.
 

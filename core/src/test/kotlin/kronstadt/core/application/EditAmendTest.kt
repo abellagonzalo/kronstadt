@@ -3,10 +3,9 @@ package kronstadt.core.application
 import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Diagnostic
-import kronstadt.core.domain.Position
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SymbolKind
-import kronstadt.core.domain.TextRange
+import kronstadt.core.domain.range
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -30,8 +29,6 @@ class EditAmendTest {
 
     private val useDuration = EditIn(path, null, "= 1", "= Duration.ZERO")
     private val importDuration = EditIn(path, null, "package a\n", "package a\n\nimport kotlin.time.Duration\n")
-
-    private fun range(line: Int, start: Int, end: Int) = TextRange(Position(line, start), Position(line, end))
 
     private fun function(name: String, line: Int, length: Int) =
         CodeSymbol(name, SymbolKind.FUNCTION, range(line, 0, length), range(line, 4, 4 + name.length), emptyList(), parameterTypes = "")

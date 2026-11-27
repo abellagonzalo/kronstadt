@@ -9,6 +9,7 @@ import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.TextRange
+import kronstadt.core.domain.range
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -23,8 +24,6 @@ class SealedSubtypeCollateralTest {
     private val a = "src/A.kt"
     private val b = "src/B.kt"
     private val c = "src/C.kt"
-
-    private fun range(line: Int, start: Int, end: Int) = TextRange(Position(line, start), Position(line, end))
 
     /** A declaration filling [line] of [text] from its indentation, its name at [column]. */
     private fun declaration(text: String, name: String, kind: SymbolKind, line: Int, column: Int, type: String? = null): CodeSymbol {

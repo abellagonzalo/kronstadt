@@ -10,6 +10,7 @@ import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.SymbolPath
 import kronstadt.core.domain.TextRange
+import kronstadt.core.domain.range
 import java.io.IOException
 import java.nio.file.Path
 import kotlin.test.Test
@@ -23,8 +24,6 @@ class ShadowWorkspaceTest {
     private val root = Path.of("/project")
     private val a = "src/A.kt"
     private val b = "src/B.kt"
-
-    private fun range(line: Int, startChar: Int, endChar: Int) = TextRange(Position(line, startChar), Position(line, endChar))
 
     /** A function `fun <name>(<parameters>): Int = …` in [text], declared from [line] to the end of [lastLine]. */
     private fun function(text: String, name: String, line: Int, lastLine: Int = line, parameterTypes: String = "") = CodeSymbol(

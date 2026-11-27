@@ -8,6 +8,9 @@ import java.nio.file.Path
 internal fun range(startLine: Int, startChar: Int, endLine: Int, endChar: Int): TextRange =
     TextRange(Position(startLine, startChar), Position(endLine, endChar))
 
+/** A range on [line] from [startChar] to [endChar], all 0-based. */
+internal fun range(line: Int, startChar: Int, endChar: Int): TextRange = range(line, startChar, line, endChar)
+
 /** A Symbol over [range] whose name sits at [nameLine]:[nameChar]. */
 internal fun symbol(
     name: String,

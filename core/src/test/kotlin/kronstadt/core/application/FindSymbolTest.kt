@@ -6,11 +6,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.testTimeSource
 import kronstadt.core.domain.CodeSymbol
-import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
-import kronstadt.core.domain.TextRange
+import kronstadt.core.domain.range
+import kronstadt.core.domain.symbol
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -22,12 +22,6 @@ import kotlin.time.Duration.Companion.seconds
 /** `kt_find_symbol`: the index finds names; each file's `documentSymbol` tree gives the canonical Symbol Path. */
 class FindSymbolTest {
     private val root = Path.of("/project")
-
-    private fun range(startLine: Int, startChar: Int, endLine: Int, endChar: Int) =
-        TextRange(Position(startLine, startChar), Position(endLine, endChar))
-
-    private fun symbol(name: String, kind: SymbolKind, range: TextRange, nameLine: Int, nameChar: Int, parameterTypes: String? = null, type: String? = null, receiver: String? = null, children: List<CodeSymbol> = emptyList()) =
-        CodeSymbol(name, kind, range, range(nameLine, nameChar, nameLine, nameChar + name.length), children, parameterTypes = parameterTypes, type = type, receiver = receiver)
 
     private val userKt = "src/main/kotlin/com/example/User.kt"
     private val userSource = """
