@@ -4,6 +4,7 @@ import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.ImportDirective
+import kronstadt.core.domain.ImportUsage
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Severity
@@ -40,7 +41,10 @@ class KtEditToolTest {
     /** The Symbols of a file with exactly this text, instead of [symbols]; filled by a test before it calls the tool. */
     private val symbolsByText = mutableMapOf<String, List<CodeSymbol>>()
 
-    private val intelligence = EmptyIntelligence(symbols, diagnostics, symbolsByText)
+    /** The Unused Imports by exact text; filled by a test before it calls the tool. */
+    private val unusedByText = mutableMapOf<String, Set<String>>()
+
+    private val intelligence = EmptyIntelligence(symbols, diagnostics, symbolsByText, unusedByText)
 
     private val tools = ToolHarness(root, intelligence)
 
@@ -55,6 +59,42 @@ class KtEditToolTest {
 
         assertEquals(false, failed, text)
         assertEquals("package a\n\nimport a.x.Alpha\nimport b.Bravo\n\nfun greet(): Int = 2\n", file.readText())
+    }
+
+    // #193: a file that didn't compile before the Edit, importing b.Bar and b.Baz, which nothing refers to.
+    private val broken = "package a\n\nimport b.Bar\nimport b.Baz\nimport b.Foo\n\nfun greet(): Foo = missing()\n"
+    private val fixed = "package a\n\nimport b.Bar\nimport b.Baz\nimport b.Foo\nimport c.Qux\n\nfun greet(): Foo = Foo(Qux)\n"
+    private val fixBroken =
+        """{"operations": [{"type": "edit_in", "file": "A.kt", "old": "missing()", "new": "Foo(Qux)", "imports": ["c.Qux"]}]}"""
+
+    @Test
+    fun `an Edit fixing a file that didn't compile keeps the imports nothing referred to, when the code intelligence can't tell about its text before`() = runTest {
+        file.writeText(broken)
+        diagnostics[broken] = listOf(
+            Diagnostic(TextRange(Position(6, 19), Position(6, 26)), Severity.ERROR, "Unresolved reference 'missing'.", "UNRESOLVED_REFERENCE"),
+        )
+        // No answer about the text before the Edit.
+        unusedByText[fixed] = setOf("b.Bar", "b.Baz")
+
+        val (failed, text) = ktEdit(fixBroken)
+
+        assertEquals(false, failed, text)
+        assertEquals("Edited A.kt", text)
+        assertEquals(fixed, file.readText())
+    }
+
+    @Test
+    fun `an Edit removes and lists the imports the code intelligence shows it made unused`() = runTest {
+        file.writeText(broken)
+        // b.Bar and b.Baz used before the Edit, by this account.
+        unusedByText[broken] = emptySet()
+        unusedByText[fixed] = setOf("b.Bar", "b.Baz")
+
+        val (failed, text) = ktEdit(fixBroken)
+
+        assertEquals(false, failed, text)
+        assertEquals("Edited A.kt\nRemoved imports it made unused:\n  b.Bar\n  b.Baz", text)
+        assertEquals("package a\n\nimport b.Foo\nimport c.Qux\n\nfun greet(): Foo = Foo(Qux)\n", file.readText())
     }
 
     @Test
@@ -293,7 +333,8 @@ class KtEditToolTest {
 /**
  * Ready unless a test sets [readiness], and knows next to nothing: every file has [symbols] unless [symbolsByText] has its
  * exact text, the project index lists nothing, and there are no references or definitions and no diagnostics but
- * [diagnostics], so every other Edit validates. Organize-imports leaves every file as it is.
+ * [diagnostics], so every other Edit validates. The Unused Imports of a text are those [unusedByText] gives for it, and
+ * the others used; for a text it doesn't give, it has no answer, so every import is undecided.
  */
 private class EmptyIntelligence(
     private val symbols: List<CodeSymbol>,
@@ -301,12 +342,17 @@ private class EmptyIntelligence(
     private val diagnostics: Map<String, List<Diagnostic>>,
     /** The Symbols of a file with exactly this text, instead of [symbols]. */
     private val symbolsByText: Map<String, List<CodeSymbol>>,
+    /** The Unused Imports of a file with exactly this text; no answer for any other. */
+    private val unusedByText: Map<String, Set<String>> = emptyMap(),
 ) : UnstubbedCodeIntelligence() {
     override suspend fun <T> session(block: suspend (AnalysisSession) -> T): T = block(object : UnstubbedAnalysisSession() {
         override suspend fun documentSymbols(file: Path, document: TextDocument): List<CodeSymbol> = symbolsByText[document.text] ?: symbols
         override suspend fun diagnostics(file: Path, document: TextDocument): List<Diagnostic> = diagnostics[document.text].orEmpty()
         override suspend fun references(file: Path, document: TextDocument, position: Position): List<SourceLocation> = emptyList()
-        override suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration) = emptySet<ImportDirective>()
+        override suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration): ImportUsage {
+            val unused = unusedByText[document.text] ?: return ImportUsage.undecided(among)
+            return ImportUsage(among.filterTo(mutableSetOf()) { it.text in unused })
+        }
         override suspend fun writtenBack(file: Path, document: TextDocument) = Unit
     })
 

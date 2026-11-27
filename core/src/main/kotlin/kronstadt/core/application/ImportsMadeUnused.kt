@@ -11,9 +11,10 @@ import kotlin.time.TimeSource
 
 /**
  * Removes from each file this Shadow Workspace edited the imports the change made unused (ADR 0004): those the code
- * intelligence finds to be Unused Imports in the file's current text but not in its base, among those [eligible] keeps
- * of the file's base imports. Without an answer an import counts as used. The questions share one [budget]. Shared by
- * Edit and RenameSymbol; returns the imports removed, by file.
+ * intelligence finds to be Unused Imports in the file's current text and used in its base, among those [eligible] keeps
+ * of the file's base imports. Being unsure keeps an import either way: undecided in the current text counts as used,
+ * and undecided in the base as maybe already unused, e.g. in a base that didn't compile (#193). The questions share one
+ * [budget]. Shared by Edit and RenameSymbol; returns the imports removed, by file.
  *
  * A file's imports can depend on another edited file, so the change is judged as a whole (#138): every edited file is
  * brought to its current text before any is asked about its current text, and to its base before any is asked about
@@ -39,14 +40,15 @@ internal suspend fun ShadowWorkspace.removeImportsMadeUnused(
     if (asked.isEmpty()) return emptyMap()
     bringAll(asked.first().first) { it.current }
     val suspected = asked.mapNotNull { (texts, among) ->
-        session.unusedImports(texts.file, texts.current, among, remaining()).takeIf { it.isNotEmpty() }?.let { Suspected(texts, it) }
+        val unusedNow = session.unusedImports(texts.file, texts.current, among, remaining()).unused.intersect(among)
+        unusedNow.takeIf { it.isNotEmpty() }?.let { Suspected(texts, it) }
     }
     // Most changes stop here, with no second round-trip.
     if (suspected.isEmpty()) return emptyMap()
     bringAll(suspected.first().texts) { it.base }
     return suspected.mapNotNull { (texts, suspects) ->
-        val unusedBefore = session.unusedImports(texts.file, texts.base, suspects, remaining())
-        val removal = texts.current.removingImports(suspects - unusedBefore) ?: return@mapNotNull null
+        val usedBefore = session.unusedImports(texts.file, texts.base, suspects, remaining()).usedAmong(suspects)
+        val removal = texts.current.removingImports(usedBefore) ?: return@mapNotNull null
         replaceLines(texts.file, removal.splice.lines, removal.splice.newLines)
         texts.file to removal.removed.map { it.text }
     }.toMap()

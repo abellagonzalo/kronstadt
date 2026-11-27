@@ -4,6 +4,7 @@ import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Definition
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.ImportDirective
+import kronstadt.core.domain.ImportUsage
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
@@ -82,11 +83,12 @@ public interface AnalysisSession {
     public suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String): Rename
 
     /**
-     * Those of [among], imports of [document] (the content of [file]), that are Unused Imports, judged against the texts
-     * this session has open; nothing is applied. An import it can't decide, e.g. without an answer within [budget], counts
-     * as used.
+     * Which of [among], imports of [document] (the content of [file]), are Unused Imports and which it can't decide about,
+     * judged against the texts this session has open; nothing is applied. An import it can't decide, e.g. without an answer
+     * within [budget], is undecided, never unused or used: whether that counts as used or as maybe unused is the caller's
+     * call (ADR 0004).
      */
-    public suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration): Set<ImportDirective>
+    public suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration): ImportUsage
 
     /** Write-back has happened: [document] is now [file]'s content on disk. */
     public suspend fun writtenBack(file: Path, document: TextDocument)

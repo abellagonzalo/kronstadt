@@ -8,6 +8,7 @@ import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Definition
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.ImportDirective
+import kronstadt.core.domain.ImportUsage
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
@@ -114,7 +115,8 @@ fun EditResult.lookupFailure(): LookupFailure =
  * Diagnostics are [diagnosticsByText] for the exact text, else none; each pull takes [diagnosticsDelay] and first runs
  * [beforeDiagnostics]; a pull of a text in [failingDiagnostics] fails. References are [references], and definitions [definitions], for the file and the exact position
  * asked about, else none. The Unused Imports among those asked about are those [unusedByText] gives for the exact text,
- * else none; each question is logged in [unusedAsked].
+ * else none; those [undecidedByText] gives for it are undecided, and every other one is used. Each question is logged in
+ * [unusedAsked].
  *
  * Documents are modelled like the language server sees them: a session's first analysis of a file opens it at
  * version 1 (unless another session holds it), an analysis of different text changes it to the next version, and a
@@ -138,6 +140,7 @@ class FakeCodeIntelligence(
     private val renames: Map<Pair<Path, Position>, (newName: String) -> Rename> = emptyMap(),
     private val renameRefusals: Map<Pair<Path, Position>, String> = emptyMap(),
     private val unusedByText: Map<String, Set<String>> = emptyMap(),
+    private val undecidedByText: Map<String, Set<String>> = emptyMap(),
     private val searchCap: Int? = null,
     /**
      * Diagnostics for a file's exact text given the text of every open document, ahead of [diagnosticsByText]: what
@@ -275,11 +278,15 @@ class FakeCodeIntelligence(
             return renames[file to position]?.invoke(newName) ?: Rename.Refused(CANNOT_RENAME)
         }
 
-        override suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration): Set<ImportDirective> {
+        override suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration): ImportUsage {
             sync(file, document)
             unusedAsked += file to among.mapTo(mutableSetOf()) { it.text }
             val unused = unusedInContext(file, document.text, open.mapValues { it.value.text }) ?: unusedByText[document.text].orEmpty()
-            return among.filterTo(mutableSetOf()) { it.text in unused }
+            val undecided = undecidedByText[document.text].orEmpty()
+            return ImportUsage(
+                among.filterTo(mutableSetOf()) { it.text in unused },
+                among.filterTo(mutableSetOf()) { it.text in undecided && it.text !in unused },
+            )
         }
 
         override suspend fun writtenBack(file: Path, document: TextDocument) {

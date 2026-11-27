@@ -41,6 +41,7 @@ import kronstadt.core.application.Replace
 import kronstadt.core.application.ValidationFailure
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.FileChange
+import kronstadt.core.domain.ImportUsage
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.PreferredOverFunctions
 import kronstadt.core.domain.Readiness
@@ -949,11 +950,14 @@ class KotlinLspContractTest {
                 assertEquals(listOf("java.io.*"), lsp.organizedImports(session, file, usingAll)?.imports?.map { it.text })
                 assertEquals(
                     setOf("java.io.Serializable"),
-                    session.unusedImports(file, document, document.imports.toSet(), Validation.DEFAULT_TIMEOUT).map { it.text }.toSet(),
+                    session.unusedImports(file, document, document.imports.toSet(), Validation.DEFAULT_TIMEOUT).unused.map { it.text }.toSet(),
                 )
-                assertEquals(emptySet(), session.unusedImports(file, usingAll, usingAll.imports.toSet(), Validation.DEFAULT_TIMEOUT))
-                // Without time for the check, an undecided import counts as used.
-                assertEquals(emptySet(), session.unusedImports(file, document, document.imports.toSet(), Duration.ZERO))
+                assertEquals(ImportUsage(emptySet()), session.unusedImports(file, usingAll, usingAll.imports.toSet(), Validation.DEFAULT_TIMEOUT))
+                // Without time for the check, an import a new star covers is undecided.
+                assertEquals(
+                    ImportUsage.undecided(document.imports.toSet()),
+                    session.unusedImports(file, document, document.imports.toSet(), Duration.ZERO),
+                )
             }
         } finally {
             Files.deleteIfExists(file)
@@ -1158,6 +1162,69 @@ private val symCheckPath = "src/test/kotlin/fixture/SymCheck.kt"
             assertEquals(bar, Files.readString(project.resolve(barPath)))
         } finally {
             project.resolve("src/main/kotlin/fixture/zeta").deleteRecursively()
+        }
+    }
+
+    // #193: kotlin-lsp 271.2085.0's organize-imports on a text with compile errors. It still drops exactly the imports nothing
+    // refers to, so it doesn't explain an Edit removing imports that were already unused. Getting no answer about the text
+    // before the Edit would: that used to count as "none of them was unused".
+
+    private val brokenPath = "src/main/kotlin/fixture/eta/Broken.kt"
+    /** Imports `Path`, used, and `Closeable` and `File`, which nothing refers to. */
+    private val brokenHeader = "package fixture.eta\n\nimport java.io.Closeable\nimport java.io.File\nimport java.nio.file.Path\n\n"
+
+    @Test
+    @Order(33)
+    fun `organize-imports drops the imports nothing refers to from a text that doesn't compile too`() = runBlocking<Unit> {
+        val file = project.resolve(brokenPath)
+        val bodies = listOf(
+            "fun broken(): Path = missing()\n",
+            "fun broken(): Missing = TODO()\nfun p(): Path? = null\n",
+            "fun broken(p: Path): Int = p.missingMember\n",
+            "class Foo {\n    fun doSomething(p: Path): String {\n        val x = missing(p)\n        return x.toString()\n    }\n}\n",
+            "fun broken(p: Path): Int = (1 +\n",
+            "fun broken(p: Path): Int = p\n",
+        )
+        Files.createDirectories(file.parent)
+        Files.writeString(file, brokenHeader + bodies.first())
+        try {
+            lsp.session { session ->
+                for (body in bodies) {
+                    val document = TextDocument(brokenHeader + body)
+                    assertTrue(session.diagnostics(file, document).any { it.severity == Severity.ERROR }, body)
+                    assertEquals(listOf("java.nio.file.Path"), lsp.organizedImports(session, file, document)?.imports?.map { it.text }, body)
+                    val usage = session.unusedImports(file, document, document.imports.toSet(), Validation.DEFAULT_TIMEOUT)
+                    assertEquals(setOf("java.io.Closeable", "java.io.File") to emptySet(), usage.unused.map { it.text }.toSet() to usage.undecided, body)
+                }
+            }
+        } finally {
+            project.resolve("src/main/kotlin/fixture/eta").deleteRecursively()
+        }
+    }
+
+    @Test
+    @Order(34)
+    fun `kt_edit fixing a file that didn't compile keeps the imports nothing referred to, and removes none`() = runBlocking<Unit> {
+        val file = project.resolve(brokenPath)
+        val broken = brokenHeader + "class Foo {\n    fun doSomething(p: Path): String {\n        val x = missing(p)\n        return x.toString()\n    }\n}\n"
+        Files.createDirectories(file.parent)
+        Files.writeString(file, broken)
+        try {
+            val result = Edit(files, lsp)(
+                listOf(
+                    EditIn(brokenPath, "Foo/doSomething", "missing(p)", "p.fileName"),
+                    InsertAfter(brokenPath, "Foo", "fun d(): Duration = Duration.ZERO", imports = listOf("kotlin.time.Duration")),
+                ),
+            )
+
+            assertEquals(emptyList(), assertIs<EditResult.Written>(result, "$result").files.single().importsRemoved)
+            assertEquals(
+                broken.replace("import java.nio.file.Path\n", "import java.nio.file.Path\nimport kotlin.time.Duration\n")
+                    .replace("missing(p)", "p.fileName") + "\nfun d(): Duration = Duration.ZERO\n",
+                Files.readString(file),
+            )
+        } finally {
+            project.resolve("src/main/kotlin/fixture/eta").deleteRecursively()
         }
     }
 }

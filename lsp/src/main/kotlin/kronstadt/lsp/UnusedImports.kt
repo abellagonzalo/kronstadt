@@ -4,6 +4,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 import kronstadt.core.domain.FileLayout
 import kronstadt.core.domain.ImportDirective
+import kronstadt.core.domain.ImportUsage
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.Validation
@@ -33,47 +34,62 @@ internal fun TextDocument.importsOrganizedIn(organized: TextDocument): Organized
 }
 
 /**
- * Those of [among], imports of [document] (the content of [file]), that [organized], kotlin-lsp's organize-imports
- * answer for it, shows unused (ADR 0004): those it dropped, and those it left undecided that removing adds no error
- * (see [removableAmong]). [budget] bounds only that last check; when it runs out, the undecided ones count as used.
+ * What [organized], kotlin-lsp's organize-imports answer for [document] (the content of [file]), shows of [among], its
+ * imports (ADR 0004): those it dropped are unused, and those it left undecided are unused if removing them adds no
+ * error, used if it adds one, and still undecided without an answer (see [removableAmong]). Every other one is used.
+ * Without an organize-imports answer, every one is undecided. [budget] bounds only the removal check.
  */
 internal suspend fun AnalysisSession.unusedPerOrganizeImports(
     file: Path,
     document: TextDocument,
-    organized: OrganizedImports,
+    organized: OrganizedImports?,
     among: Set<ImportDirective>,
     budget: Duration,
-): Set<ImportDirective> =
-    organized.dropped.intersect(among) + removableAmong(file, document, organized.undecided.intersect(among), budget)
+): ImportUsage {
+    if (organized == null) return ImportUsage.undecided(among)
+    val removable = removableAmong(file, document, organized.undecided.intersect(among), budget)
+    return removable.copy(unused = organized.dropped.intersect(among) + removable.unused)
+}
 
 /**
- * Those of [suspects], imports of [document] (the content of [file]), that removing from it adds no error. All of
- * them are tried together first, then each alone. Without an answer within [budget], or with a failed one, an import
- * counts as used.
+ * Which of [suspects], imports of [document] (the content of [file]), removing from it adds no error (unused) or adds
+ * one (used). All of them are tried together first, then each alone. Those not settled within [budget], or by a failed
+ * answer, are undecided.
  */
 private suspend fun AnalysisSession.removableAmong(
     file: Path,
     document: TextDocument,
     suspects: Set<ImportDirective>,
     budget: Duration,
-): Set<ImportDirective> {
-    if (suspects.isEmpty() || !budget.isPositive()) return emptySet()
-    val unused = try {
+): ImportUsage {
+    if (suspects.isEmpty() || !budget.isPositive()) return ImportUsage.undecided(suspects)
+    val unused = mutableSetOf<ImportDirective>()
+    val used = mutableSetOf<ImportDirective>()
+    try {
         withTimeoutOrNull(budget) {
             val errors = diagnostics(file, document)
-            suspend fun removable(drop: Set<ImportDirective>): Set<ImportDirective> {
-                val removal = document.removingImports(drop) ?: return emptySet()
+            /** Whether removing [drop] adds no error; null if there is nothing to remove. */
+            suspend fun removable(drop: Set<ImportDirective>): Boolean? {
+                val removal = document.removingImports(drop) ?: return null
                 val without = document.replaceLines(removal.splice.lines, removal.splice.newLines, FileLayout.of(document).lineSeparator)
-                val added = Validation.introduced(errors, diagnostics(file, without), Severity.ERROR, emptyList())
-                return if (added.isEmpty()) removal.removed.toSet() else emptySet()
+                return Validation.introduced(errors, diagnostics(file, without), Severity.ERROR, emptyList()).isEmpty()
             }
-            val together = if (suspects.size > 1) removable(suspects) else emptySet()
-            together.ifEmpty { suspects.flatMapTo(mutableSetOf()) { removable(setOf(it)) } }
+            if (suspects.size > 1 && removable(suspects) == true) {
+                unused += suspects
+            } else {
+                for (suspect in suspects) {
+                    when (removable(setOf(suspect))) {
+                        true -> unused += suspect
+                        false -> used += suspect
+                        null -> {}
+                    }
+                }
+            }
         }
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
-        null
+        // What was settled before the failure stands; the rest stays undecided.
     }
-    return unused.orEmpty()
+    return ImportUsage(unused, suspects - unused - used)
 }

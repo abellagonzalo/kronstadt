@@ -15,6 +15,7 @@ import kronstadt.core.domain.Definition
 import kronstadt.core.domain.LibrarySource
 import kronstadt.core.domain.Diagnostic
 import kronstadt.core.domain.ImportDirective
+import kronstadt.core.domain.ImportUsage
 import kronstadt.core.domain.Position
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
@@ -182,14 +183,14 @@ public class LspCodeIntelligence private constructor(
         /**
          * kotlin-lsp has no unused-import diagnostic, so its organize-imports answer decides (see [organizeImports]), except for
          * an explicit import a star import new in that answer covers, which is settled by removing it (see
-         * [unusedPerOrganizeImports]). Without an answer every import counts as used. [budget] doesn't bound organize-imports,
-         * but the time it took counts against what is left for removing.
+         * [unusedPerOrganizeImports]). Without an answer every import is undecided (#193). [budget] doesn't bound
+         * organize-imports, but the time it took counts against what is left for removing.
          */
-        override suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration): Set<ImportDirective> {
-            if (among.isEmpty()) return emptySet()
+        override suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration): ImportUsage {
+            if (among.isEmpty()) return ImportUsage(emptySet())
             val asked = TimeSource.Monotonic.markNow()
-            val organized = organizeImports(file, document) ?: return emptySet()
-            return unusedPerOrganizeImports(file, document, document.importsOrganizedIn(organized), among, budget - asked.elapsedNow())
+            val organized = organizeImports(file, document)?.let(document::importsOrganizedIn)
+            return unusedPerOrganizeImports(file, document, organized, among, budget - asked.elapsedNow())
         }
 
         /**
@@ -200,7 +201,7 @@ public class LspCodeIntelligence private constructor(
         suspend fun organizeImports(file: Path, document: TextDocument): TextDocument? {
             val uri = LspMapping.uri(file)
             val params = ExecuteCommandParams(ORGANIZE_IMPORTS, listOf<Any>(uri))
-            // Being unsure counts as used (ADR 0004): any failure, not only an error answer, is no answer.
+            // Any failure, not only an error answer, is no answer, so every import stays undecided (ADR 0004).
             val edits = try {
                 answerFor(file, document, "imports were organized") {
                     refusedEdits.during { request { server.workspaceService.executeCommand(params) } }.second
