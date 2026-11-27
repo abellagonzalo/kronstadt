@@ -118,7 +118,7 @@ fun EditResult.lookupFailure(): LookupFailure =
  *
  * Documents are modelled like the language server sees them: a session's first analysis of a file opens it at
  * version 1 (unless another session holds it), an analysis of different text changes it to the next version, and a
- * file is closed once no session holds it. A rename at a file and position is [renames] for it, given the new name; one
+ * file is closed once no session holds it. A rename at a file and position is [renames] for it, the occurrences it renames, whatever the new name; one
  * at a position in [renameRefusals], or anywhere else, is refused (by prepare-rename and by rename alike). Keeping written files open after Write-back is the lsp adapter's business,
  * not modelled here. Using a session after it ended fails.
  */
@@ -135,7 +135,7 @@ class FakeCodeIntelligence(
     private val beforeDiagnostics: suspend () -> Unit = {},
     private val references: Map<Pair<Path, Position>, List<SourceLocation>> = emptyMap(),
     private val definitions: Map<Pair<Path, Position>, List<Definition>> = emptyMap(),
-    private val renames: Map<Pair<Path, Position>, (newName: String) -> Rename> = emptyMap(),
+    private val renames: Map<Pair<Path, Position>, Rename> = emptyMap(),
     private val renameRefusals: Map<Pair<Path, Position>, String> = emptyMap(),
     private val unusedByText: Map<String, Set<String>> = emptyMap(),
     private val searchCap: Int? = null,
@@ -272,7 +272,7 @@ class FakeCodeIntelligence(
 
         override suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String): Rename {
             sync(file, document)
-            return renames[file to position]?.invoke(newName) ?: Rename.Refused(CANNOT_RENAME)
+            return renames[file to position] ?: Rename.Refused(CANNOT_RENAME)
         }
 
         override suspend fun unusedImports(file: Path, document: TextDocument, among: Set<ImportDirective>, budget: Duration): Set<ImportDirective> {

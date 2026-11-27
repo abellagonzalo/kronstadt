@@ -11,7 +11,6 @@ import kronstadt.core.domain.Rename
 import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.TextDocument
-import kronstadt.core.domain.TextEdit
 import kronstadt.core.domain.TextRange
 import kronstadt.core.port.AnalysisSession
 import java.nio.file.Files
@@ -101,8 +100,8 @@ private class RenamingIntelligence(private val a: Path, private val b: Path) : U
 
         override suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String): Rename = Rename.Changes(
             listOf(
-                FileChange.Edited(b, listOf(TextEdit(name(2, 9, 5), newName), TextEdit(name(4, 8, 5), newName))),
-                FileChange.Edited(a, listOf(TextEdit(name(2, 4, 5), newName))),
+                FileChange.Edited(b, listOf(name(2, 9, 5), name(4, 8, 5))),
+                FileChange.Edited(a, listOf(name(2, 4, 5))),
             ),
         )
 

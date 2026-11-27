@@ -13,7 +13,7 @@ public sealed interface RenamePreparation {
 
 /** What renaming a Symbol changes across the project, or why it can't. */
 public sealed interface Rename {
-    /** The changes to apply, in order: a [FileChange.Moved] file's text edits name its old path. */
+    /** The changes to apply, in order: a [FileChange.Moved] file's occurrences name its old path. */
     public data class Changes(val changes: List<FileChange>) : Rename
 
     /** It can't be renamed; [reason] is the code intelligence's own words. */
@@ -22,8 +22,11 @@ public sealed interface Rename {
 
 /** One change a rename makes to a project file. */
 public sealed interface FileChange {
-    /** Edits to [file]'s text, each against the text before any of them, never overlapping. */
-    public data class Edited(val file: Path, val edits: List<TextEdit>) : FileChange
+    /**
+     * The [occurrences] of the old name in [file] the rename changes, as ranges in its text before the rename, never
+     * overlapping. Each is replaced by the new name as written, backticks included.
+     */
+    public data class Edited(val file: Path, val occurrences: List<TextRange>) : FileChange
 
     /** [from] is renamed to [to], e.g. a class named like its file. */
     public data class Moved(val from: Path, val to: Path) : FileChange
