@@ -266,8 +266,9 @@ public class LspCodeIntelligence private constructor(
 
         /**
          * kotlin-lsp 271.2085.0 points into a library's sources jar when Gradle has one (`jar:` URIs), and at class files
-         * otherwise, including the JDK's (`jrt:` URIs). A sources-jar entry is read here, with its Symbols: kotlin-lsp
-         * answers `documentSymbol` for a jar URI without it being opened. Other URIs are dropped.
+         * otherwise, including the JDK's (`jrt:` URIs). With some JDKs (e.g. Temurin 25) it points into the JDK's `src.zip`
+         * instead (`jar:` URIs too). A sources-jar or `src.zip` entry is read here, with its Symbols: kotlin-lsp answers
+         * `documentSymbol` for a jar URI without it being opened. Other URIs are dropped.
          */
         override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> {
             val uri = LspMapping.uri(file)
@@ -276,8 +277,14 @@ public class LspCodeIntelligence private constructor(
             return LspMapping.definitionLocations(request { server.textDocumentService.definition(params) }).mapNotNull { (target, range) ->
                 when (val parsed = LspMapping.definitionTarget(target)) {
                     is DefinitionTarget.Local -> Definition.InSource(SourceLocation(parsed.file, range))
-                    is DefinitionTarget.Jar -> Definition.InLibrary(parsed.jar.fileName.toString(), parsed.entry, range, librarySource(target, parsed))
-                    is DefinitionTarget.Jdk -> Definition.InLibrary("JDK ${parsed.module}", parsed.entry, range, source = null)
+                    is DefinitionTarget.Jar ->
+                        Definition.InLibrary(parsed.jar.fileName.toString(), parsed.entry, range, librarySource(target, parsed.jar, parsed.entry))
+                    is DefinitionTarget.Jdk -> Definition.InLibrary(
+                        "JDK ${parsed.module}",
+                        parsed.entry,
+                        range,
+                        parsed.sources?.let { librarySource(target, it, "${parsed.module}/${parsed.entry}") },
+                    )
                     null -> null
                 }
             }
@@ -438,13 +445,13 @@ public class LspCodeIntelligence private constructor(
         }
     }
 
-    /** The entry's text and Symbols, if it is source text that can be read; null for a class file. */
-    private suspend fun librarySource(uri: String, target: DefinitionTarget.Jar): LibrarySource? {
-        if (target.entry.endsWith(".class")) return null
+    /** The text and Symbols of [entry] in the archive at [archive], if it is source text that can be read; null for a class file. */
+    private suspend fun librarySource(uri: String, archive: Path, entry: String): LibrarySource? {
+        if (entry.endsWith(".class")) return null
         val text = withContext(Dispatchers.IO) {
             runCatching {
-                ZipFile(target.jar.toFile()).use { zip ->
-                    zip.getEntry(target.entry)?.let { entry -> zip.getInputStream(entry).use { String(it.readAllBytes(), Charsets.UTF_8) } }
+                ZipFile(archive.toFile()).use { zip ->
+                    zip.getEntry(entry)?.let { zip.getInputStream(it).use { input -> String(input.readAllBytes(), Charsets.UTF_8) } }
                 }
             }.getOrNull()
         } ?: return null

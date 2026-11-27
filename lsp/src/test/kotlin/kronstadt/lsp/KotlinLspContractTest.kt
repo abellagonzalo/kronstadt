@@ -717,8 +717,18 @@ class KotlinLspContractTest {
         assertEquals("kotlin.text.toInt", toInt.qualifiedName)
         assertTrue(toInt.origin.startsWith("kotlin-stdlib-"), toInt.origin)
         assertTrue(toInt.head.endsWith("fun String.toInt(): Int"), toInt.head)
-        // The JDK: a class file in a jrt: URI, no sources.
-        assertEquals(FoundDefinition.LibraryWithoutSources("name", "java.io.File", "JDK java.base"), found("name"))
+        // The JDK: a class file in a jrt: URI, no sources (e.g. Homebrew's OpenJDK), or a Java file in the JDK's src.zip
+        // (e.g. Temurin 25), with the declaration if kotlin-lsp gives Symbols for it and as without sources if not.
+        when (val jdk = found("name")) {
+            is FoundDefinition.InLibrary -> {
+                assertEquals(
+                    Triple("java.io.File.getName", "JDK java.base", "java/io/File.java"),
+                    Triple(jdk.qualifiedName, jdk.origin, jdk.entry),
+                )
+                assertTrue("getName()" in jdk.head, jdk.head)
+            }
+            else -> assertEquals(FoundDefinition.LibraryWithoutSources("name", "java.io.File", "JDK java.base"), jdk)
+        }
         // A keyword has no definition.
         assertEquals(GetDefinitionResult.Unresolved("return", "uses", 11, diagnostic = null), get("Definitions/uses", "return"))
     }

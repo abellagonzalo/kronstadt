@@ -232,17 +232,23 @@ internal object LspMapping {
 
     /**
      * Where a `textDocument/definition` result points, from its URI: a local file, an entry in a jar
-     * (`jar:///<jar>!/<entry>`, a sources jar for Kotlin libraries) or a JDK class (`jrt:///<jdk>!/<module>/<entry>`).
-     * Null for any other URI.
+     * (`jar:///<jar>!/<entry>`, a sources jar for Kotlin libraries) or a JDK file: a class file
+     * (`jrt:///<jdk>!/<module>/<entry>`) or a source file in the JDK's `src.zip` (`jar:///<jdk>/lib/src.zip!/<module>/<entry>`,
+     * as kotlin-lsp answers with some JDKs, e.g. Temurin 25). Null for any other URI.
      */
     fun definitionTarget(uri: String): DefinitionTarget? {
         localPath(uri)?.let { return DefinitionTarget.Local(it) }
-        val (archive, entry) = archiveParts(uri, "jar:") ?: archiveParts(uri, "jrt:")?.let { (_, path) ->
-            val module = path.substringBefore('/')
-            return DefinitionTarget.Jdk(module, path.substringAfter('/'))
-        } ?: return null
+        archiveParts(uri, "jrt:")?.let { (_, path) -> return DefinitionTarget.Jdk(path.substringBefore('/'), path.substringAfter('/')) }
+        val (archive, entry) = archiveParts(uri, "jar:") ?: return null
+        val module = entry.substringBefore('/', missingDelimiterValue = "")
+        if (archive.fileName?.toString() == "src.zip" && JDK_MODULE.matches(module)) {
+            return DefinitionTarget.Jdk(module, entry.substringAfter('/'), sources = archive)
+        }
         return DefinitionTarget.Jar(archive, entry)
     }
+
+    /** A JDK module's name, as the first directory of an entry in the JDK's `src.zip`: dotted, like `java.base`. */
+    private val JDK_MODULE = Regex("""\w+(\.\w+)+""")
 
     /** `<scheme>///<archive path>!/<entry>` split into the archive's path and the entry, URL-decoded. */
     private fun archiveParts(uri: String, scheme: String): Pair<Path, String>? {
@@ -337,6 +343,9 @@ internal sealed interface DefinitionTarget {
     /** [entry] inside the jar at [jar]. */
     data class Jar(val jar: Path, val entry: String) : DefinitionTarget
 
-    /** A class file [entry] in the JDK's [module]. */
-    data class Jdk(val module: String, val entry: String) : DefinitionTarget
+    /**
+     * A file [entry] in the JDK's [module]: a class file (`jrt:` URIs), or a source file in the JDK's `src.zip` at
+     * [sources], which holds each module's sources under the module's name.
+     */
+    data class Jdk(val module: String, val entry: String, val sources: Path? = null) : DefinitionTarget
 }

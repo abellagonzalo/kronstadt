@@ -105,13 +105,14 @@ public class GetDefinition(
 
     /**
      * A library or JDK declaration, which no tool can edit. With sources: its fully qualified name, then its KDoc and
-     * declaration without the body. Without: the class it is in, from the class file's path.
+     * declaration without the body. Without, or when no Symbol is at the definition (as for Java source kotlin-lsp gives no
+     * Symbols for): the class it is in, from the class or Java file's path.
      */
     private fun libraryTarget(definition: Definition.InLibrary, name: String): FoundDefinition {
         val source = definition.source
         val node = source?.let { SymbolTree(it.symbols).nodes.lastOrNull { node -> node.symbol.selectionRange.start == definition.range.start } }
         if (source == null || node == null) {
-            val className = definition.entry.removeSuffix(".class").replace('/', '.').replace('$', '.')
+            val className = definition.entry.removeSuffix(".class").removeSuffix(".java").replace('/', '.').replace('$', '.')
             val member = name.takeUnless { className.substringAfterLast('.') == it }
             return FoundDefinition.LibraryWithoutSources(member, className, definition.origin)
         }

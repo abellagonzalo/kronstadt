@@ -268,6 +268,17 @@ class GetDefinitionTest {
     }
 
     @Test
+    fun `a JDK source entry without Symbols shows the class it is in, without the java suffix`() = runTest {
+        val source = LibrarySource(TextDocument("package java.io;\n\npublic class File {}\n"), symbols = emptyList())
+        val inFile = Definition.InLibrary("JDK java.base", "java/io/File.java", range(37, 63, 37, 70), source)
+        val (files, intelligence) = project(mapOf(inLists(2, 56) to listOf(inFile)))
+
+        val result = GetDefinition(files, intelligence)("names", "name")
+
+        assertEquals(GetDefinitionResult.Found(listOf(FoundDefinition.LibraryWithoutSources("name", "java.io.File", "JDK java.base"))), result)
+    }
+
+    @Test
     fun `several definitions come in the order the code intelligence gives them`() = runTest {
         val (files, intelligence) = project(mapOf(inLists(2, 19) to listOf(inStdlib(listOf), inSource(greeterKt, greet))))
 
