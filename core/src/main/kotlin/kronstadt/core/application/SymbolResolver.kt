@@ -92,6 +92,10 @@ internal class SymbolResolver(
         val query = symbol.segments.lastOrNull { it.name !in UNINDEXED_NAMES }?.name
             ?: return Outcome.Failed(LookupFailure.NotFound(parsed.symbol, null, emptyList()))
         val search = intelligence.workspaceSymbols(query)
+        // Not a miss: the index said nothing at all, so neither "not found" nor suggestions would be true.
+        if (search.completeness == SymbolSearch.Completeness.TIMED_OUT) {
+            return Outcome.Failed(LookupFailure.SearchTimedOut(parsed.symbol, query))
+        }
         // A file the index left out may declare the name too: resolving from the rest would pick one (ADR 0002).
         if (search.completeness == SymbolSearch.Completeness.INCOMPLETE) {
             return Outcome.Failed(LookupFailure.TooManyDeclarations(parsed.symbol, query))

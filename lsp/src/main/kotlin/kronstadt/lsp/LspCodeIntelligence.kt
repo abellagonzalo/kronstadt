@@ -10,6 +10,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.Definition
 import kronstadt.core.domain.LibrarySource
@@ -96,6 +97,8 @@ public class LspCodeIntelligence private constructor(
     private val process: Process,
     private val server: LanguageServer,
     private val requestTimeout: Duration,
+    /** How long a `workspace/symbol` search may take before it is cancelled and reported as timed out. */
+    private val workspaceSymbolTimeout: Duration,
     private val readiness: ReadinessTracker,
     /** What kotlin-lsp reported as `serverInfo.version` at `initialize`, if anything. */
     public val serverVersion: String?,
@@ -132,11 +135,15 @@ public class LspCodeIntelligence private constructor(
     /**
      * Under an internal hold, not a port session (a tool call opens at most one, and may search inside it), so an
      * outside change to a retained document reaches the index first and stays open until the index answered.
+     * A search that takes longer than [workspaceSymbolTimeout], counted from the request, is cancelled at kotlin-lsp and
+     * comes back [SymbolSearch.Completeness.TIMED_OUT].
      */
-    override suspend fun workspaceSymbols(query: String): SymbolSearch {
-        val result = holding { request { server.workspaceService.symbol(WorkspaceSymbolParams(query)) } }
-        return SymbolSearch(LspMapping.workspaceSymbols(result), LspMapping.workspaceSymbolCompleteness(result, query))
-    }
+    override suspend fun workspaceSymbols(query: String): SymbolSearch = holding {
+        withTimeoutOrNull(workspaceSymbolTimeout) {
+            val result = request { server.workspaceService.symbol(WorkspaceSymbolParams(query)) }
+            SymbolSearch(LspMapping.workspaceSymbols(result), LspMapping.workspaceSymbolCompleteness(result, query))
+        }
+    } ?: SymbolSearch(emptyList(), SymbolSearch.Completeness.TIMED_OUT)
 
     override suspend fun awaitReady(timeout: Duration): Readiness = readiness.awaitReady(timeout)
 
@@ -505,6 +512,13 @@ public class LspCodeIntelligence private constructor(
         private val EXIT_TIMEOUT = 10.seconds
 
         /**
+         * How long a `workspace/symbol` search may take, far below the general request timeout: kotlin-lsp needs minutes for
+         * a name as common as `toString`, and seconds for a fairly common one (`writeTo`, 62 hits: 2.4-5 s idle, up to 10 s
+         * on a loaded machine; #211). This lets those through with room to spare and fails the rest fast.
+         */
+        private val WORKSPACE_SYMBOL_TIMEOUT = 15.seconds
+
+        /**
          * Spawns [command] (e.g. `kotlin-lsp --stdio`) in [projectRoot] and completes the LSP handshake.
          * kotlin-lsp keeps its index in [indexDir] (created if missing), never in JetBrains' default cache.
          * The server's stderr is inherited, which is safe: MCP only uses our stdout.
@@ -515,6 +529,7 @@ public class LspCodeIntelligence private constructor(
             projectRoot: Path,
             indexDir: Path,
             requestTimeout: Duration = 120.seconds,
+            workspaceSymbolTimeout: Duration = WORKSPACE_SYMBOL_TIMEOUT,
         ): LspCodeIntelligence {
             val process = ProcessBuilder(command)
                 .directory(projectRoot.toFile())
@@ -541,26 +556,41 @@ public class LspCodeIntelligence private constructor(
             }
             KotlinLspVersion.mismatchWarning(serverVersion)?.let(System.err::println)
             server.initialized(InitializedParams())
-            return LspCodeIntelligence(process, server, requestTimeout, readiness, serverVersion, refusedEdits)
+            return LspCodeIntelligence(process, server, requestTimeout, workspaceSymbolTimeout, readiness, serverVersion, refusedEdits)
         }
 
         /** An adapter over an already initialized [server] running as [process]; for tests with a stubbed server. */
-        internal fun connected(process: Process, server: LanguageServer, requestTimeout: Duration): LspCodeIntelligence =
-            LspCodeIntelligence(process, server, requestTimeout, ReadinessTracker(), serverVersion = null, RefusedEdits())
+        internal fun connected(
+            process: Process,
+            server: LanguageServer,
+            requestTimeout: Duration,
+            workspaceSymbolTimeout: Duration = WORKSPACE_SYMBOL_TIMEOUT,
+        ): LspCodeIntelligence = LspCodeIntelligence(
+            process,
+            server,
+            requestTimeout,
+            workspaceSymbolTimeout,
+            ReadinessTracker(),
+            serverVersion = null,
+            RefusedEdits(),
+        )
 
         /**
          * Awaits [future], but fails fast if the language server process dies (otherwise lsp4j would leave the
-         * request pending until the timeout).
+         * request pending until the timeout). A request abandoned unanswered, because it timed out or its caller was
+         * cancelled, is cancelled at the server too (lsp4j sends `$/cancelRequest`), so the server stops working on it.
          */
-        private suspend fun <T> awaitAlive(process: Process, timeout: Duration, future: CompletableFuture<T>): T =
+        private suspend fun <T> awaitAlive(process: Process, timeout: Duration, future: CompletableFuture<T>): T = try {
             withTimeout(timeout) {
                 CompletableFuture.anyOf(future, process.onExit()).await()
                 if (!future.isDone) {
-                    future.cancel(true)
                     throw IllegalStateException("language server exited with code ${process.exitValue()}")
                 }
                 future.await()
             }
+        } finally {
+            if (!future.isDone) future.cancel(true)
+        }
 
         private fun initializeParams(projectRoot: Path, indexDir: Path) = InitializeParams().apply {
             processId = ProcessHandle.current().pid().toInt()

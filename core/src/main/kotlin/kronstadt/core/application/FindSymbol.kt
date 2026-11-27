@@ -4,6 +4,7 @@ import kronstadt.core.domain.AnalysedFile
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
+import kronstadt.core.domain.SymbolSearch
 import kronstadt.core.domain.SymbolTree
 import kronstadt.core.port.CodeIntelligence
 import kronstadt.core.port.FileStore
@@ -31,6 +32,7 @@ public class FindSymbol(
         val readiness = intelligence.awaitReady(readinessTimeout)
         if (readiness is Readiness.NotReady) return FindSymbolResult.NotReady(readiness)
         val search = intelligence.workspaceSymbols(query)
+        if (search.completeness == SymbolSearch.Completeness.TIMED_OUT) return FindSymbolResult.TimedOut(query)
         val hits = search.symbols
             .filter { (kind == null || it.kind == kind) && inProjectSource(it.file) }
             // Exact name matches first, then prefix matches, then everything else the server considered relevant.
@@ -91,6 +93,10 @@ public sealed interface FindSymbolResult {
 
     /** [mayBeIncomplete] when the index may have left matches out: a narrower query may find some. */
     public data class NoMatches(val query: String, val kind: SymbolKind?, val mayBeIncomplete: Boolean) : FindSymbolResult
+
+    /** The index didn't answer the search for [query] in time, typically because the name is too common; nothing is known. */
+    public data class TimedOut(val query: String) : FindSymbolResult
+
     public data class InvalidQuery(val reason: String) : FindSymbolResult
 
     /** The index was still incomplete after waiting; nothing was searched. */

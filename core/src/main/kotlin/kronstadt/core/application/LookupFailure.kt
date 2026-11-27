@@ -18,6 +18,12 @@ public sealed interface LookupFailure {
     /** [symbol], passed without a file: so many declarations are named [name] that the index may not have listed them all. */
     public data class TooManyDeclarations(val symbol: String, val name: String) : LookupFailure
 
+    /**
+     * [symbol], passed without a file: the index didn't answer the search for [name] in time, typically because so many
+     * declarations are named so, so nothing is known about where it is declared.
+     */
+    public data class SearchTimedOut(val symbol: String, val name: String) : LookupFailure
+
     /** The text at the Symbol's name range isn't its name, so its range can't be trusted. */
     public data class OutOfSync(val symbol: String, val file: String) : LookupFailure
 
