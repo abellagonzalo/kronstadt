@@ -138,6 +138,22 @@ class RenameSymbolTest {
     }
 
     @Test
+    fun `a new name another Symbol in the file has makes the new path carry the containers that tell them apart (#196)`() = runTest {
+        val withHello = "${greeting}\nfun hello(): Int = 1\n"
+        fun symbols(member: String) = greeter(member) +
+            CodeSymbol("hello", SymbolKind.FUNCTION, range(6, 0, 6, 20), name(6, 4, 5), parameterTypes = "", type = "(): Int")
+        val files = FakeFileStore(root, mapOf(greeterPath to withHello, mainPath to main))
+        val intelligence = FakeCodeIntelligence(
+            symbolsByText = mapOf(withHello to symbols("greet"), withHello.replace("greet()", "hello()") to symbols("hello")),
+            renames = mapOf((greeterFile to Position(3, 8)) to ::greetRenamed),
+        )
+
+        val result = RenameSymbol(files, intelligence)("Greeter/greet", "hello", file = greeterPath)
+
+        assertEquals("Greeter/hello", assertIs<RenameResult.Renamed>(result, "$result").newPath)
+    }
+
+    @Test
     fun `a file rename onto an existing file is refused, and nothing is written`() = runTest {
         val files = FakeFileStore(root, mapOf(classPath to greeting, mainPath to main, "src/a/Host.kt" to "package a\n"))
 

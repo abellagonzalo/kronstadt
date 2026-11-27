@@ -5,6 +5,7 @@ import kronstadt.core.application.EditInScope
 import kronstadt.core.application.EditResult
 import kronstadt.core.application.EditedFile
 import kronstadt.core.application.EditedSymbol
+import kronstadt.core.application.FileRenamed
 import kronstadt.core.application.FindUsagesResult
 import kronstadt.core.application.FoundDefinition
 import kronstadt.core.application.GetDefinitionResult
@@ -346,10 +347,42 @@ class RepliesTest {
 
         assertEquals(
             Reply.result(
-                "Renamed greet to hello: 1 usage in 1 file, and the declaration. New path: hello\n" +
+                "Renamed greet to hello: 1 usage in 1 file, and the declaration. New path: hello (in A.kt)\n" +
                     "  A.kt: declaration\n  B.kt: 1 usage\n" +
                     "Removed imports it made unused:\n  B.kt: b.Bravo\n" +
                     "Kept imports it couldn't check (no answer from the code intelligence):\n  B.kt: c.Charlie",
+            ),
+            Replies.rename(renamed, "greet", "hello"),
+        )
+    }
+
+    @Test
+    fun `a rename that renamed the file gives the new path in the new file (#196)`() {
+        val renamed = RenameResult.Renamed(
+            newPath = "Host",
+            files = listOf(RenamedFile("a/Greeter.kt", usages = 0), RenamedFile("b/Main.kt", usages = 1)),
+            fileRenamed = FileRenamed("a/Greeter.kt", "a/Host.kt"),
+        )
+
+        assertEquals(
+            Reply.result(
+                "Renamed Greeter to Host: 1 usage in 1 file, and the declaration. New path: Host (in a/Host.kt)\n" +
+                    "  a/Greeter.kt: declaration\n  b/Main.kt: 1 usage\n" +
+                    "File renamed: a/Greeter.kt -> a/Host.kt",
+            ),
+            Replies.rename(renamed, "Greeter", "Host"),
+        )
+    }
+
+    @Test
+    fun `a rename whose new path can't be told apart names the file it looked in (#196)`() {
+        val renamed = RenameResult.Renamed(newPath = null, files = listOf(RenamedFile("A.kt", usages = 0)))
+
+        assertEquals(
+            Reply.result(
+                "Renamed greet to hello: 0 usages in 0 files, and the declaration. " +
+                    "New path: unknown (several Symbols in A.kt match it now; use kt_read_structure)\n" +
+                    "  A.kt: declaration",
             ),
             Replies.rename(renamed, "greet", "hello"),
         )

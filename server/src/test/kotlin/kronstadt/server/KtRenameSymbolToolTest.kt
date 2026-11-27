@@ -39,7 +39,7 @@ class KtRenameSymbolToolTest {
 
         assertEquals(false, failed, text)
         assertEquals(
-            "Renamed greet to hello: 1 usage in 1 file (+1 import), and the declaration. New path: hello\n" +
+            "Renamed greet to hello: 1 usage in 1 file (+1 import), and the declaration. New path: hello (in A.kt)\n" +
                 "  A.kt: declaration\n" +
                 "  B.kt: 1 usage, 1 import",
             text,
