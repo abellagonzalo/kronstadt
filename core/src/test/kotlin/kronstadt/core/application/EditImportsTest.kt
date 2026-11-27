@@ -26,16 +26,17 @@ class EditImportsTest {
 
     /**
      * Runs [operations] on a file holding [source]; the fake reports the Symbols [symbolsByText] give for each exact
-     * text, and finds the Unused Imports [unusedByText] gives for each exact text.
+     * text, and finds the Unused Imports [unusedByText] gives for each exact text, and undecided those [undecidedByText] gives.
      */
     private suspend fun run(
         source: String,
         symbolsByText: Map<String, List<CodeSymbol>>,
         vararg operations: Operation,
         unusedByText: Map<String, Set<String>> = emptyMap(),
+        undecidedByText: Map<String, Set<String>> = emptyMap(),
     ): Pair<EditResult, FakeFileStore> {
         val files = FakeFileStore(root, mapOf(path to source))
-        val intelligence = FakeCodeIntelligence(symbolsByText = symbolsByText, unusedByText = unusedByText)
+        val intelligence = FakeCodeIntelligence(symbolsByText = symbolsByText, unusedByText = unusedByText, undecidedByText = undecidedByText)
         val result = Edit(files, intelligence)(operations.toList())
         intelligence.assertOneSessionClosedEverything()
         return result to files
@@ -264,6 +265,49 @@ class EditImportsTest {
 
         assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0))), result)
         assertEquals(pairAfterDelete, files.content(path))
+    }
+
+    @Test
+    fun `an import the code intelligence can't show was used before the Edit stays, as in a file that didn't compile (#193)`() = runTest {
+        // greet doesn't compile before the Edit, and nothing refers to c.C2 or c.C3 before or after it.
+        val source = "package a\n\nimport c.C1\nimport c.C2\nimport c.C3\n\nfun greet() = f(C1)\n"
+        val fixed = "package a\n\nimport c.C1\nimport c.C2\nimport c.C3\n\nfun greet() = C1\n"
+        val texts = mapOf(source to listOf(function("greet", 6)), fixed to listOf(function("greet", 6)))
+
+        val (result, files) = run(
+            source,
+            texts,
+            EditIn(path, "greet", "f(C1)", "C1"),
+            unusedByText = mapOf(fixed to setOf("c.C2", "c.C3")),
+            undecidedByText = mapOf(source to setOf("c.C2", "c.C3")),
+        )
+
+        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 7, 7)), emptyList(), 0, emptyList(), 0))), result)
+        assertEquals(fixed, files.content(path))
+    }
+
+    @Test
+    fun `of the suspects, only those the code intelligence shows were used before the Edit go`() = runTest {
+        val source = "package a\n\nimport c.C1\nimport c.C2\nimport c.C3\n\nfun greet() = C1\n\nfun make() = C2 + C3\n"
+        val afterDelete = "package a\n\nimport c.C1\nimport c.C2\nimport c.C3\n\nfun greet() = C1\n"
+        val expected = "package a\n\nimport c.C1\nimport c.C3\n\nfun greet() = C1\n"
+        val texts = mapOf(
+            source to listOf(function("greet", 6), function("make", 8)),
+            afterDelete to listOf(function("greet", 6)),
+            expected to listOf(function("greet", 5)),
+        )
+
+        // c.C2 is used before the Edit; c.C3 may be.
+        val (result, files) = run(
+            source,
+            texts,
+            Delete(path, "make"),
+            unusedByText = mapOf(afterDelete to setOf("c.C2", "c.C3")),
+            undecidedByText = mapOf(source to setOf("c.C3")),
+        )
+
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0, importsRemoved = listOf("c.C2")))), result)
+        assertEquals(expected, files.content(path))
     }
 
     @Test

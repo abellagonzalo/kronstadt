@@ -151,7 +151,10 @@ class RenameSymbolTest {
     private val withUnused = main.replace("import a.Greeter\n", "import a.Greeter\nimport a.Unused\n")
 
     /** Renames `Greeter` in [withUnused] the way kotlin-lsp does: its answer also deletes `import a.Unused`, in one edit across lines. */
-    private suspend fun renameDroppingUnused(unusedByText: Map<String, Set<String>>): Pair<FakeFileStore, RenameResult> {
+    private suspend fun renameDroppingUnused(
+        unusedByText: Map<String, Set<String>>,
+        undecidedByText: Map<String, Set<String>> = emptyMap(),
+    ): Pair<FakeFileStore, RenameResult> {
         val files = FakeFileStore(root, mapOf(classPath to greeting, mainPath to withUnused))
         fun renamed(newName: String) = Rename.Changes(
             listOf(
@@ -171,6 +174,7 @@ class RenameSymbolTest {
             symbolsByText = mapOf(greeting to greeter("greet"), greeting.replace("Greeter", "Host") to host()),
             renames = mapOf((classFile to Position(2, 6)) to ::renamed),
             unusedByText = unusedByText,
+            undecidedByText = undecidedByText,
         )
         return files to RenameSymbol(files, intelligence)("Greeter", "Host", file = classPath)
     }
@@ -196,6 +200,18 @@ class RenameSymbolTest {
         // a.Unused is unused before the rename too.
         val (files, result) = renameDroppingUnused(
             mapOf(withUnused to setOf("a.Unused"), withUnused.replace("Greeter", "Host") to setOf("a.Unused")),
+        )
+
+        assertEquals(withUnused.replace("Greeter", "Host"), files.content(mainPath))
+        assertEquals(emptyList(), assertIs<RenameResult.Renamed>(result).importsRemoved)
+    }
+
+    @Test
+    fun `an import kotlin-lsp removes stays when the code intelligence can't show it was used before the rename (#193)`() = runTest {
+        // a.Unused is unused after the rename, and undecided before it, as in a file that didn't compile.
+        val (files, result) = renameDroppingUnused(
+            mapOf(withUnused.replace("Greeter", "Host") to setOf("a.Unused")),
+            undecidedByText = mapOf(withUnused to setOf("a.Unused")),
         )
 
         assertEquals(withUnused.replace("Greeter", "Host"), files.content(mainPath))
