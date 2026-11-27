@@ -112,6 +112,36 @@ class RenameAnswerTest {
     }
 
     @Test
+    fun `a name starting with a letter beyond ASCII is matched as a whole word`() = runTest {
+        val file = Path.of("/project/src/Anger.kt")
+        val text = "class Ärger\nval x = Ärger()\n"
+
+        val answer = RenameAnswer.read(
+            ReportedRename.Changes(listOf(ReportedChange.Edited(file, listOf(TextEdit(name(0, 6, 1), "A"), TextEdit(name(1, 8, 1), "A"))))),
+            "Ärger",
+            "Arger",
+        ) { TextDocument(text) }
+
+        assertEquals(Rename.Changes(listOf(FileChange.Edited(file, listOf(name(0, 6, 5), name(1, 8, 5))))), answer)
+    }
+
+    @Test
+    fun `a blank line away from the imports, or a line that only looks like an import, can't be deleted`() = runTest {
+        val file = Path.of("/project/src/Text.kt")
+        val text = "package a\n\nclass Greeter\n\nval s = \"\"\"\nimport b.C\n\"\"\"\n"
+        suspend fun deleting(line: Int) = RenameAnswer.read(
+            ReportedRename.Changes(
+                listOf(ReportedChange.Edited(file, listOf(TextEdit(name(2, 6, 7), "Host"), TextEdit(TextRange(Position(line, 0), Position(line + 1, 0)), "")))),
+            ),
+            "Greeter",
+            "Host",
+        ) { TextDocument(text) }
+
+        assertIs<Rename.Refused>(deleting(3))
+        assertIs<Rename.Refused>(deleting(5))
+    }
+
+    @Test
     fun `a file kotlin-lsp would change that doesn't exist refuses the rename`() = runTest {
         val missing = Path.of("/project/src/Gone.kt")
 

@@ -34,3 +34,14 @@ public sealed interface FileChange {
 
 /** Replace [range] with [newText]. */
 public data class TextEdit(val range: TextRange, val newText: String)
+
+/** A plain Kotlin identifier: a name that needs no backticks. */
+public val PLAIN_NAME: Regex = Regex("[\\p{L}_][\\p{L}\\p{Nd}_]*")
+
+/** The name [name] as written in source: in backticks, and also bare, as a whole word, if it's a plain identifier. */
+public fun nameAsWritten(name: String): Regex {
+    val quoted = Regex.escape("`$name`")
+    if (!PLAIN_NAME.matches(name)) return Regex(quoted)
+    // Not \b, which knows only ASCII letters: a name starting or ending with, say, Ä would never match.
+    return Regex("$quoted|(?<![\\p{L}\\p{Nd}_])${Regex.escape(name)}(?![\\p{L}\\p{Nd}_])")
+}

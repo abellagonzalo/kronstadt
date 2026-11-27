@@ -1,6 +1,7 @@
 package kronstadt.core.application
 
 import kronstadt.core.domain.FileChange
+import kronstadt.core.domain.PLAIN_NAME
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
 import kronstadt.core.domain.RenamePreparation
@@ -10,6 +11,8 @@ import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.TextEdit
 import kronstadt.core.domain.TextRange
 import kronstadt.core.domain.Validation
+import kronstadt.core.domain.importLines
+import kronstadt.core.domain.nameAsWritten
 import kronstadt.core.domain.namePosition
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
@@ -67,8 +70,9 @@ public class RenameSymbol(
         }
         touchedPaths.firstOrNull { files.resolve(it.toString()) != it }
             ?.let { return RenameResult.CannotRename(canonical, "it would change $it, outside the project") }
+        // Each place the old name is written is replaced by the new name as the agent gave it, as occurrences are.
         val oldWord = nameAsWritten(node.symbol.name)
-        val applied = when (val applying = applyChanges(shadow, changes, target, name, newName, canonical)) {
+        val applied = when (val applying = applyChanges(shadow, changes, target, declaration = name, newName, canonical)) {
             is Applying.Applied -> applying
             is Applying.Failed -> return applying.result
         }
@@ -90,14 +94,14 @@ public class RenameSymbol(
 
     /**
      * Applies [changes] to [shadow] in order, each occurrence becoming [newName], and counts each file's occurrences apart
-     * from [name], the declaration in [target]. A moved file stays at its old path in the Shadow Workspace until
-     * Write-back, so later changes that name its new path go to its old one.
+     * from [declaration], the Symbol's own name in [target]. A moved file stays at its old path in the Shadow Workspace
+     * until Write-back, so later changes that name its new path go to its old one.
      */
     private suspend fun applyChanges(
         shadow: ShadowWorkspace,
         changes: List<FileChange>,
         target: Path,
-        name: TextRange,
+        declaration: TextRange,
         newName: String,
         canonical: String,
     ): Applying {
@@ -111,7 +115,7 @@ public class RenameSymbol(
                     val document = shadow.current(file)
                         ?: return Applying.Failed(RenameResult.CannotRename(canonical, "it would change ${files.display(file)}, which doesn't exist"))
                     shadow.applyEdits(file, change.occurrences.map { TextEdit(it, newName) })
-                    counts.getOrPut(file) { Counts() }.add(document, change.occurrences, declaration = name.takeIf { file == target })
+                    counts.getOrPut(file) { Counts() }.add(document, change.occurrences, declaration = declaration.takeIf { file == target })
                 }
                 is FileChange.Moved -> {
                     if (files.read(change.to) != null) {
@@ -157,15 +161,6 @@ public class RenameSymbol(
         )
     }
 
-    /**
-     * The name [name] as written in source: in backticks, and also bare if it's a plain identifier. Each place it matches
-     * is replaced by the new name as the agent gave it, as the code intelligence's occurrences are.
-     */
-    private fun nameAsWritten(name: String): Regex {
-        val quoted = Regex.escape("`$name`")
-        return Regex(if (PLAIN.matches(name)) "$quoted|\\b${Regex.escape(name)}\\b" else quoted)
-    }
-
     /** The renamed Symbol's canonical path in [file]'s renamed text: the same chain and kind, with [newName] last. */
     private suspend fun newPath(shadow: ShadowWorkspace, file: Path, node: SymbolTree.Node, newName: String): String? {
         val analysed = shadow.analysed(file) ?: return null
@@ -186,22 +181,20 @@ public class RenameSymbol(
          * is a Usage. The one within [declaration], the Symbol's own name, isn't counted.
          */
         fun add(document: TextDocument, occurrences: List<TextRange>, declaration: TextRange?) {
-            val importLines = mutableSetOf<Int>()
+            val importLines = document.importLines
+            val imported = mutableSetOf<Int>()
             for (occurrence in occurrences) {
                 if (declaration != null && occurrence.start >= declaration.start && occurrence.end <= declaration.end) continue
                 val line = occurrence.start.line
-                if (document.line(line).trimStart().startsWith("import ")) importLines += line else usages++
+                if (line in importLines) imported += line else usages++
             }
-            imports += importLines.size
+            imports += imported.size
         }
     }
 
     private companion object {
-        /** A plain Kotlin identifier. */
-        val PLAIN = Regex("[\\p{L}_][\\p{L}\\p{Nd}_]*")
-
         /** A plain Kotlin identifier, or any name in backticks. */
-        val IDENTIFIER = Regex("${PLAIN.pattern}|`[^`\\r\\n]+`")
+        val IDENTIFIER = Regex("${PLAIN_NAME.pattern}|`[^`\\r\\n]+`")
         const val CONSTRUCTOR = "a constructor has no name of its own; rename its class"
     }
 }

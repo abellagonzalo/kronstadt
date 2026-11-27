@@ -24,6 +24,10 @@ _Avoid_: range, body, extent
 A place in project source that refers to a Symbol by name, other than its own declaration. An import of the Symbol is a Usage too, but is counted apart from the others.
 _Avoid_: reference, call site, occurrence
 
+**Old-Name Occurrence**:
+A place a rename changes the renamed Symbol's old name: its declaration, a Usage, or an import of it. The code intelligence answers a rename with them, and Kronstadt counts the Usages and imports among them. Only in this sense, never for a Usage or a Snippet, is "occurrence" used.
+_Avoid_: edit, rename site
+
 **Unused Import**:
 An import a file's text doesn't need: removing it from that text adds no error and changes what no name in the file refers to. Whether an import is unused is the code intelligence's call; one it can't decide counts as used.
 _Avoid_: dead import, redundant import
