@@ -13,7 +13,7 @@ public sealed interface RenamePreparation {
 
 /** What renaming a Symbol changes across the project, or why it can't. */
 public sealed interface Rename {
-    /** The changes to apply, in order: a [FileChange.Moved] file's text edits name its old path. */
+    /** The changes to apply, in order: a [FileChange.Moved] file's occurrences name its old path. */
     public data class Changes(val changes: List<FileChange>) : Rename
 
     /** It can't be renamed; [reason] is the code intelligence's own words. */
@@ -22,8 +22,11 @@ public sealed interface Rename {
 
 /** One change a rename makes to a project file. */
 public sealed interface FileChange {
-    /** Edits to [file]'s text, each against the text before any of them, never overlapping. */
-    public data class Edited(val file: Path, val edits: List<TextEdit>) : FileChange
+    /**
+     * The [occurrences] of the old name in [file] the rename changes, as ranges in its text before the rename, never
+     * overlapping. Each is replaced by the new name as written, backticks included.
+     */
+    public data class Edited(val file: Path, val occurrences: List<TextRange>) : FileChange
 
     /** [from] is renamed to [to], e.g. a class named like its file. */
     public data class Moved(val from: Path, val to: Path) : FileChange
@@ -31,3 +34,14 @@ public sealed interface FileChange {
 
 /** Replace [range] with [newText]. */
 public data class TextEdit(val range: TextRange, val newText: String)
+
+/** A plain Kotlin identifier: a name that needs no backticks. */
+public val PLAIN_NAME: Regex = Regex("[\\p{L}_][\\p{L}\\p{Nd}_]*")
+
+/** The name [name] as written in source: in backticks, and also bare, as a whole word, if it's a plain identifier. */
+public fun nameAsWritten(name: String): Regex {
+    val quoted = Regex.escape("`$name`")
+    if (!PLAIN_NAME.matches(name)) return Regex(quoted)
+    // Not \b, which knows only ASCII letters: a name starting or ending with, say, Ä would never match.
+    return Regex("$quoted|(?<![\\p{L}\\p{Nd}_])${Regex.escape(name)}(?![\\p{L}\\p{Nd}_])")
+}

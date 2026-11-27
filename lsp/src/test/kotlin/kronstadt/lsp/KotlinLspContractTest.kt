@@ -808,20 +808,20 @@ class KotlinLspContractTest {
         lsp.session { session ->
             assertEquals(RenamePreparation.Renameable(TextRange(name, Position(2, 11)), "Shape"), session.prepareRename(shape, document, name))
             assertEquals(
-                Rename.Changes(
+                ReportedRename.Changes(
                     listOf(
-                        FileChange.Edited(
+                        ReportedChange.Edited(
                             check,
                             listOf(
                                 TextEdit(TextRange(Position(2, 20), Position(2, 25)), "Polygon"),
                                 TextEdit(TextRange(Position(6, 17), Position(6, 22)), "Polygon"),
                             ),
                         ),
-                        FileChange.Edited(shape, listOf(TextEdit(TextRange(name, Position(2, 11)), "Polygon"))),
-                        FileChange.Moved(shape, shape.resolveSibling("Polygon.kt")),
+                        ReportedChange.Edited(shape, listOf(TextEdit(TextRange(name, Position(2, 11)), "Polygon"))),
+                        ReportedChange.Moved(shape, shape.resolveSibling("Polygon.kt")),
                     ),
                 ),
-                session.rename(shape, document, name, "Polygon"),
+                lsp.reportedRename(session, shape, document, name, "Polygon"),
             )
         }
         // Nothing is applied.
@@ -1002,9 +1002,9 @@ private val symCheckPath = "src/test/kotlin/fixture/SymCheck.kt"
         val sym = Files.readString(symFile)
         val symCheck = Files.readString(symCheckFile)
         val name = sym.lines().withIndex().first { "val signature" in it.value }.let { (line, text) -> Position(line, text.indexOf("signature")) }
-        val answer = lsp.session { session -> session.rename(symFile, TextDocument(sym), name, "parameterTypes") }
-        val checkEdits = assertIs<Rename.Changes>(answer, "$answer").changes
-            .filterIsInstance<FileChange.Edited>().singleOrNull { it.file == symCheckFile }.let { assertNotNull(it, "$answer") }.edits
+        val answer = lsp.session { session -> lsp.reportedRename(session, symFile, TextDocument(sym), name, "parameterTypes") }
+        val checkEdits = assertIs<ReportedRename.Changes>(answer, "$answer").changes
+            .filterIsInstance<ReportedChange.Edited>().singleOrNull { it.file == symCheckFile }.let { assertNotNull(it, "$answer") }.edits
         val importLine = symCheck.lines().indexOf("import java.io.File")
         val (removingImport, renaming) = checkEdits.partition { it.range.start.line <= importLine + 1 }
         // signature -> parameterTypes comes as 5 edits per name, two names in the code.
@@ -1086,10 +1086,10 @@ private val symCheckPath = "src/test/kotlin/fixture/SymCheck.kt"
             val thingFile = project.resolve(thingPath)
             val useFile = project.resolve(usePath)
 
-            val answer = lsp.session { session -> session.rename(thingFile, TextDocument(thing), Position(3, 8), "describe") }
+            val answer = lsp.session { session -> lsp.reportedRename(session, thingFile, TextDocument(thing), Position(3, 8), "describe") }
 
-            val useEdits = assertIs<Rename.Changes>(answer, "$answer").changes
-                .filterIsInstance<FileChange.Edited>().singleOrNull { it.file == useFile }.let { assertNotNull(it, "$answer") }.edits
+            val useEdits = assertIs<ReportedRename.Changes>(answer, "$answer").changes
+                .filterIsInstance<ReportedChange.Edited>().singleOrNull { it.file == useFile }.let { assertNotNull(it, "$answer") }.edits
             val importLine = use.lines().indexOf("import fixture.epsilon.ext.describe")
             val (removingImport, renaming) = useEdits.partition { it.range.start.line <= importLine + 1 }
             // The import is emptied by an edit within its line, and its blank line goes in an edit across lines: the edit
@@ -1106,8 +1106,9 @@ private val symCheckPath = "src/test/kotlin/fixture/SymCheck.kt"
 
             val result = RenameSymbol(files, lsp)("Thing/info", "describe", file = thingPath)
 
-            // One Usage, the call; neither the import kotlin-lsp removed nor its blank line counts. Kronstadt puts the import
-            // back, then removes it as made unused, since organize-imports sees Thing.kt renamed too (#138).
+            // One Usage, the call; neither the import kotlin-lsp removed nor its blank line counts. The lsp adapter leaves
+            // kotlin-lsp's removal out, and Kronstadt removes the import as made unused, since organize-imports sees Thing.kt
+            // renamed too (#138).
             assertEquals(
                 RenameResult.Renamed(
                     "describe",

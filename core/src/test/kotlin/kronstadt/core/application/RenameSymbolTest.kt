@@ -11,7 +11,6 @@ import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SymbolCandidate
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
-import kronstadt.core.domain.TextEdit
 import kronstadt.core.domain.range
 import java.nio.file.Path
 import kotlin.test.Test
@@ -53,11 +52,11 @@ class RenameSymbolTest {
         ),
     )
 
-    /** kotlin-lsp's answer for renaming `greet`: the declaration and both calls, in a file it never opened. */
-    private fun greetRenamed(newName: String) = Rename.Changes(
+    /** The code intelligence's answer for renaming `greet`: the declaration and both calls, in a file it never opened. */
+    private val greetRenamed = Rename.Changes(
         listOf(
-            FileChange.Edited(mainFile, listOf(TextEdit(name(5, 22, 5), newName), TextEdit(name(6, 14, 5), newName))),
-            FileChange.Edited(greeterFile, listOf(TextEdit(name(3, 8, 5), newName))),
+            FileChange.Edited(mainFile, listOf(name(5, 22, 5), name(6, 14, 5))),
+            FileChange.Edited(greeterFile, listOf(name(3, 8, 5))),
         ),
     )
 
@@ -66,7 +65,7 @@ class RenameSymbolTest {
     private fun intelligence() = FakeCodeIntelligence(
         symbolsByText = mapOf(greeting to greeter("greet"), greeting.replace("greet()", "hello()") to greeter("hello")),
         index = listOf(SymbolLocation("greet", SymbolKind.FUNCTION, greeterFile, name(3, 8, 5))),
-        renames = mapOf((greeterFile to Position(3, 8)) to ::greetRenamed),
+        renames = mapOf((greeterFile to Position(3, 8)) to greetRenamed),
     )
 
     @Test
@@ -93,20 +92,18 @@ class RenameSymbolTest {
     private val classPath = "src/a/Greeter.kt"
     private val classFile = root.resolve(classPath)
 
-    private fun classRenamed(newName: String) = Rename.Changes(
+    /** Renaming `Greeter` to `Host`: its import and two Usages in [main], its declaration, and its file. */
+    private val classRenamed = Rename.Changes(
         listOf(
-            FileChange.Edited(
-                mainFile,
-                listOf(TextEdit(name(2, 9, 7), newName), TextEdit(name(5, 12, 7), newName), TextEdit(name(6, 4, 7), newName)),
-            ),
-            FileChange.Edited(classFile, listOf(TextEdit(name(2, 6, 7), newName))),
-            FileChange.Moved(classFile, root.resolve("src/a/$newName.kt")),
+            FileChange.Edited(mainFile, listOf(name(2, 9, 7), name(5, 12, 7), name(6, 4, 7))),
+            FileChange.Edited(classFile, listOf(name(2, 6, 7))),
+            FileChange.Moved(classFile, root.resolve("src/a/Host.kt")),
         ),
     )
 
     private fun classIntelligence() = FakeCodeIntelligence(
         symbolsByText = mapOf(greeting to greeter("greet"), greeting.replace("Greeter", "Host") to host()),
-        renames = mapOf((classFile to Position(2, 6)) to ::classRenamed),
+        renames = mapOf((classFile to Position(2, 6)) to classRenamed),
     )
 
     private fun host() = listOf(
@@ -150,35 +147,27 @@ class RenameSymbolTest {
 
     private val withUnused = main.replace("import a.Greeter\n", "import a.Greeter\nimport a.Unused\n")
 
-    /** Renames `Greeter` in [withUnused] the way kotlin-lsp does: its answer also deletes `import a.Unused`, in one edit across lines. */
-    private suspend fun renameDroppingUnused(unusedByText: Map<String, Set<String>>): Pair<FakeFileStore, RenameResult> {
+    /** Renames `Greeter` to `Host` in [withUnused], whose `import a.Unused` the code intelligence finds unused in the texts [unusedByText] gives. */
+    private suspend fun renameWithUnused(unusedByText: Map<String, Set<String>>): Triple<FakeFileStore, FakeCodeIntelligence, RenameResult> {
         val files = FakeFileStore(root, mapOf(classPath to greeting, mainPath to withUnused))
-        fun renamed(newName: String) = Rename.Changes(
+        val renamed = Rename.Changes(
             listOf(
-                FileChange.Edited(
-                    mainFile,
-                    listOf(
-                        TextEdit(name(2, 9, 7), newName),
-                        TextEdit(range(3, 0, 4, 0), ""),
-                        TextEdit(name(6, 12, 7), newName),
-                        TextEdit(name(7, 4, 7), newName),
-                    ),
-                ),
-                FileChange.Edited(classFile, listOf(TextEdit(name(2, 6, 7), newName))),
+                FileChange.Edited(mainFile, listOf(name(2, 9, 7), name(6, 12, 7), name(7, 4, 7))),
+                FileChange.Edited(classFile, listOf(name(2, 6, 7))),
             ),
         )
         val intelligence = FakeCodeIntelligence(
             symbolsByText = mapOf(greeting to greeter("greet"), greeting.replace("Greeter", "Host") to host()),
-            renames = mapOf((classFile to Position(2, 6)) to ::renamed),
+            renames = mapOf((classFile to Position(2, 6)) to renamed),
             unusedByText = unusedByText,
         )
-        return files to RenameSymbol(files, intelligence)("Greeter", "Host", file = classPath)
+        return Triple(files, intelligence, RenameSymbol(files, intelligence)("Greeter", "Host", file = classPath))
     }
 
     @Test
-    fun `an import kotlin-lsp removes that the rename made unused goes, is reported, and isn't counted as a Usage`() = runTest {
+    fun `an import the rename made unused goes and is reported, and every import the file had is asked about`() = runTest {
         // a.Unused is used before the rename and unused after it.
-        val (files, result) = renameDroppingUnused(mapOf(withUnused.replace("Greeter", "Host") to setOf("a.Unused")))
+        val (files, intelligence, result) = renameWithUnused(mapOf(withUnused.replace("Greeter", "Host") to setOf("a.Unused")))
 
         assertEquals(main.replace("Greeter", "Host"), files.content(mainPath))
         assertEquals(
@@ -189,12 +178,13 @@ class RenameSymbolTest {
             ),
             result,
         )
+        assertEquals(setOf("a.Greeter", "a.Unused"), intelligence.unusedAsked.first { it.first == mainFile }.second)
     }
 
     @Test
-    fun `an import kotlin-lsp removes that was already unused stays, like kt_edit leaves it`() = runTest {
+    fun `an import that was already unused stays, like kt_edit leaves it`() = runTest {
         // a.Unused is unused before the rename too.
-        val (files, result) = renameDroppingUnused(
+        val (files, _, result) = renameWithUnused(
             mapOf(withUnused to setOf("a.Unused"), withUnused.replace("Greeter", "Host") to setOf("a.Unused")),
         )
 
@@ -203,8 +193,8 @@ class RenameSymbolTest {
     }
 
     @Test
-    fun `an import kotlin-lsp removes stays when the code intelligence finds no Unused Imports`() = runTest {
-        val (files, result) = renameDroppingUnused(emptyMap())
+    fun `every import stays when the code intelligence finds no Unused Imports`() = runTest {
+        val (files, _, result) = renameWithUnused(emptyMap())
 
         assertEquals(withUnused.replace("Greeter", "Host"), files.content(mainPath))
         assertEquals(emptyList(), assertIs<RenameResult.Renamed>(result).importsRemoved)
@@ -215,7 +205,7 @@ class RenameSymbolTest {
         val files = files()
         val intelligence = FakeCodeIntelligence(
             symbolsByText = mapOf(greeting to greeter("greet")),
-            renames = mapOf((greeterFile to Position(3, 8)) to ::greetRenamed),
+            renames = mapOf((greeterFile to Position(3, 8)) to greetRenamed),
             renameRefusals = mapOf((greeterFile to Position(3, 8)) to "Cannot rename a library declaration"),
         )
 
@@ -253,12 +243,10 @@ class RenameSymbolTest {
     @Test
     fun `a rename that would change a file outside the project is refused, writing nothing`() = runTest {
         val files = files()
-        fun renamed(newName: String) = Rename.Changes(
-            greetRenamed(newName).changes + FileChange.Edited(Path.of("/elsewhere/Lib.kt"), listOf(TextEdit(name(0, 0, 5), newName))),
-        )
+        val renamed = Rename.Changes(greetRenamed.changes + FileChange.Edited(Path.of("/elsewhere/Lib.kt"), listOf(name(0, 0, 5))))
         val intelligence = FakeCodeIntelligence(
             symbolsByText = mapOf(greeting to greeter("greet")),
-            renames = mapOf((greeterFile to Position(3, 8)) to ::renamed),
+            renames = mapOf((greeterFile to Position(3, 8)) to renamed),
         )
 
         val result = RenameSymbol(files, intelligence)("Greeter/greet", "hello", file = greeterPath)
@@ -275,7 +263,7 @@ class RenameSymbolTest {
         val intelligence = FakeCodeIntelligence(
             symbolsByText = mapOf(greeting to greeter("greet"), greeting.replace("greet()", "hello()") to greeter("hello")),
             diagnosticsByText = mapOf(renamedMain to listOf(clash)),
-            renames = mapOf((greeterFile to Position(3, 8)) to ::greetRenamed),
+            renames = mapOf((greeterFile to Position(3, 8)) to greetRenamed),
         )
 
         val result = RenameSymbol(files, intelligence)("Greeter/greet", "hello", file = greeterPath)
@@ -309,47 +297,23 @@ class RenameSymbolTest {
     }
 
     @Test
-    fun `kotlin-lsp's minimal edits, such as an insertion right after the name, count as the declaration, not a Usage`() = runTest {
-        val files = files()
-        fun renamed(newName: String) = Rename.Changes(
+    fun `an import line with several occurrences counts that import once, and backticks in the new name are written as given`() = runTest {
+        val aliased = main.replace("import a.Greeter\n", "import a.Greeter as Greeter\n")
+        val files = FakeFileStore(root, mapOf(classPath to greeting, mainPath to aliased))
+        val renamed = Rename.Changes(
             listOf(
-                FileChange.Edited(mainFile, listOf(TextEdit(name(5, 27, 0), "ing"), TextEdit(name(6, 19, 0), "ing"))),
-                FileChange.Edited(greeterFile, listOf(TextEdit(name(3, 13, 0), "ing"))),
-            ),
-        )
-        val intelligence = FakeCodeIntelligence(
-            symbolsByText = mapOf(greeting to greeter("greet"), greeting.replace("greet()", "greeting()") to greeter("greeting")),
-            renames = mapOf((greeterFile to Position(3, 8)) to ::renamed),
-        )
-
-        val result = RenameSymbol(files, intelligence)("Greeter/greet", "greeting", file = greeterPath)
-
-        assertEquals(main.replace("greet()", "greeting()"), files.content(mainPath))
-        assertEquals(
-            listOf(RenamedFile(greeterPath, usages = 0), RenamedFile(mainPath, usages = 2)),
-            assertIs<RenameResult.Renamed>(result).files,
-        )
-    }
-
-    @Test
-    fun `a name kotlin-lsp renames in several character-level edits counts once, as a Usage or an import`() = runTest {
-        val files = FakeFileStore(root, mapOf(classPath to greeting, mainPath to main))
-        // Greeter -> Greatest arrives as two edits per name: its 4th letter 'e' -> 'a' and its 7th 'r' -> 'st'.
-        fun split(line: Int, char: Int) = listOf(TextEdit(name(line, char + 3, 1), "a"), TextEdit(name(line, char + 6, 1), "st"))
-        fun renamed(newName: String) = Rename.Changes(
-            listOf(
-                FileChange.Edited(mainFile, split(2, 9) + split(5, 12) + split(6, 4)),
-                FileChange.Edited(classFile, split(2, 6)),
+                FileChange.Edited(mainFile, listOf(name(2, 9, 7), name(2, 20, 7), name(5, 12, 7), name(6, 4, 7))),
+                FileChange.Edited(classFile, listOf(name(2, 6, 7))),
             ),
         )
         val intelligence = FakeCodeIntelligence(
             symbolsByText = mapOf(greeting to greeter("greet")),
-            renames = mapOf((classFile to Position(2, 6)) to ::renamed),
+            renames = mapOf((classFile to Position(2, 6)) to renamed),
         )
 
-        val result = RenameSymbol(files, intelligence)("Greeter", "Greatest", file = classPath)
+        val result = RenameSymbol(files, intelligence)("Greeter", "`Great one`", file = classPath)
 
-        assertEquals(main.replace("Greeter", "Greatest"), files.content(mainPath))
+        assertEquals(aliased.replace("Greeter", "`Great one`"), files.content(mainPath))
         assertEquals(
             listOf(RenamedFile(classPath, usages = 0), RenamedFile(mainPath, usages = 2, imports = 1)),
             assertIs<RenameResult.Renamed>(result, "$result").files,
@@ -363,7 +327,7 @@ class RenameSymbolTest {
         val intelligence = FakeCodeIntelligence(
             symbolsByText = mapOf(greeting to greeter("greet"), greeting.replace("Greeter", "Host") to host()),
             diagnosticsByText = mapOf(main to listOf(unresolved("Greeter")), main.replace("Greeter", "Host") to listOf(unresolved("Host"))),
-            renames = mapOf((classFile to Position(2, 6)) to ::classRenamed),
+            renames = mapOf((classFile to Position(2, 6)) to classRenamed),
         )
 
         val result = RenameSymbol(files, intelligence)("Greeter", "Host", file = classPath)

@@ -3,9 +3,7 @@ package kronstadt.lsp
 import kronstadt.core.domain.CodeSymbol
 import kronstadt.core.domain.DeclarationHead
 import kronstadt.core.domain.Diagnostic
-import kronstadt.core.domain.FileChange
 import kronstadt.core.domain.Position
-import kronstadt.core.domain.Rename
 import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SourceLocation
@@ -277,31 +275,31 @@ internal object LspMapping {
      * kotlin-lsp's answer to `rename`, in its order: `documentChanges` if given (text edits and file renames), else
      * `changes`. Refused if it would create or delete a file, edit with a snippet, or touch a URI that isn't a file.
      */
-    fun rename(edit: WorkspaceEdit?): Rename {
-        if (edit == null) return Rename.Changes(emptyList())
+    fun rename(edit: WorkspaceEdit?): ReportedRename {
+        if (edit == null) return ReportedRename.Changes(emptyList())
         fun file(uri: String) = localPath(uri)
         val documentChanges = edit.documentChanges
-            ?: return Rename.Changes(
+            ?: return ReportedRename.Changes(
                 edit.changes.orEmpty().map { (uri, edits) ->
-                    FileChange.Edited(file(uri) ?: return Rename.Refused("kotlin-lsp would change $uri"), edits.map(::textEdit))
+                    ReportedChange.Edited(file(uri) ?: return ReportedRename.Refused("kotlin-lsp would change $uri"), edits.map(::textEdit))
                 },
             )
-        return Rename.Changes(
+        return ReportedRename.Changes(
             documentChanges.map { change ->
                 if (change.isLeft) {
                     val document = change.left
-                    val path = file(document.textDocument.uri) ?: return Rename.Refused("kotlin-lsp would change ${document.textDocument.uri}")
-                    FileChange.Edited(
+                    val path = file(document.textDocument.uri) ?: return ReportedRename.Refused("kotlin-lsp would change ${document.textDocument.uri}")
+                    ReportedChange.Edited(
                         path,
-                        document.edits.map { if (it.isLeft) textEdit(it.left) else return Rename.Refused("kotlin-lsp answered with a snippet edit") },
+                        document.edits.map { if (it.isLeft) textEdit(it.left) else return ReportedRename.Refused("kotlin-lsp answered with a snippet edit") },
                     )
                 } else {
                     when (val operation = change.right) {
-                        is RenameFile -> FileChange.Moved(
-                            file(operation.oldUri) ?: return Rename.Refused("kotlin-lsp would move ${operation.oldUri}"),
-                            file(operation.newUri) ?: return Rename.Refused("kotlin-lsp would move a file to ${operation.newUri}"),
+                        is RenameFile -> ReportedChange.Moved(
+                            file(operation.oldUri) ?: return ReportedRename.Refused("kotlin-lsp would move ${operation.oldUri}"),
+                            file(operation.newUri) ?: return ReportedRename.Refused("kotlin-lsp would move a file to ${operation.newUri}"),
                         )
-                        else -> return Rename.Refused("kotlin-lsp would ${operation.kind} a file")
+                        else -> return ReportedRename.Refused("kotlin-lsp would ${operation.kind} a file")
                     }
                 }
             },

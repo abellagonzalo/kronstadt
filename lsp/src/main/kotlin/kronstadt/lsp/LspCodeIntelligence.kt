@@ -156,6 +156,10 @@ public class LspCodeIntelligence private constructor(
     internal suspend fun organizedImports(session: AnalysisSession, file: Path, document: TextDocument): TextDocument? =
         (session as Session).organizeImports(file, document)
 
+    /** kotlin-lsp's `rename` answer in [session], one of this instance's, before it is read as occurrences, so contract tests can pin what it reports. */
+    internal suspend fun reportedRename(session: AnalysisSession, file: Path, document: TextDocument, position: Position, newName: String): ReportedRename =
+        (session as Session).reportedRename(file, document, position, newName)
+
     /** The documents one tool call holds open: its first analysis of a file counts it as one more holder. */
     private inner class Session : AnalysisSession {
         /** Guarded by [syncLock], like [openDocuments]. */
@@ -295,17 +299,34 @@ public class LspCodeIntelligence private constructor(
         }
 
         /**
-         * kotlin-lsp 271.2085.0 answers with `documentChanges`: one minimal text edit per reference, in files it never opened
-         * too, and a file rename after the edits when a class is named like its file; it refuses with an error response.
+         * [RenameAnswer] reads kotlin-lsp's answer (see [reportedRename]) as occurrences of the old name, against each file's
+         * text as kotlin-lsp sees it: the open text, else the disk's.
          */
         override suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String): Rename {
+            val reported = reportedRename(file, document, position, newName)
+            if (reported is ReportedRename.Refused) return Rename.Refused(reported.reason)
+            val oldName = RenameAnswer.nameAt(document, position)
+                ?: return Rename.Refused("there is no name at line ${position.line + 1}, character ${position.character + 1}")
+            return RenameAnswer.read(reported, oldName, newName) { changed ->
+                if (changed == file) return@read document
+                val open = syncLock.withLock { openDocuments[LspMapping.uri(changed)]?.text }
+                (open ?: withContext(Dispatchers.IO) { diskText(LspMapping.uri(changed)).getOrNull() })?.let(::TextDocument)
+            }
+        }
+
+        /**
+         * kotlin-lsp's own `rename` answer. kotlin-lsp 271.2085.0 answers with `documentChanges`: one minimal text edit per
+         * reference, in files it never opened too, and a file rename after the edits when a class is named like its file; it
+         * refuses with an error response.
+         */
+        suspend fun reportedRename(file: Path, document: TextDocument, position: Position, newName: String): ReportedRename {
             val uri = LspMapping.uri(file)
             sync(uri, document)
             val params = RenameParams(TextDocumentIdentifier(uri), org.eclipse.lsp4j.Position(position.line, position.character), newName)
             return try {
                 LspMapping.rename(request { server.textDocumentService.rename(params) })
             } catch (e: ResponseErrorException) {
-                Rename.Refused(e.responseError.message)
+                ReportedRename.Refused(e.responseError.message)
             }
         }
 

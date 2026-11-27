@@ -152,6 +152,10 @@ public class ImportRemoval internal constructor(
 public val TextDocument.imports: List<ImportDirective>
     get() = FileHeader.of(text).imports.map { it.directive }
 
+/** The lines of this file's header an import directive starts on. */
+public val TextDocument.importLines: Set<Int>
+    get() = FileHeader.of(text).imports.mapTo(mutableSetOf()) { positionOf(it.start).line }
+
 /**
  * The removal of those of [drop] this file has, each with its line; null if none goes. Only an import alone on its line
  * goes, so one sharing it with another import, the package line or a comment stays. Nothing else in the import list

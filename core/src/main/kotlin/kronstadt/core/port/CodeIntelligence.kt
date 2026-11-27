@@ -77,7 +77,8 @@ public interface AnalysisSession {
 
     /**
      * What renaming the Symbol whose name is at [position] in [document] (the content of [file]) to [newName] changes,
-     * across files, including ones never opened, and any file rename; nothing is applied.
+     * across files, including ones never opened: the occurrences of the old name it renames in each, and any file
+     * rename. Nothing else, e.g. no import pruning; nothing is applied.
      */
     public suspend fun rename(file: Path, document: TextDocument, position: Position, newName: String): Rename
 

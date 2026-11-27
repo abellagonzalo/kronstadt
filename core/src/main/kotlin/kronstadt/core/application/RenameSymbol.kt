@@ -1,9 +1,7 @@
 package kronstadt.core.application
 
 import kronstadt.core.domain.FileChange
-import kronstadt.core.domain.FileHeader
-import kronstadt.core.domain.ImportDirective
-import kronstadt.core.domain.Position
+import kronstadt.core.domain.PLAIN_NAME
 import kronstadt.core.domain.Readiness
 import kronstadt.core.domain.Rename
 import kronstadt.core.domain.RenamePreparation
@@ -13,7 +11,8 @@ import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.TextEdit
 import kronstadt.core.domain.TextRange
 import kronstadt.core.domain.Validation
-import kronstadt.core.domain.addingImports
+import kronstadt.core.domain.importLines
+import kronstadt.core.domain.nameAsWritten
 import kronstadt.core.domain.namePosition
 import kronstadt.core.port.AnalysisSession
 import kronstadt.core.port.CodeIntelligence
@@ -71,13 +70,14 @@ public class RenameSymbol(
         }
         touchedPaths.firstOrNull { files.resolve(it.toString()) != it }
             ?.let { return RenameResult.CannotRename(canonical, "it would change $it, outside the project") }
+        // Each place the old name is written is replaced by the new name as the agent gave it, as occurrences are.
         val oldWord = nameAsWritten(node.symbol.name)
-        val applied = when (val applying = applyChanges(shadow, changes, target, name, oldWord, canonical)) {
+        val applied = when (val applying = applyChanges(shadow, changes, target, declaration = name, newName, canonical)) {
             is Applying.Applied -> applying
             is Applying.Failed -> return applying.result
         }
-        val restored = restoreDroppedImports(shadow, applied.before, node.symbol.name, newName)
-        val removed = shadow.removeImportsMadeUnused(session, validationTimeout) { file, imports -> imports.intersect(restored[file].orEmpty()) }
+        // Any import an edited file had before the rename may be one it made unused.
+        val removed = shadow.removeImportsMadeUnused(session, validationTimeout) { _, imports -> imports }
         return when (val validated = shadow.validate { it.replace(oldWord, newName) }) {
             is ShadowWorkspace.Validated.Passed -> shadow.writeBack()?.let { RenameResult.WriteBackFailed(it) }
                 ?: renamed(shadow, target, node, newName, applied, validated.files, removed)
@@ -85,31 +85,27 @@ public class RenameSymbol(
         }
     }
 
-    /** kotlin-lsp's changes, applied to the Shadow Workspace, or why they can't be. */
+    /** The code intelligence's changes, applied to the Shadow Workspace, or why they can't be. */
     private sealed interface Applying {
-        /**
-         * Applied: what each changed file was [before] its first edit, the [counts] of each, the declaring file first, and
-         * the file renamed along with the Symbol, if any.
-         */
-        class Applied(val before: Map<Path, TextDocument>, val counts: Map<Path, Counts>, val fileRenamed: FileRenamed?) : Applying
+        /** Applied: the [counts] of each changed file, the declaring file first, and the file renamed along with the Symbol, if any. */
+        class Applied(val counts: Map<Path, Counts>, val fileRenamed: FileRenamed?) : Applying
         class Failed(val result: RenameResult) : Applying
     }
 
     /**
-     * Applies [changes] to [shadow] in order, counting each file's Usages of [oldWord] apart from [name], the declaration
-     * in [target]. A moved file stays at its old path in the Shadow Workspace until Write-back, so later edits that name
-     * its new path go to its old one.
+     * Applies [changes] to [shadow] in order, each occurrence becoming [newName], and counts each file's occurrences apart
+     * from [declaration], the Symbol's own name in [target]. A moved file stays at its old path in the Shadow Workspace
+     * until Write-back, so later changes that name its new path go to its old one.
      */
     private suspend fun applyChanges(
         shadow: ShadowWorkspace,
         changes: List<FileChange>,
         target: Path,
-        name: TextRange,
-        oldWord: Regex,
+        declaration: TextRange,
+        newName: String,
         canonical: String,
     ): Applying {
         val counts = linkedMapOf(target to Counts())
-        val before = mutableMapOf<Path, TextDocument>()
         val movedFrom = mutableMapOf<Path, Path>()
         var fileRenamed: FileRenamed? = null
         for (change in changes) {
@@ -118,9 +114,8 @@ public class RenameSymbol(
                     val file = movedFrom[change.file] ?: change.file
                     val document = shadow.current(file)
                         ?: return Applying.Failed(RenameResult.CannotRename(canonical, "it would change ${files.display(file)}, which doesn't exist"))
-                    before.putIfAbsent(file, document)
-                    shadow.applyEdits(file, change.edits)
-                    counts.getOrPut(file) { Counts() }.add(document, change.edits, oldWord, declaration = name.takeIf { file == target })
+                    shadow.applyEdits(file, change.occurrences.map { TextEdit(it, newName) })
+                    counts.getOrPut(file) { Counts() }.add(document, change.occurrences, declaration = declaration.takeIf { file == target })
                 }
                 is FileChange.Moved -> {
                     if (files.read(change.to) != null) {
@@ -134,24 +129,8 @@ public class RenameSymbol(
                 }
             }
         }
-        return Applying.Applied(before, counts, fileRenamed)
+        return Applying.Applied(counts, fileRenamed)
     }
-
-    /**
-     * kotlin-lsp's rename also drops imports that were already unused. They go back, and only those the rename made unused
-     * go again, as an Edit decides it (ADR 0004). Returns those put back in each file of [before].
-     */
-    private suspend fun restoreDroppedImports(
-        shadow: ShadowWorkspace,
-        before: Map<Path, TextDocument>,
-        oldName: String,
-        newName: String,
-    ): Map<Path, Set<ImportDirective>> = before.mapNotNull { (file, document) ->
-        val current = checkNotNull(shadow.current(file))
-        val dropped = removedImports(document, current, oldName, newName)
-        current.addingImports(dropped)?.let { shadow.replaceLines(file, it.lines, it.newLines) } ?: return@mapNotNull null
-        file to dropped.toSet()
-    }.toMap()
 
     /**
      * The written rename: each changed file's [applied] counts with its [reports] from Validation, the declaring file
@@ -182,23 +161,6 @@ public class RenameSymbol(
         )
     }
 
-    /** Imports in [before] that [after] lacks, other than those it has with [oldName] renamed to [newName]. */
-    private fun removedImports(before: TextDocument, after: TextDocument, oldName: String, newName: String): List<ImportDirective> {
-        val kept = FileHeader.of(after.text).imports.map { it.directive.text }.toSet()
-        val renamed = nameAsWritten(oldName)
-        return FileHeader.of(before.text).imports.map { it.directive }
-            .filter { it.text !in kept && it.text.replace(renamed, newName) !in kept }
-    }
-
-    /**
-     * The name [name] as written in source: in backticks, and also bare if it's a plain identifier. Each place it matches
-     * is replaced by the new name as the agent gave it, which is how kotlin-lsp writes it too.
-     */
-    private fun nameAsWritten(name: String): Regex {
-        val quoted = Regex.escape("`$name`")
-        return Regex(if (PLAIN.matches(name)) "$quoted|\\b${Regex.escape(name)}\\b" else quoted)
-    }
-
     /** The renamed Symbol's canonical path in [file]'s renamed text: the same chain and kind, with [newName] last. */
     private suspend fun newPath(shadow: ShadowWorkspace, file: Path, node: SymbolTree.Node, newName: String): String? {
         val analysed = shadow.analysed(file) ?: return null
@@ -215,33 +177,24 @@ public class RenameSymbol(
         var imports = 0
 
         /**
-         * Counts the places [oldName], the name as written (see [nameAsWritten]), appears in [document] that [edits] change, however the code
-         * intelligence splits them: kotlin-lsp sends minimal diffs, often several to one name (#85). One on an import line
-         * counts that import once, any other is a Usage. The one within [declaration], the Symbol's own name, isn't counted.
+         * Counts the [occurrences] of the old name in [document]: those on an import line count that import once, any other
+         * is a Usage. The one within [declaration], the Symbol's own name, isn't counted.
          */
-        fun add(document: TextDocument, edits: List<TextEdit>, oldName: Regex, declaration: TextRange?) {
-            val importLines = mutableSetOf<Int>()
-            for (match in oldName.findAll(document.text)) {
-                val start = document.positionOf(match.range.first)
-                val end = document.positionOf(match.range.last + 1)
-                if (declaration != null && start >= declaration.start && end <= declaration.end) continue
-                if (edits.none { it.changes(start, end) }) continue
-                if (document.line(start.line).trimStart().startsWith("import ")) importLines += start.line else usages++
+        fun add(document: TextDocument, occurrences: List<TextRange>, declaration: TextRange?) {
+            val importLines = document.importLines
+            val imported = mutableSetOf<Int>()
+            for (occurrence in occurrences) {
+                if (declaration != null && occurrence.start >= declaration.start && occurrence.end <= declaration.end) continue
+                val line = occurrence.start.line
+                if (line in importLines) imported += line else usages++
             }
-            imports += importLines.size
+            imports += imported.size
         }
-
-        /** Whether this edit changes the text from [start] to [end]: overlaps it, or inserts at it, ends included. */
-        private fun TextEdit.changes(start: Position, end: Position): Boolean =
-            if (range.start == range.end) range.start in start..end else range.start < end && range.end > start
     }
 
     private companion object {
-        /** A plain Kotlin identifier. */
-        val PLAIN = Regex("[\\p{L}_][\\p{L}\\p{Nd}_]*")
-
         /** A plain Kotlin identifier, or any name in backticks. */
-        val IDENTIFIER = Regex("${PLAIN.pattern}|`[^`\\r\\n]+`")
+        val IDENTIFIER = Regex("${PLAIN_NAME.pattern}|`[^`\\r\\n]+`")
         const val CONSTRUCTOR = "a constructor has no name of its own; rename its class"
     }
 }
@@ -263,14 +216,14 @@ public data class RenamedFile(
 /** The file [from] was renamed to [to], both as shown to the agent. */
 public data class FileRenamed(val from: String, val to: String)
 
-/** An import kotlin-lsp removed from [file] while renaming, e.g. `a.b.C`. */
+/** An import the rename made unused, removed from [file], e.g. `a.b.C`. */
 public data class RemovedImport(val file: String, val import: String)
 
 /** The outcome of a rename: written, or why nothing was (except [WriteBackFailure.PartiallyWritten]). */
 public sealed interface RenameResult {
     /**
      * Written: the declaring file first, then the others; [fileRenamed] if a class named like its file took the file
-     * along, and the unused imports the code intelligence removed. [newPath] is the Symbol's canonical path now; null
+     * along, and the imports the rename made unused, removed. [newPath] is the Symbol's canonical path now; null
      * if it can't be told apart in the renamed file.
      */
     public data class Renamed(

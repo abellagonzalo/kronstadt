@@ -9,9 +9,7 @@ import kronstadt.core.application.UsagesInSymbol
 import kronstadt.core.application.RenameResult
 import kronstadt.core.application.RenameSymbol
 import kronstadt.core.application.RenamedFile
-import kronstadt.core.domain.FileChange
 import kronstadt.core.domain.Position
-import kronstadt.core.domain.Rename
 import kronstadt.core.domain.RenamePreparation
 import kronstadt.core.domain.TextDocument
 import kronstadt.core.domain.TextRange
@@ -80,8 +78,8 @@ class BacktickedNameContractTest {
 
         lsp.session { session ->
             suspend fun renamedTo(newName: String): String {
-                val answer = session.rename(file, document, inside, newName)
-                val edits = assertIs<Rename.Changes>(answer, "$answer").changes.filterIsInstance<FileChange.Edited>().single { it.file == file }.edits
+                val answer = lsp.reportedRename(session, file, document, inside, newName)
+                val edits = assertIs<ReportedRename.Changes>(answer, "$answer").changes.filterIsInstance<ReportedChange.Edited>().single { it.file == file }.edits
                 val renamed = edits.sortedByDescending { it.range.start }.fold(document) { text, edit -> text.replace(edit.range, edit.newText) }
                 return renamed.line(inside.line).substringBefore("(")
             }
