@@ -1165,11 +1165,6 @@ private val symCheckPath = "src/test/kotlin/fixture/SymCheck.kt"
         }
     }
 
-    // #193: organize-imports on a text with an unresolved reference, and an Edit that fixes it.
-
-    // #193: kotlin-lsp 271.2085.0's organize-imports on a text with compile errors. It still drops exactly the imports nothing
-    // refers to, so it isn't why an Edit removed already unused imports; no answer about the text before an Edit was.
-
     // #193: kotlin-lsp 271.2085.0's organize-imports on a text with compile errors. It still drops exactly the imports nothing
     // refers to, so it doesn't explain an Edit removing imports that were already unused. Getting no answer about the text
     // before the Edit would: that used to count as "none of them was unused".

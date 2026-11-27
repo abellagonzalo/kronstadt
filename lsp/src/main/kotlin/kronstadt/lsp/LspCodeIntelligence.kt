@@ -201,7 +201,7 @@ public class LspCodeIntelligence private constructor(
         suspend fun organizeImports(file: Path, document: TextDocument): TextDocument? {
             val uri = LspMapping.uri(file)
             val params = ExecuteCommandParams(ORGANIZE_IMPORTS, listOf<Any>(uri))
-            // Being unsure counts as used (ADR 0004): any failure, not only an error answer, is no answer.
+            // Any failure, not only an error answer, is no answer, so every import stays undecided (ADR 0004).
             val edits = try {
                 answerFor(file, document, "imports were organized") {
                     refusedEdits.during { request { server.workspaceService.executeCommand(params) } }.second

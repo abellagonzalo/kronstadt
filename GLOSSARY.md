@@ -25,7 +25,7 @@ A place in project source that refers to a Symbol by name, other than its own de
 _Avoid_: reference, call site, occurrence
 
 **Unused Import**:
-An import a file's text doesn't need: removing it from that text adds no error and changes what no name in the file refers to. Whether an import is unused is the code intelligence's call; one it can't decide counts as used.
+An import a file's text doesn't need: removing it from that text adds no error and changes what no name in the file refers to. Whether an import is unused is the code intelligence's call; one it can't decide is never an Unused Import, and is never treated as surely used either (ADR 0004).
 _Avoid_: dead import, redundant import
 
 **Snippet**:
