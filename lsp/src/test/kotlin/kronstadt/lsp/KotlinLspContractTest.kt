@@ -448,6 +448,8 @@ class KotlinLspContractTest {
         suspend fun header(path: String) = assertIs<ReadSymbolResult.Found>(read(null, path), path).location
 
         assertEquals("parse(String, Int) in $shapes, L23-23", header("Calculator/parse(String,Int)"))
+        // Searched by its outermost name, `Outer`, whose files' trees hold the whole path (#215).
+        assertEquals("describe in $shapes, L40-40", header("Outer/Nested/describe"))
         // Same-named classes in two packages: ambiguous, until a package prefix narrows them.
         assertEquals(
             listOf(SymbolCandidate("Shape", alpha), SymbolCandidate("Shape", beta)),

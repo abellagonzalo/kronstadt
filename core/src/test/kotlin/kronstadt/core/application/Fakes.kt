@@ -142,6 +142,8 @@ class FakeCodeIntelligence(
     private val unusedByText: Map<String, Set<String>> = emptyMap(),
     private val undecidedByText: Map<String, Set<String>> = emptyMap(),
     private val searchCap: Int? = null,
+    /** Queries whose search times out, answering nothing (#211). */
+    private val timedOutQueries: Set<String> = emptySet(),
     /**
      * Diagnostics for a file's exact text given the text of every open document, ahead of [diagnosticsByText]: what
      * a file's diagnostics depend on beyond its own text. Null leaves it to [diagnosticsByText].
@@ -234,6 +236,7 @@ class FakeCodeIntelligence(
      */
     override suspend fun workspaceSymbols(query: String): SymbolSearch {
         searched += query
+        if (query in timedOutQueries) return SymbolSearch(emptyList(), SymbolSearch.Completeness.TIMED_OUT)
         val found = index?.filter { it.name.contains(query, ignoreCase = true) } ?: workspaceSymbols
         if (searchCap == null || found.size < searchCap) return SymbolSearch(found)
         val page = found.sortedBy { !it.name.equals(query, ignoreCase = true) }.take(searchCap)

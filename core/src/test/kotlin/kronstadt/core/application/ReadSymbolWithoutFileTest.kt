@@ -141,6 +141,37 @@ class ReadSymbolWithoutFileTest {
     }
 
     @Test
+    fun `a nested path is searched by its outermost name only`() = runTest {
+        val intelligence = intelligence()
+        assertIs<ReadSymbolResult.Found>(read("OrderController/create", intelligence))
+        assertEquals(listOf("OrderController"), intelligence.searched)
+    }
+
+    @Test
+    fun `constructors, companions, package prefixes, anchors, signatures and single names resolve as before`() = runTest {
+        listOf(
+            "Box/constructor()" to listOf("Box"),
+            "Registry/Companion/empty" to listOf("Registry"),
+            "com.example.web/OrderController/create" to listOf("OrderController"),
+            "/OrderController/create" to listOf("OrderController"),
+            "OrderController/create()" to listOf("OrderController"),
+            "com.example.a/Config" to listOf("Config"),
+        ).forEach { (path, queries) ->
+            val intelligence = intelligence()
+            assertIs<ReadSymbolResult.Found>(read(path, intelligence), path)
+            assertEquals(queries, intelligence.searched, path)
+        }
+    }
+
+    @Test
+    fun `a nested miss falls back to the leaf, and suggests from its search`() = runTest {
+        val intelligence = intelligence()
+        val result = assertIs<LookupFailure.NotFound>(read("OrderController/creat", intelligence).lookupFailure())
+        assertEquals(listOf(SymbolCandidate("OrderController/create", controllerKt)), result.suggestions)
+        assertEquals(listOf("OrderController", "creat", "cre"), intelligence.searched)
+    }
+
+    @Test
     fun `same-named classes in two packages are ambiguous, and each candidate names its file`() = runTest {
         val result = assertIs<LookupFailure.Ambiguous>(read("Config").lookupFailure())
         assertEquals(null, result.file)
