@@ -9,6 +9,7 @@ import kronstadt.core.domain.Severity
 import kronstadt.core.domain.SourceLocation
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.TextRange
+import kronstadt.core.domain.range
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -24,8 +25,6 @@ class CollateralErrorsTest {
     private val root = Path.of("/project")
     private val a = "src/A.kt"
     private val b = "src/B.kt"
-
-    private fun range(line: Int, start: Int, end: Int) = TextRange(Position(line, start), Position(line, end))
 
     /** A top-level function `fun <name>…` on [line] of [text], its name at column 4. */
     private fun function(text: String, name: String, line: Int, type: String) = CodeSymbol(

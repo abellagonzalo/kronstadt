@@ -12,7 +12,7 @@ import kronstadt.core.domain.SymbolCandidate
 import kronstadt.core.domain.SymbolKind
 import kronstadt.core.domain.SymbolLocation
 import kronstadt.core.domain.TextEdit
-import kronstadt.core.domain.TextRange
+import kronstadt.core.domain.range
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -25,9 +25,6 @@ class RenameSymbolTest {
     private val mainPath = "src/b/Main.kt"
     private val greeterFile = root.resolve(greeterPath)
     private val mainFile = root.resolve(mainPath)
-
-    private fun range(startLine: Int, startChar: Int, endLine: Int, endChar: Int) =
-        TextRange(Position(startLine, startChar), Position(endLine, endChar))
 
     private fun name(line: Int, char: Int, length: Int) = range(line, char, line, char + length)
 

@@ -4,9 +4,8 @@ import kronstadt.core.domain.SymbolSpan
 
 import kotlinx.coroutines.test.runTest
 import kronstadt.core.domain.CodeSymbol
-import kronstadt.core.domain.Position
 import kronstadt.core.domain.SymbolKind
-import kronstadt.core.domain.TextRange
+import kronstadt.core.domain.range
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -15,9 +14,6 @@ import kotlin.test.assertEquals
 class InsertAndDeleteTest {
     private val root = Path.of("/project")
     private val path = "src/A.kt"
-
-    private fun range(startLine: Int, startChar: Int, endLine: Int, endChar: Int) =
-        TextRange(Position(startLine, startChar), Position(endLine, endChar))
 
     /** A function declared on one line, `fun <name>(): Int = <n>`, at [line] and [indent], plus [extraLinesAbove] of KDoc. */
     private fun function(name: String, line: Int, indent: Int, extraLinesAbove: Int = 0, n: Int = 1) = CodeSymbol(
