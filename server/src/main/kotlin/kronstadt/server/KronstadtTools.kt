@@ -1,7 +1,6 @@
 package kronstadt.server
 
 import io.modelcontextprotocol.kotlin.sdk.server.Server
-import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
@@ -40,7 +39,10 @@ internal class KronstadtTools(
     private val renameSymbol: RenameSymbol,
 ) {
     fun registerOn(server: Server) {
-        server.addTool(
+        // The catch in each handler answers with classes of Kronstadt's too: loaded now, with the handlers (#199).
+        Replies.thrown(NoClassDefFoundError()).toResult()
+
+        server.register(
             name = "kt_read_structure",
             description = "Returns the skeleton of a Kotlin file: every declaration, nested under its container, " +
                 "without bodies. Each line shows the kind, the canonical Symbol Path (pass it as-is to kt_read_symbol " +
@@ -52,9 +54,9 @@ internal class KronstadtTools(
                 },
                 required = listOf("file"),
             ),
-        ) { request -> handle(request) { readStructure(it) } }
+        ) { readStructure(it) }
 
-        server.addTool(
+        server.register(
             name = "kt_find_symbol",
             description = "Finds Kotlin declarations (classes, interfaces, functions, properties...) by exact or " +
                 "partial name (case-insensitive) in the project's own source, using the language server's index. Results " +
@@ -76,9 +78,9 @@ internal class KronstadtTools(
                 },
                 required = listOf("query"),
             ),
-        ) { request -> handle(request) { findSymbol(it) } }
+        ) { findSymbol(it) }
 
-        server.addTool(
+        server.register(
             name = "kt_read_symbol",
             description = "Returns one Kotlin declaration's exact source: its KDoc or comments above, annotations, " +
                 "modifiers, the declaration with its body and nested members, a trailing list comma and an " +
@@ -103,9 +105,9 @@ internal class KronstadtTools(
                 },
                 required = listOf("symbol"),
             ),
-        ) { request -> handle(request) { readSymbol(it) } }
+        ) { readSymbol(it) }
 
-        server.addTool(
+        server.register(
             name = "kt_find_usages",
             description = "Lists every Usage of one Kotlin Symbol in the project's main and test source (not overrides or " +
                 "implementations), using the language server's index. A summary line comes first; then each file (main " +
@@ -136,9 +138,9 @@ internal class KronstadtTools(
                 },
                 required = listOf("symbol"),
             ),
-        ) { request -> handle(request) { findUsages(it) } }
+        ) { findUsages(it) }
 
-        server.addTool(
+        server.register(
             name = "kt_get_definition",
             description = "Finds where a name used inside a Kotlin Symbol is declared, without computing positions: pass " +
                 "the Symbol you are reading and the name. A project declaration comes back as a header (canonical Symbol " +
@@ -174,9 +176,9 @@ internal class KronstadtTools(
                 },
                 required = listOf("symbol", "name"),
             ),
-        ) { request -> handle(request) { getDefinition(it) } }
+        ) { getDefinition(it) }
 
-        server.addTool(
+        server.register(
             name = "kt_edit",
             description = "Changes Kotlin code by Symbol, validated against the compiler before anything is written. " +
                 "A 'replace' Operation swaps a Symbol's whole span (exactly what kt_read_symbol returns: KDoc or " +
@@ -288,9 +290,9 @@ internal class KronstadtTools(
                 },
                 required = listOf("operations"),
             ),
-        ) { request -> handle(request) { edit(it) } }
+        ) { edit(it) }
 
-        server.addTool(
+        server.register(
             name = "kt_rename_symbol",
             description = "Renames a Kotlin Symbol and every Usage of it, across files, modules, main and test " +
                 "source, through the language server, so Usages a text search would miss follow too. The changes " +
@@ -317,7 +319,7 @@ internal class KronstadtTools(
                 },
                 required = listOf("symbol", "newName"),
             ),
-        ) { request -> handle(request) { renameSymbol(it) } }
+        ) { renameSymbol(it) }
     }
 
     private suspend fun edit(args: JsonObject): CallToolResult {
@@ -381,21 +383,34 @@ internal class KronstadtTools(
     }
 
     /**
-     * Infrastructure failures (language server down, timeouts) become tool errors instead of protocol errors, worded by
-     * [Replies.thrown]. A [VirtualMachineError] leaves the JVM in no state to go on and still propagates.
+     * Registers the tool [name], whose handler runs [block] on the call's arguments. Infrastructure failures (language server
+     * down, timeouts) become tool errors instead of protocol errors, worded by [Replies.thrown]. A [VirtualMachineError] leaves
+     * the JVM in no state to go on and still propagates.
+     *
+     * The handler is built here, at registration, and catches within its own body, so a call loads no class of Kronstadt's
+     * before it reaches the catch: one loaded on a tool's first call fails if the install was rebuilt since the server
+     * started, and must fail inside the catch to get [Replies.thrown]'s advice (#199).
      */
-    private suspend fun handle(request: CallToolRequest, block: suspend (JsonObject) -> CallToolResult): CallToolResult =
-        try {
-            block(request.arguments ?: JsonObject(emptyMap()))
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Replies.thrown(e).toResult()
-        } catch (e: VirtualMachineError) {
-            throw e
-        } catch (e: Error) {
-            Replies.thrown(e).toResult()
+    private fun Server.register(
+        name: String,
+        description: String,
+        inputSchema: ToolSchema,
+        block: suspend (JsonObject) -> CallToolResult,
+    ) {
+        addTool(name = name, description = description, inputSchema = inputSchema) { request ->
+            try {
+                block(request.arguments ?: JsonObject(emptyMap()))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Replies.thrown(e).toResult()
+            } catch (e: VirtualMachineError) {
+                throw e
+            } catch (e: Error) {
+                Replies.thrown(e).toResult()
+            }
         }
+    }
 
     /** [this] as the MCP SDK sends it: `isError` is left out of a result, as it always was. */
     private fun Reply.toResult() = CallToolResult(content = listOf(TextContent(text)), isError = isError.takeIf { it })
