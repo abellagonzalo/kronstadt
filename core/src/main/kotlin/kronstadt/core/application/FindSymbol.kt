@@ -96,6 +96,7 @@ public sealed interface FindSymbolResult {
 
     /** The index didn't answer the search for [query] in time, typically because the name is too common; nothing is known. */
     public data class TimedOut(val query: String) : FindSymbolResult
+
     public data class InvalidQuery(val reason: String) : FindSymbolResult
 
     /** The index was still incomplete after waiting; nothing was searched. */

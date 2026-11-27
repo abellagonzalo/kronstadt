@@ -50,8 +50,8 @@ class WorkspaceSymbolTimeoutTest {
 
         assertEquals(SymbolSearch(emptyList(), SymbolSearch.Completeness.TIMED_OUT), search)
         assertTrue(elapsed >= TIMEOUT && elapsed < TIMEOUT + MARGIN, "returned after $elapsed")
-        // lsp4j cancels the server's future when `$/cancelRequest` arrives.
-        assertTrue(runCatching { server.pending.get(MARGIN.inWholeMilliseconds, TimeUnit.MILLISECONDS) }.isFailure)
+        // lsp4j cancels the server's future when `$/cancelRequest` arrives; wait for it to, then check it did.
+        runCatching { server.pending.get(MARGIN.inWholeMilliseconds, TimeUnit.MILLISECONDS) }
         assertTrue(server.pending.isCancelled, "the server was never told to cancel")
     }
 
@@ -89,11 +89,11 @@ private class SlowSymbolServer : LanguageServer {
     }
 
     override fun getTextDocumentService(): TextDocumentService = object : TextDocumentService {
-    override fun didOpen(params: DidOpenTextDocumentParams) {}
-    override fun didChange(params: DidChangeTextDocumentParams) {}
-    override fun didClose(params: DidCloseTextDocumentParams) {}
-    override fun didSave(params: DidSaveTextDocumentParams) {}
-}
+        override fun didOpen(params: DidOpenTextDocumentParams) {}
+        override fun didChange(params: DidChangeTextDocumentParams) {}
+        override fun didClose(params: DidCloseTextDocumentParams) {}
+        override fun didSave(params: DidSaveTextDocumentParams) {}
+    }
     override fun initialize(params: InitializeParams): CompletableFuture<InitializeResult> = error("not stubbed")
     override fun shutdown(): CompletableFuture<Any> = CompletableFuture.completedFuture(null)
     override fun exit() {}

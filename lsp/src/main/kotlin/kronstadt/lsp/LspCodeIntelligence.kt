@@ -553,8 +553,20 @@ public class LspCodeIntelligence private constructor(
         }
 
         /** An adapter over an already initialized [server] running as [process]; for tests with a stubbed server. */
-        internal fun connected(process: Process, server: LanguageServer, requestTimeout: Duration, workspaceSymbolTimeout: Duration = WORKSPACE_SYMBOL_TIMEOUT): LspCodeIntelligence =
-            LspCodeIntelligence(process, server, requestTimeout, workspaceSymbolTimeout, ReadinessTracker(), serverVersion = null, RefusedEdits())
+        internal fun connected(
+            process: Process,
+            server: LanguageServer,
+            requestTimeout: Duration,
+            workspaceSymbolTimeout: Duration = WORKSPACE_SYMBOL_TIMEOUT,
+        ): LspCodeIntelligence = LspCodeIntelligence(
+            process,
+            server,
+            requestTimeout,
+            workspaceSymbolTimeout,
+            ReadinessTracker(),
+            serverVersion = null,
+            RefusedEdits(),
+        )
 
         /**
          * Awaits [future], but fails fast if the language server process dies (otherwise lsp4j would leave the
