@@ -35,6 +35,8 @@ internal class ToolHarness(
     intelligence: CodeIntelligence,
     /** How long the use cases that wait for readiness wait. */
     readinessTimeout: Duration = Readiness.DEFAULT_TIMEOUT,
+    /** Where the server's own classes are loaded from: the test's own, or an install that can change under it. */
+    install: ClassLoader = KronstadtTools::class.java.classLoader,
 ) {
     private val server = Server(
         Implementation(name = "kronstadt-test", version = "0"),
@@ -43,15 +45,18 @@ internal class ToolHarness(
         val files = LocalFileStore(root)
         // Shared, as in Main.kt: a rename drops the Rejected Edit an Edit kept.
         val writeCalls = WriteCalls()
-        KronstadtTools(
-            ReadStructure(files, intelligence),
-            FindSymbol(files, intelligence, readinessTimeout),
-            ReadSymbol(files, intelligence, readinessTimeout),
-            FindUsages(files, intelligence, readinessTimeout),
-            GetDefinition(files, intelligence, readinessTimeout),
-            Edit(files, intelligence, readinessTimeout, writeCalls = writeCalls),
-            RenameSymbol(files, intelligence, readinessTimeout, writeCalls = writeCalls),
-        ).registerOn(server)
+        val readStructure = ReadStructure(files, intelligence)
+        val findSymbol = FindSymbol(files, intelligence, readinessTimeout)
+        val readSymbol = ReadSymbol(files, intelligence, readinessTimeout)
+        val findUsages = FindUsages(files, intelligence, readinessTimeout)
+        val getDefinition = GetDefinition(files, intelligence, readinessTimeout)
+        val edit = Edit(files, intelligence, readinessTimeout, writeCalls = writeCalls)
+        val renameSymbol = RenameSymbol(files, intelligence, readinessTimeout, writeCalls = writeCalls)
+        // Through reflection, so the tools can come from another class loader than the test's: one path for both.
+        val tools = install.loadClass(KronstadtTools::class.java.name)
+        val instance = tools.constructors.single()
+            .newInstance(readStructure, findSymbol, readSymbol, findUsages, getDefinition, edit, renameSymbol)
+        tools.getMethod("registerOn", Server::class.java).invoke(instance, server)
     }
 
     /** No tool handler talks back to the client. */
