@@ -347,5 +347,8 @@ internal sealed interface DefinitionTarget {
      * A file [entry] in the JDK's [module]: a class file (`jrt:` URIs), or a source file in the JDK's `src.zip` at
      * [sources], which holds each module's sources under the module's name.
      */
-    data class Jdk(val module: String, val entry: String, val sources: Path? = null) : DefinitionTarget
+    data class Jdk(val module: String, val entry: String, val sources: Path? = null) : DefinitionTarget {
+        /** [entry]'s path inside the `src.zip` at [sources]. */
+        val sourcesEntry: String get() = "$module/$entry"
+    }
 }

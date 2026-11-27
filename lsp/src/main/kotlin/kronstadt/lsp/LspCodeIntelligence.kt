@@ -267,8 +267,8 @@ public class LspCodeIntelligence private constructor(
         /**
          * kotlin-lsp 271.2085.0 points into a library's sources jar when Gradle has one (`jar:` URIs), and at class files
          * otherwise, including the JDK's (`jrt:` URIs). With some JDKs (e.g. Temurin 25) it points into the JDK's `src.zip`
-         * instead (`jar:` URIs too). A sources-jar or `src.zip` entry is read here, with its Symbols: kotlin-lsp answers
-         * `documentSymbol` for a jar URI without it being opened. Other URIs are dropped.
+         * instead (`jar:` URIs too). A sources-jar or `src.zip` entry is read here, with its document symbols: kotlin-lsp
+         * answers `documentSymbol` for a jar URI without it being opened. Other URIs are dropped.
          */
         override suspend fun definition(file: Path, document: TextDocument, position: Position): List<Definition> {
             val uri = LspMapping.uri(file)
@@ -283,7 +283,7 @@ public class LspCodeIntelligence private constructor(
                         "JDK ${parsed.module}",
                         parsed.entry,
                         range,
-                        parsed.sources?.let { librarySource(target, it, "${parsed.module}/${parsed.entry}") },
+                        parsed.sources?.let { librarySource(target, it, parsed.sourcesEntry) },
                     )
                     null -> null
                 }

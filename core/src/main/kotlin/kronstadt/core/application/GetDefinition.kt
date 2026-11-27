@@ -106,7 +106,7 @@ public class GetDefinition(
     /**
      * A library or JDK declaration, which no tool can edit. With sources: its fully qualified name, then its KDoc and
      * declaration without the body. Without, or when no Symbol is at the definition (as for Java source kotlin-lsp gives no
-     * Symbols for): the class it is in, from the class or Java file's path.
+     * document symbols for): the class it is in, from the class or Java file's path.
      */
     private fun libraryTarget(definition: Definition.InLibrary, name: String): FoundDefinition {
         val source = definition.source
