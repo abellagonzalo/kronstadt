@@ -85,26 +85,55 @@ internal class SymbolResolver(
     /**
      * `workspace/symbol` only supplies candidate files: kotlin-lsp's index is lossy, so each candidate is resolved
      * through its own `documentSymbol` tree. A search that may have left out a symbol of that exact name resolves nothing.
+     *
+     * The outermost indexed segment is searched first: its search is cheaper than the leaf's for a common member name,
+     * and every file declaring the whole path declares it too. If that search is incomplete or its files hold no match,
+     * the leaf is searched as if alone, so a path the leaf finds still resolves (#215).
      */
     private suspend fun resolveProjectWide(session: AnalysisSession, parsed: ParsedLookup): Outcome<Found> {
         val symbol = parsed.path
         // Constructors and unnamed companions aren't indexed under those names; the class before them is.
-        val query = symbol.segments.lastOrNull { it.name !in UNINDEXED_NAMES }?.name
-            ?: return Outcome.Failed(LookupFailure.NotFound(parsed.symbol, null, emptyList()))
-        val search = intelligence.workspaceSymbols(query)
-        // Not a miss: the index said nothing at all, so neither "not found" nor suggestions would be true.
-        if (search.completeness == SymbolSearch.Completeness.TIMED_OUT) {
-            return Outcome.Failed(LookupFailure.SearchTimedOut(parsed.symbol, query))
-        }
-        // A file the index left out may declare the name too: resolving from the rest would pick one (ADR 0002).
-        if (search.completeness == SymbolSearch.Completeness.INCOMPLETE) {
-            return Outcome.Failed(LookupFailure.TooManyDeclarations(parsed.symbol, query))
-        }
-        val hits = search.symbols.filter { AnalysedFile.isKotlin(it.file) }
+        val indexed = symbol.segments.map { it.name }.filter { it !in UNINDEXED_NAMES }
+        val leaf = indexed.lastOrNull() ?: return Outcome.Failed(LookupFailure.NotFound(parsed.symbol, null, emptyList()))
         val cache = mutableMapOf<Path, AnalysedFile?>()
         val analysed: suspend (Path) -> AnalysedFile? = { file -> cache.getOrPut(file) { session.analyse(files, file) } }
 
-        val matches = hits.filter { it.name == query }.map { it.file }.distinct().sorted().flatMap { file ->
+        val outer = indexed.first()
+        if (outer != leaf) {
+            val search = intelligence.workspaceSymbols(outer)
+            // Not a miss: the index said nothing at all, and the leaf, a commoner name, would hardly answer sooner.
+            if (search.completeness == SymbolSearch.Completeness.TIMED_OUT) {
+                return Outcome.Failed(LookupFailure.SearchTimedOut(parsed.symbol, outer))
+            }
+            if (search.completeness != SymbolSearch.Completeness.INCOMPLETE) {
+                val matches = matchesIn(search.symbols, outer, symbol, analysed)
+                if (matches.isNotEmpty()) return outcomeOf(parsed, matches)
+            }
+        }
+
+        val search = intelligence.workspaceSymbols(leaf)
+        // Not a miss: the index said nothing at all, so neither "not found" nor suggestions would be true.
+        if (search.completeness == SymbolSearch.Completeness.TIMED_OUT) {
+            return Outcome.Failed(LookupFailure.SearchTimedOut(parsed.symbol, leaf))
+        }
+        // A file the index left out may declare the name too: resolving from the rest would pick one (ADR 0002).
+        if (search.completeness == SymbolSearch.Completeness.INCOMPLETE) {
+            return Outcome.Failed(LookupFailure.TooManyDeclarations(parsed.symbol, leaf))
+        }
+        val hits = search.symbols.filter { AnalysedFile.isKotlin(it.file) }
+        val matches = matchesIn(hits, leaf, symbol, analysed)
+        if (matches.isNotEmpty()) return outcomeOf(parsed, matches)
+        return Outcome.Failed(LookupFailure.NotFound(parsed.symbol, null, suggestionsProjectWide(symbol, leaf, hits, analysed)))
+    }
+
+    /** Every match of [symbol] in the Kotlin files the index found declaring exactly [query], among [hits]. */
+    private suspend fun matchesIn(
+        hits: List<SymbolLocation>,
+        query: String,
+        symbol: SymbolPath,
+        analysed: suspend (Path) -> AnalysedFile?,
+    ): List<Found> =
+        hits.filter { it.name == query && AnalysedFile.isKotlin(it.file) }.map { it.file }.distinct().sorted().flatMap { file ->
             val candidate = analysed(file)?.takeIf { inPackage(it, symbol) } ?: return@flatMap emptyList()
             when (val resolution = candidate.resolve(symbol)) {
                 is AnalysedFile.Resolution.Found -> listOf(Found(candidate, resolution.node, resolution.path, resolution.preferred))
@@ -112,12 +141,14 @@ internal class SymbolResolver(
                 is AnalysedFile.Resolution.NotFound -> emptyList()
             }
         }
-        if (matches.size == 1) return Outcome.Ok(matches.single())
-        if (matches.isNotEmpty()) {
-            return Outcome.Failed(LookupFailure.Ambiguous(parsed.symbol, null, matches.map { it.analysed.candidate(it.node) }))
+
+    /** One match resolves [parsed]; several are ambiguous. */
+    private fun outcomeOf(parsed: ParsedLookup, matches: List<Found>): Outcome<Found> =
+        if (matches.size == 1) {
+            Outcome.Ok(matches.single())
+        } else {
+            Outcome.Failed(LookupFailure.Ambiguous(parsed.symbol, null, matches.map { it.analysed.candidate(it.node) }))
         }
-        return Outcome.Failed(LookupFailure.NotFound(parsed.symbol, null, suggestionsProjectWide(symbol, query, hits, analysed)))
-    }
 
     /**
      * Close names for [symbol], which matched nothing project-wide: they live in the files the index found for names

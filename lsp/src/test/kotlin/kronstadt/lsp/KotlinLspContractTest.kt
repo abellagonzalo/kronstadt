@@ -448,6 +448,8 @@ class KotlinLspContractTest {
         suspend fun header(path: String) = assertIs<ReadSymbolResult.Found>(read(null, path), path).location
 
         assertEquals("parse(String, Int) in $shapes, L23-23", header("Calculator/parse(String,Int)"))
+        // Searched by its outermost name, `Outer`, whose files' trees hold the whole path (#215).
+        assertEquals("describe in $shapes, L40-40", header("Outer/Nested/describe"))
         // Same-named classes in two packages: ambiguous, until a package prefix narrows them.
         assertEquals(
             listOf(SymbolCandidate("Shape", alpha), SymbolCandidate("Shape", beta)),
@@ -963,9 +965,9 @@ class KotlinLspContractTest {
                     session.unusedImports(file, document, document.imports.toSet(), Validation.DEFAULT_TIMEOUT).unused.map { it.text }.toSet(),
                 )
                 assertEquals(ImportUsage(emptySet()), session.unusedImports(file, usingAll, usingAll.imports.toSet(), Validation.DEFAULT_TIMEOUT))
-                // Without time for the check, an import a new star covers is undecided.
+                // Without time for the check, an import a new star covers is undecided, unless the code refers to its name (#209).
                 assertEquals(
-                    ImportUsage.undecided(document.imports.toSet()),
+                    ImportUsage(emptySet(), document.imports.filterTo(mutableSetOf()) { it.text == "java.io.Serializable" }),
                     session.unusedImports(file, document, document.imports.toSet(), Duration.ZERO),
                 )
             }
