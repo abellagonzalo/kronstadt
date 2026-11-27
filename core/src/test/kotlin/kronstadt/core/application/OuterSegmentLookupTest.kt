@@ -44,9 +44,14 @@ class OuterSegmentLookupTest {
     private val uSource = "package com.example.u\n\nclass Shape\n"
     private val uShape = symbol("Shape", SymbolKind.CLASS, range(2, 0, 2, 11), 2, 6)
 
+    private val vKt = "src/main/kotlin/com/example/v/Shape.kt"
+    private val vSource = "package com.example.v\n\nclass Shape {\n    fun perimeter(): Int = 4\n}\n"
+    private val perimeter = symbol("perimeter", SymbolKind.FUNCTION, range(3, 4, 3, 28), 3, 8, parameterTypes = "", type = "(): Int")
+    private val vShape = symbol("Shape", SymbolKind.CLASS, range(2, 0, 4, 1), 2, 6, children = listOf(perimeter))
+
     private fun file(path: String) = root.resolve(path)
 
-    /** Three classes named `Shape`; the nested `Edge` is left out, an index gap. */
+    /** Four classes named `Shape`, one of them left out; the nested `Edge` is left out too: index gaps. */
     private val index = listOf(
         SymbolLocation("Shape", SymbolKind.CLASS, file(sKt), sShape.range),
         SymbolLocation("area", SymbolKind.FUNCTION, file(sKt), sArea.range, "Shape"),
@@ -54,16 +59,18 @@ class OuterSegmentLookupTest {
         SymbolLocation("Shape", SymbolKind.CLASS, file(tKt), tShape.range),
         SymbolLocation("area", SymbolKind.FUNCTION, file(tKt), tArea.range, "Shape"),
         SymbolLocation("Shape", SymbolKind.CLASS, file(uKt), uShape.range),
+        // The fourth `Shape` is only listed by its member.
+        SymbolLocation("perimeter", SymbolKind.FUNCTION, file(vKt), perimeter.range, "Shape"),
     )
 
     private fun intelligence(searchCap: Int? = null, timedOutQueries: Set<String> = emptySet()) = FakeCodeIntelligence(
         index = index,
         searchCap = searchCap,
         timedOutQueries = timedOutQueries,
-        symbolsByFile = mapOf(file(sKt) to listOf(sShape), file(tKt) to listOf(tShape), file(uKt) to listOf(uShape)),
+        symbolsByFile = mapOf(file(sKt) to listOf(sShape), file(tKt) to listOf(tShape), file(uKt) to listOf(uShape), file(vKt) to listOf(vShape)),
     )
 
-    private val files = FakeFileStore(root, mapOf(sKt to sSource, tKt to tSource, uKt to uSource))
+    private val files = FakeFileStore(root, mapOf(sKt to sSource, tKt to tSource, uKt to uSource, vKt to vSource))
 
     private suspend fun read(symbol: String, intelligence: FakeCodeIntelligence) = ReadSymbol(files, intelligence)(null, symbol)
 
@@ -103,6 +110,13 @@ class OuterSegmentLookupTest {
         val intelligence = intelligence()
         assertEquals("length in $sKt, L7-7", assertIs<ReadSymbolResult.Found>(read("Edge/length", intelligence)).location)
         assertEquals(listOf("Edge", "length"), intelligence.searched)
+    }
+
+    @Test
+    fun `outer files that don't hold the path fall back to the leaf, which resolves`() = runTest {
+        val intelligence = intelligence()
+        assertEquals("perimeter in $vKt, L4-4", assertIs<ReadSymbolResult.Found>(read("Shape/perimeter", intelligence)).location)
+        assertEquals(listOf("Shape", "perimeter"), intelligence.searched)
     }
 
     @Test

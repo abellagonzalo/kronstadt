@@ -333,8 +333,8 @@ internal object Replies {
                     "dependencies' included, that $INDEX_STOPS and may not list them all; " +
                     if (declaredIn) "pass the file that declares it as declaredIn" else "pass its file"
             is LookupFailure.SearchTimedOut ->
-                "Looking up '${failure.symbol}' without a file timed out: '${failure.name}' is too common a name for kotlin-lsp " +
-                    "to search in time; " + if (declaredIn) "pass the file that declares it as declaredIn" else "pass its file"
+                "Looking up '${failure.symbol}' without a file timed out: kotlin-lsp took too long to search for " +
+                    "'${failure.name}'; " + if (declaredIn) "pass the file that declares it as declaredIn" else "pass its file"
             is LookupFailure.OutOfSync ->
                 "Index out of sync for ${failure.symbol} in ${failure.file}: its name is not where kotlin-lsp says; retry"
             is LookupFailure.SharedLine ->

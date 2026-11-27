@@ -232,7 +232,7 @@ class FakeCodeIntelligence(
 
     /**
      * Like kotlin-lsp, stops at [searchCap] results, if given, listing names equal to the query first; a full page is
-     * incomplete, for exact names too if it ends in one.
+     * incomplete, for exact names too if it ends in one. A query in [timedOutQueries] times out instead.
      */
     override suspend fun workspaceSymbols(query: String): SymbolSearch {
         searched += query

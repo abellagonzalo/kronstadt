@@ -138,8 +138,8 @@ class RepliesTest {
 
     @Test
     fun `a timed-out search asks for the file, as declaredIn for kt_find_usages`() {
-        val cause = "Looking up 'Shape/toString' without a file timed out: 'toString' is too common a name for kotlin-lsp to search in time; "
-        val timedOut = LookupFailure.SearchTimedOut("Shape/toString", "toString")
+        val cause = "Looking up 'Shape/toString' without a file timed out: kotlin-lsp took too long to search for 'Shape'; "
+        val timedOut = LookupFailure.SearchTimedOut("Shape/toString", "Shape")
         assertEquals(cause + "pass its file", Replies.lookupFailure(timedOut, ToolAdvice.READ_SYMBOL))
         assertEquals(cause + "pass the file that declares it as declaredIn", Replies.lookupFailure(timedOut, ToolAdvice.FIND_USAGES))
     }

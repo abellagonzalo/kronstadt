@@ -23,9 +23,10 @@ class WorkspaceSymbolTimeoutToolTest {
     @Test
     fun `a lookup without a file that times out asks for the file, never says not found`() = runTest {
         assertEquals(
-            true to "Looking up 'toString' without a file timed out: 'toString' is too common a name for kotlin-lsp " +
-                "to search in time; pass its file",
-            tools.call("kt_read_symbol", """{"symbol": "toString"}"""),
+            // A nested path is searched by its outermost name first (#215), so that is the search that timed out.
+            true to "Looking up 'Shape/toString' without a file timed out: kotlin-lsp took too long to search for 'Shape'; " +
+                "pass its file",
+            tools.call("kt_read_symbol", """{"symbol": "Shape/toString"}"""),
         )
     }
 
