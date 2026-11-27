@@ -304,7 +304,7 @@ internal class KronstadtTools(
                 "The rename removes the imports it made unused (used before it, unused after it); imports that were " +
                 "already unused are never touched. The result lists each changed file with its Usages and imports, " +
                 "any file rename, the imports removed, those kept because it couldn't check them, and the " +
-                "Symbol's new canonical path. A rename is its own call, never an " +
+                "Symbol's new canonical path and the file it is in. A rename is its own call, never an " +
                 "Operation of a kt_edit batch. Prefer it over kt_edit or text edits to rename anything.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {

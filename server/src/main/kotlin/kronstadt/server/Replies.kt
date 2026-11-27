@@ -388,8 +388,9 @@ internal object Replies {
     private const val UNCHECKED_IMPORTS = "Kept imports it couldn't check (no answer from the code intelligence):"
 
     /**
-     * A summary line with the new path, as kt_find_usages counts (`3 usages in 2 files (+1 import)`), then each changed
-     * file with its usages and new warnings, then any file rename, removed imports and imports kept unchecked.
+     * A summary line, as kt_find_usages counts (`3 usages in 2 files (+1 import)`), with the new canonical path and
+     * the file it is in (the renamed one, if the file was); then each changed file with its usages and new warnings,
+     * then any file rename, removed imports and imports kept unchecked.
      */
     private fun renamed(symbol: String, newName: String, result: RenameResult.Renamed) = buildString {
         val usages = result.files.sumOf { it.usages }
@@ -397,8 +398,10 @@ internal object Replies {
         append("Renamed ").append(symbol).append(" to ").append(newName).append(": ")
         append(counted(usages, "usage")).append(" in ").append(counted(result.files.count { it.usages > 0 }, "file"))
         if (imports > 0) append(" (+").append(counted(imports, "import")).append(')')
+        val declaring = result.fileRenamed?.to ?: result.files.first().file
         append(", and the declaration. New path: ")
-        append(result.newPath ?: "unknown (several Symbols match it now; use kt_read_structure)").append('\n')
+        append(result.newPath?.let { "$it (in $declaring)" } ?: "unknown (several Symbols in $declaring match it now; use kt_read_structure)")
+        append('\n')
         result.files.forEachIndexed { index, file ->
             val parts = listOfNotNull(
                 "declaration".takeIf { index == 0 },
