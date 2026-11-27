@@ -79,7 +79,8 @@ class KtEditToolTest {
         val (failed, text) = ktEdit(fixBroken)
 
         assertEquals(false, failed, text)
-        assertEquals("Edited A.kt", text)
+        // Kept for want of an answer, so listed (#209).
+        assertEquals("Edited A.kt\nKept imports it couldn't check (no answer from the code intelligence):\n  b.Bar\n  b.Baz", text)
         assertEquals(fixed, file.readText())
     }
 

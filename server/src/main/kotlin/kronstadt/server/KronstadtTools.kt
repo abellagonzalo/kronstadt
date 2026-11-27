@@ -207,7 +207,8 @@ internal class KronstadtTools(
                 "new block after the package line); none is reordered, and " +
                 "nothing is imported unless asked. The Edit removes the imports it made unused (used before it, " +
                 "unused after it, in the files it changed) unless an Operation listed them, and lists them in the " +
-                "result; imports that were already unused are never touched. " +
+                "result; imports that were already unused are never touched. An import it couldn't check (no " +
+                "answer from the code intelligence) is kept and listed apart. " +
                 "Files are written only if the Edit adds no compiler errors to them; otherwise nothing is written and " +
                 "the new errors are listed. " +
                 "If the Edit changed the header of an existing Symbol (removed or renamed it, or changed its kind, " +
@@ -302,7 +303,8 @@ internal class KronstadtTools(
                 "or none is. A class named like its file also renames the file (refused if the new file exists). " +
                 "The rename removes the imports it made unused (used before it, unused after it); imports that were " +
                 "already unused are never touched. The result lists each changed file with its Usages and imports, " +
-                "any file rename, the imports removed, and the Symbol's new canonical path. A rename is its own call, never an " +
+                "any file rename, the imports removed, those kept because it couldn't check them, and the " +
+                "Symbol's new canonical path. A rename is its own call, never an " +
                 "Operation of a kt_edit batch. Prefer it over kt_edit or text edits to rename anything.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {

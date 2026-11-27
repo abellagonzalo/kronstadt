@@ -215,7 +215,26 @@ class RenameSymbolTest {
         )
 
         assertEquals(withUnused.replace("Greeter", "Host"), files.content(mainPath))
-        assertEquals(emptyList(), assertIs<RenameResult.Renamed>(result).importsRemoved)
+        val renamed = assertIs<RenameResult.Renamed>(result)
+        assertEquals(emptyList(), renamed.importsRemoved)
+        // Kept without an answer, so listed (#209).
+        assertEquals(listOf(KeptImport(mainPath, "a.Unused")), renamed.importsUnchecked)
+    }
+
+    @Test
+    fun `an import kotlin-lsp removes stays and is listed when the code intelligence can't tell it is unused after the rename (#209)`() = runTest {
+        // a.Unused is used before the rename; after it, there is no answer about it.
+        val (files, result) = renameDroppingUnused(emptyMap(), undecidedByText = mapOf(withUnused.replace("Greeter", "Host") to setOf("a.Unused")))
+
+        assertEquals(withUnused.replace("Greeter", "Host"), files.content(mainPath))
+        assertEquals(
+            RenameResult.Renamed(
+                newPath = "Host",
+                files = listOf(RenamedFile(classPath, usages = 0), RenamedFile(mainPath, usages = 2, imports = 1)),
+                importsUnchecked = listOf(KeptImport(mainPath, "a.Unused")),
+            ),
+            result,
+        )
     }
 
     @Test

@@ -9,6 +9,7 @@ import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.time.Duration.Companion.seconds
 
 /** The imports an Operation lists: added to its file if missing, sorted in, and validated with the rest of the Edit. */
 class EditImportsTest {
@@ -282,7 +283,11 @@ class EditImportsTest {
             undecidedByText = mapOf(source to setOf("c.C2", "c.C3")),
         )
 
-        assertEquals(EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 7, 7)), emptyList(), 0, emptyList(), 0))), result)
+        // Kept without an answer, so listed (#209).
+        assertEquals(
+            EditResult.Written(listOf(EditedFile(path, listOf(EditedSymbol("greet", 7, 7)), emptyList(), 0, emptyList(), 0, importsUnchecked = listOf("c.C2", "c.C3")))),
+            result,
+        )
         assertEquals(fixed, files.content(path))
     }
 
@@ -306,8 +311,51 @@ class EditImportsTest {
             undecidedByText = mapOf(source to setOf("c.C3")),
         )
 
-        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0, importsRemoved = listOf("c.C2")))), result)
+        assertEquals(
+            EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0, importsRemoved = listOf("c.C2"), importsUnchecked = listOf("c.C3")))),
+            result,
+        )
         assertEquals(expected, files.content(path))
+    }
+
+    @Test
+    fun `an import the code intelligence couldn't decide after the Edit stays, and is listed as unchecked (#209)`() = runTest {
+        // c.C2 is used before the Edit; after it, there is no answer about it.
+        val (result, files) = run(pairSource, pairTexts, Delete(path, "make"), undecidedByText = mapOf(pairAfterDelete to setOf("c.C2")))
+
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0, importsUnchecked = listOf("c.C2")))), result)
+        assertEquals(pairAfterDelete, files.content(path))
+    }
+
+    @Test
+    fun `an import undecided after the Edit that was already unused before it is neither removed nor listed`() = runTest {
+        val source = "package a\n\nimport c.C1\nimport c.C2\n\nfun greet() = C1\n\nfun make() = 1\n"
+        val texts = mapOf(source to listOf(function("greet", 5), function("make", 7)), pairAfterDelete to listOf(function("greet", 5)))
+
+        val (result, files) = run(
+            source,
+            texts,
+            Delete(path, "make"),
+            unusedByText = mapOf(source to setOf("c.C2")),
+            undecidedByText = mapOf(pairAfterDelete to setOf("c.C2")),
+        )
+
+        assertEquals(EditResult.Written(listOf(EditedFile(path, emptyList(), emptyList(), 0, emptyList(), 0))), result)
+        assertEquals(pairAfterDelete, files.content(path))
+    }
+
+    @Test
+    fun `each edited file's questions get the whole budget, whatever the other files' took (#209)`() = runTest {
+        val other = "src/B.kt"
+        val files = FakeFileStore(root, mapOf(path to pairSource, other to pairSource))
+        val intelligence = FakeCodeIntelligence(symbolsByText = pairTexts, unusedByText = mapOf(pairAfterDelete to setOf("c.C2")))
+
+        val result = Edit(files, intelligence, validationTimeout = 7.seconds)(listOf(Delete(path, "make"), Delete(other, "make")))
+
+        intelligence.assertOneSessionClosedEverything()
+        assertEquals(listOf(listOf("c.C2"), listOf("c.C2")), assertIs<EditResult.Written>(result, "$result").files.map { it.importsRemoved })
+        // Each file's question about its text after the Edit, then about its text before it.
+        assertEquals(List(4) { 7.seconds }, intelligence.unusedBudgets)
     }
 
     @Test
