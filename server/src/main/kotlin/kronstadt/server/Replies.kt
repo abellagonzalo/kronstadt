@@ -388,8 +388,9 @@ internal object Replies {
     private const val UNCHECKED_IMPORTS = "Kept imports it couldn't check (no answer from the code intelligence):"
 
     /**
-     * A summary line with the new path and the file it is in (the renamed one, if the file was), as kt_find_usages counts (`3 usages in 2 files (+1 import)`), then each changed
-     * file with its usages and new warnings, then any file rename, removed imports and imports kept unchecked.
+     * A summary line, as kt_find_usages counts (`3 usages in 2 files (+1 import)`), with the new canonical path and
+     * the file it is in (the renamed one, if the file was); then each changed file with its usages and new warnings,
+     * then any file rename, removed imports and imports kept unchecked.
      */
     private fun renamed(symbol: String, newName: String, result: RenameResult.Renamed) = buildString {
         val usages = result.files.sumOf { it.usages }

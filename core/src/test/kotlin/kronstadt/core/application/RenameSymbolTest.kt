@@ -138,7 +138,7 @@ class RenameSymbolTest {
     }
 
     @Test
-    fun `a new name another Symbol in the file has makes the new path carry the containers that tell them apart (#196)`() = runTest {
+    fun `renaming to a name another Symbol in the file has keeps the containers in the new path (#196)`() = runTest {
         val withHello = "${greeting}\nfun hello(): Int = 1\n"
         fun symbols(member: String) = greeter(member) +
             CodeSymbol("hello", SymbolKind.FUNCTION, range(6, 0, 6, 20), name(6, 4, 5), parameterTypes = "", type = "(): Int")
