@@ -965,9 +965,9 @@ class KotlinLspContractTest {
                     session.unusedImports(file, document, document.imports.toSet(), Validation.DEFAULT_TIMEOUT).unused.map { it.text }.toSet(),
                 )
                 assertEquals(ImportUsage(emptySet()), session.unusedImports(file, usingAll, usingAll.imports.toSet(), Validation.DEFAULT_TIMEOUT))
-                // Without time for the check, an import a new star covers is undecided.
+                // Without time for the check, an import a new star covers is undecided, unless the code refers to its name (#209).
                 assertEquals(
-                    ImportUsage.undecided(document.imports.toSet()),
+                    ImportUsage(emptySet(), document.imports.filterTo(mutableSetOf()) { it.text == "java.io.Serializable" }),
                     session.unusedImports(file, document, document.imports.toSet(), Duration.ZERO),
                 )
             }
