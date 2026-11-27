@@ -243,7 +243,7 @@ private class RecordingServer : LanguageServer {
 }
 
 /** A language server process that never exits. */
-private class LiveProcess : Process() {
+internal class LiveProcess : Process() {
     override fun getOutputStream(): OutputStream = OutputStream.nullOutputStream()
     override fun getInputStream(): InputStream = InputStream.nullInputStream()
     override fun getErrorStream(): InputStream = InputStream.nullInputStream()

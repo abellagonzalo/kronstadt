@@ -97,6 +97,11 @@ internal object Replies {
                     ""
                 },
         )
+        // kind is filtered after the search, so it wouldn't make it faster: only a more specific name does.
+        is FindSymbolResult.TimedOut -> Reply.error(
+            "Searching for '${result.query}' timed out: it is too common a name for kotlin-lsp to search in time; " +
+                "narrow the query with a longer, more specific name",
+        )
         is FindSymbolResult.InvalidQuery -> Reply.error(result.reason)
         is FindSymbolResult.NotReady -> notReady(result.readiness)
     }
@@ -327,6 +332,9 @@ internal object Replies {
                 "'${failure.symbol}' can't be resolved without a file: so many declarations are named '${failure.name}', " +
                     "dependencies' included, that $INDEX_STOPS and may not list them all; " +
                     if (declaredIn) "pass the file that declares it as declaredIn" else "pass its file"
+            is LookupFailure.SearchTimedOut ->
+                "Looking up '${failure.symbol}' without a file timed out: '${failure.name}' is too common a name for kotlin-lsp " +
+                    "to search in time; " + if (declaredIn) "pass the file that declares it as declaredIn" else "pass its file"
             is LookupFailure.OutOfSync ->
                 "Index out of sync for ${failure.symbol} in ${failure.file}: its name is not where kotlin-lsp says; retry"
             is LookupFailure.SharedLine ->

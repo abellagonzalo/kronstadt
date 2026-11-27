@@ -80,6 +80,9 @@ public data class SymbolSearch(val symbols: List<SymbolLocation>, val completene
 
         /** Even symbols named exactly like the query may be missing. */
         INCOMPLETE,
+
+        /** The code intelligence didn't answer in time, e.g. because the name is too common; nothing came back. */
+        TIMED_OUT,
     }
 }
 
