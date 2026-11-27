@@ -188,6 +188,22 @@ class LspMappingTest {
     }
 
     @Test
+    fun `a definition in the JDK's src zip is a JDK target, with its module and the source entry`() {
+        assertEquals(
+            DefinitionTarget.Jdk("java.base", "java/io/File.java", sources = Path.of("/opt/temurin-25/lib/src.zip")),
+            LspMapping.definitionTarget("jar:///opt/temurin-25/lib/src.zip!/java.base/java/io/File.java"),
+        )
+    }
+
+    @Test
+    fun `an archive named src zip without a module first is an ordinary jar`() {
+        assertEquals(
+            DefinitionTarget.Jar(Path.of("/libs/src.zip"), "java/io/File.java"),
+            LspMapping.definitionTarget("jar:///libs/src.zip!/java/io/File.java"),
+        )
+    }
+
+    @Test
     fun `definition URIs are decoded, and other schemes are dropped`() {
         assertEquals(
             DefinitionTarget.Jar(Path.of("/my cache/lib-sources.jar"), "a/B C.kt"),
